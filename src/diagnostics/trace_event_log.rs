@@ -32,6 +32,7 @@ const MIN_TRACE_MAX_FILE_BYTES: u64 = 64 * 1024;
 const MAX_TRACE_MAX_FILE_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_TRACE_MAX_TOTAL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_ROLLING_TRACE_SEQUENCE: u32 = 9_999;
+const MAX_PENDING_TRACE_BYTES: usize = 1024 * 1024;
 static TRACE_DROPPED_LINES: OnceLock<ErrorCounter> = OnceLock::new();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +50,12 @@ enum TraceDestination {
         file_name: String,
     },
     ExactFile(PathBuf),
+    /// #2588: the default directory while the legacy runtime directory still waits for its move.
+    DailyRollingAfterWorkspaceMigration {
+        directory: PathBuf,
+        file_name: String,
+        legacy_runtime_directory: PathBuf,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +89,7 @@ struct TraceEnvironment {
     trace_file: Option<PathBuf>,
     tokio_console: Option<String>,
     default_log_directory: Option<PathBuf>,
+    legacy_runtime_directory: Option<PathBuf>,
 }
 
 impl TraceEnvironment {
@@ -100,6 +108,9 @@ impl TraceEnvironment {
                 .map(|config| config.config.diagnostics.tokio_console.to_string())
                 .or_else(|| std::env::var("AKRA_TOKIO_CONSOLE").ok()),
             default_log_directory: default_trace_log_directory(),
+            legacy_runtime_directory: std::env::current_dir()
+                .ok()
+                .and_then(|workspace| pending_legacy_runtime_directory(&workspace)),
         }
     }
 }
@@ -501,6 +512,19 @@ fn non_blocking_writer(
             let appender =
                 PrivateRollingFileAppender::new(directory, file_name, trace_retained_file_count())?;
             Ok(non_blocking_with_thread_name(appender, "akra-trace-log"))
+        }
+        TraceDestination::DailyRollingAfterWorkspaceMigration {
+            directory,
+            file_name,
+            legacy_runtime_directory,
+        } => {
+            let writer = WorkspaceMigrationPendingTraceWriter::new(
+                directory,
+                file_name,
+                legacy_runtime_directory,
+                trace_retained_file_count(),
+            );
+            Ok(non_blocking_with_thread_name(writer, "akra-trace-log"))
         }
         TraceDestination::ExactFile(path) => {
             let (path, parent, parent_identity) = prepare_exact_trace_file_path(&path)?;
@@ -1005,6 +1029,75 @@ impl PrivateRollingFileAppender {
         }
         self.directory_identity.validate(&self.directory)?;
         Ok(())
+    }
+}
+
+/// #2588: the default trace directory is `.akra/runtime/log`. Diagnostics start before the kernel lock
+/// owner moves the legacy `.codex-exec-loop/runtime/` into `.akra/`, and that move refuses two
+/// `runtime/` directories. So this writer keeps lines in memory and creates nothing until the legacy
+/// directory is gone. shortcut: a process that never takes the kernel lock keeps at most
+/// `MAX_PENDING_TRACE_BYTES` and loses them at exit; write them elsewhere if that matters.
+#[derive(Debug)]
+struct WorkspaceMigrationPendingTraceWriter {
+    directory: PathBuf,
+    file_name: String,
+    legacy_runtime_directory: PathBuf,
+    max_log_files: usize,
+    pending_lines: Vec<u8>,
+    appender: Option<PrivateRollingFileAppender>,
+}
+
+impl WorkspaceMigrationPendingTraceWriter {
+    fn new(
+        directory: PathBuf,
+        file_name: String,
+        legacy_runtime_directory: PathBuf,
+        max_log_files: usize,
+    ) -> Self {
+        Self {
+            directory,
+            file_name,
+            legacy_runtime_directory,
+            max_log_files,
+            pending_lines: Vec::new(),
+            appender: None,
+        }
+    }
+
+    fn appender_after_migration(&mut self) -> io::Result<Option<&mut PrivateRollingFileAppender>> {
+        if self.appender.is_none() {
+            if std::fs::symlink_metadata(&self.legacy_runtime_directory).is_ok() {
+                return Ok(None);
+            }
+            let mut appender = PrivateRollingFileAppender::new(
+                self.directory.clone(),
+                self.file_name.clone(),
+                self.max_log_files,
+            )
+            .map_err(io::Error::other)?;
+            appender.write_all(&std::mem::take(&mut self.pending_lines))?;
+            self.appender = Some(appender);
+        }
+        Ok(self.appender.as_mut())
+    }
+}
+
+impl Write for WorkspaceMigrationPendingTraceWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        if let Some(appender) = self.appender_after_migration()? {
+            return appender.write(buffer);
+        }
+        if self.pending_lines.len() + buffer.len() <= MAX_PENDING_TRACE_BYTES {
+            self.pending_lines.extend_from_slice(buffer);
+        }
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self.appender_after_migration()? {
+            Some(appender) => appender.flush(),
+            None => Ok(()),
+        }
     }
 }
 
@@ -1814,10 +1907,28 @@ fn trace_destination_from_environment(environment: &TraceEnvironment) -> Option<
         return Some(TraceDestination::ExactFile(path.clone()));
     }
     let directory = environment.default_log_directory.clone()?;
+    let file_name = "akra-trace.jsonl".to_string();
+    if let Some(legacy_runtime_directory) = environment.legacy_runtime_directory.clone() {
+        return Some(TraceDestination::DailyRollingAfterWorkspaceMigration {
+            directory,
+            file_name,
+            legacy_runtime_directory,
+        });
+    }
     Some(TraceDestination::DailyRolling {
         directory,
-        file_name: "akra-trace.jsonl".to_string(),
+        file_name,
     })
+}
+
+/// Some while `workspace` still has the legacy runtime directory that the kernel lock owner moves (#2588).
+fn pending_legacy_runtime_directory(workspace: &Path) -> Option<PathBuf> {
+    let directory = workspace
+        .join(crate::domain::planning::LEGACY_WORKSPACE_DIRECTORY)
+        .join("runtime");
+    std::fs::symlink_metadata(&directory)
+        .is_ok()
+        .then_some(directory)
 }
 
 fn default_trace_log_directory() -> Option<PathBuf> {
@@ -1846,10 +1957,11 @@ mod tests {
     use super::prepare_private_trace_directory;
     use super::{
         AKRA_EVENT_TARGET, AkraJsonFormat, BoundedExactTraceWriter, PrivateRollingFileAppender,
-        TraceConfig, TraceDestination, TraceEnvironment, TraceSpanMode, concise_trace_filter,
-        default_trace_log_directory, full_trace_filter, merge_detail_field, non_blocking_writer,
-        planning_trace_filter, rolling_trace_file_day, sanitize_trace_value,
-        tokio_console_value_is_enabled, trace_config_from_environment,
+        TraceConfig, TraceDestination, TraceEnvironment, TraceSpanMode,
+        WorkspaceMigrationPendingTraceWriter, concise_trace_filter, default_trace_log_directory,
+        full_trace_filter, merge_detail_field, non_blocking_writer,
+        pending_legacy_runtime_directory, planning_trace_filter, rolling_trace_file_day,
+        sanitize_trace_value, tokio_console_value_is_enabled, trace_config_from_environment,
         trace_destination_from_environment, trace_filter_from_rust_log_value,
         trace_max_file_bytes_from_value, trace_max_total_bytes_from_value,
         trace_retained_file_count_from_value, trace_settings_from_environment,
@@ -2330,6 +2442,88 @@ mod tests {
                 file_name: "akra-trace.jsonl".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn default_trace_directory_waits_for_the_legacy_runtime_move_on_first_start_and_restart() {
+        let workspace = unique_temp_dir("trace-workspace-migration");
+        let legacy_log = workspace
+            .join(".codex-exec-loop")
+            .join("runtime")
+            .join("log");
+        std::fs::create_dir_all(&legacy_log).expect("legacy log directory should create");
+        std::fs::write(legacy_log.join("old.jsonl"), "old\n").expect("legacy log should write");
+        let directory = workspace.join(".akra").join("runtime").join("log");
+
+        // First start: diagnostics start before the kernel lock owner moves the legacy directory.
+        let first_start = TraceEnvironment {
+            default_log_directory: Some(directory.clone()),
+            legacy_runtime_directory: pending_legacy_runtime_directory(&workspace),
+            ..TraceEnvironment::default()
+        };
+        let Some(TraceDestination::DailyRollingAfterWorkspaceMigration {
+            directory: pending_directory,
+            file_name,
+            legacy_runtime_directory,
+        }) = trace_destination_from_environment(&first_start)
+        else {
+            panic!("a pending legacy runtime directory should defer the default trace directory");
+        };
+        let mut writer = WorkspaceMigrationPendingTraceWriter::new(
+            pending_directory,
+            file_name,
+            legacy_runtime_directory,
+            7,
+        );
+        writer
+            .write_all(b"{\"event\":\"before_move\"}\n")
+            .expect("pending writer should keep the line");
+        writer.flush().expect("pending writer should flush nothing");
+        assert!(!workspace.join(".akra").exists());
+
+        crate::adapter::outbound::filesystem::workspace_layout_migration::migrate_legacy_workspace_layout(
+            &workspace,
+        )
+        .expect("first start should move the legacy runtime directory");
+        writer
+            .write_all(b"{\"event\":\"after_move\"}\n")
+            .expect("writer should open the moved directory");
+        writer.flush().expect("writer should flush the trace file");
+        drop(writer);
+        assert_eq!(
+            std::fs::read_to_string(directory.join("old.jsonl")).expect("old log should move"),
+            "old\n"
+        );
+        let trace = std::fs::read_dir(&directory)
+            .expect("trace directory should be readable")
+            .map(|entry| entry.expect("trace entry should load").path())
+            .filter(|path| {
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("akra-trace"))
+            })
+            .map(|path| std::fs::read_to_string(path).expect("trace file should read"))
+            .collect::<String>();
+        assert!(trace.contains("before_move"));
+        assert!(trace.contains("after_move"));
+
+        // Restart: nothing waits for a move, and the move finds nothing to do.
+        let restart = TraceEnvironment {
+            default_log_directory: Some(directory.clone()),
+            legacy_runtime_directory: pending_legacy_runtime_directory(&workspace),
+            ..TraceEnvironment::default()
+        };
+        let destination = trace_destination_from_environment(&restart)
+            .expect("restart should resolve the default trace directory");
+        assert!(matches!(destination, TraceDestination::DailyRolling { .. }));
+        let (writer, guard) =
+            non_blocking_writer(destination).expect("restart should open the trace directory");
+        drop(writer);
+        drop(guard);
+        crate::adapter::outbound::filesystem::workspace_layout_migration::migrate_legacy_workspace_layout(
+            &workspace,
+        )
+        .expect("restart should find nothing to move");
+        let _ = std::fs::remove_dir_all(&workspace);
     }
 
     #[test]
