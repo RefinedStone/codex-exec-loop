@@ -4,9 +4,13 @@ use crate::domain::work_context::ExternalResourceRef;
 
 /*
  * 작업 컨텍스트 장부이다 (plan 22). 외부 문서와, 그 문서가 어느 범위(스레드 등)에서 나왔는지를 저장한다.
- * 범위는 `(scope_kind, scope_id)` 로 적는다. 지금은 `thread` 만 쓰고, 파일 경로나 작업 범위는 같은 표에 더한다.
+ * 범위는 `(scope_kind, scope_id)` 로 적는다. 스레드는 수집기가 잇고, 저장소·작업·경로는 사람이나 AI 가 직접 잇는다
+ * (A03). 저장소 범위의 id 는 저장소 식별자, 작업과 경로 범위의 id 는 `[저장소 식별자, 값]` JSON 배열이다.
  */
 pub const WORK_CONTEXT_SCOPE_THREAD: &str = "thread";
+pub const WORK_CONTEXT_SCOPE_REPOSITORY: &str = "repository";
+pub const WORK_CONTEXT_SCOPE_TASK: &str = "task";
+pub const WORK_CONTEXT_SCOPE_PATH: &str = "path";
 
 /// 범위 하나에서 본 문서이다.
 #[derive(Debug, Clone, PartialEq, Eq)]

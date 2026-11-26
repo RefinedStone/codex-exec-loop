@@ -1,7 +1,7 @@
 //! 작업 컨텍스트 장부의 SQLite 구현이다 (plan 22). 사용자당 파일 하나(`$AKRA_HOME/work-context/ledger.sqlite`)이다.
 //!
-//! 표는 서비스 종류와 범위 종류를 글자로만 저장한다. 새 외부 서비스나 새 범위(파일 경로, 작업)를 더해도 표를
-//! 바꾸지 않는다.
+//! 표는 서비스 종류와 범위 종류를 글자로만 저장한다. 새 외부 서비스나 새 범위(저장소, 작업, 파일 경로)를 더해도
+//! 표를 바꾸지 않는다.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -421,6 +421,84 @@ mod tests {
             reopened.scan_marker("thread", "one").unwrap().as_deref(),
             Some("new-marker")
         );
+        drop(reopened);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn an_existing_thread_ledger_takes_repository_task_and_path_scopes_without_changes() {
+        // A03: the new scopes are new `scope_kind` values in the same tables. No table changes.
+        let (store, directory) = store("scope-upgrade");
+        crate::private_directory::ensure_private_directory(&directory).unwrap();
+        let connection = Connection::open(&store.path).unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO ledger_migrations VALUES ('jira-site-identity-v1');
+                 INSERT INTO resources VALUES (1, 'github', 'a/b#1', 'https://github.com/a/b/pull/1', 'PR');
+                 INSERT INTO links VALUES ('thread', 't1', 1, 'user', 'old');
+                 INSERT INTO scan_markers VALUES ('thread', 't1', 'item-9');
+                 INSERT INTO resource_versions VALUES (1, 'v1', 'checked');
+                 INSERT INTO read_versions VALUES ('thread', 't1', 1, 'v0');",
+            )
+            .unwrap();
+        let schema = |connection: &Connection| -> Vec<String> {
+            let mut statement = connection
+                .prepare("SELECT sql FROM sqlite_master ORDER BY name")
+                .unwrap();
+            statement
+                .query_map([], |row| row.get::<_, Option<String>>(0))
+                .unwrap()
+                .map(|sql| sql.unwrap().unwrap_or_default())
+                .collect()
+        };
+        let before = schema(&connection);
+        drop(connection);
+        let thread_before = store.links("thread", "t1").unwrap();
+        assert_eq!(thread_before[0].read_version.as_deref(), Some("v0"));
+
+        let document = resource("github", "a/b#1", None);
+        let task_scope = r#"["repo-1","T-1"]"#;
+        store
+            .link_resources("task", task_scope, "agent", std::slice::from_ref(&document))
+            .unwrap();
+        store
+            .set_read_version("task", task_scope, &document, "v1", false)
+            .unwrap();
+        store
+            .link_resources(
+                "repository",
+                "repo-1",
+                "user",
+                std::slice::from_ref(&document),
+            )
+            .unwrap();
+
+        let task = store.links("task", task_scope).unwrap();
+        assert_eq!(task.len(), 1);
+        assert_eq!(task[0].source, "agent");
+        assert_eq!(task[0].read_version.as_deref(), Some("v1"));
+        assert_eq!(task[0].checked_version, thread_before[0].checked_version);
+        assert_eq!(
+            store.links("repository", "repo-1").unwrap()[0].read_version,
+            None
+        );
+        assert!(store.links("path", task_scope).unwrap().is_empty());
+        assert_eq!(store.links("thread", "t1").unwrap(), thread_before);
+        drop(store);
+
+        let reopened = SqliteWorkContextStore::at(directory.join(FILE));
+        assert_eq!(reopened.links("task", task_scope).unwrap(), task);
+        assert_eq!(
+            reopened.scan_marker("thread", "t1").unwrap().as_deref(),
+            Some("item-9")
+        );
+        reopened
+            .with_connection(|connection| {
+                assert_eq!(schema(connection), before);
+                Ok(())
+            })
+            .unwrap();
         drop(reopened);
         let _ = std::fs::remove_dir_all(directory);
     }
