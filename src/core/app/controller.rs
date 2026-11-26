@@ -108,6 +108,8 @@ impl CoreController {
      */
     fn queued_thread_prompt_is_due(&self) -> bool {
         self.planning.has_resubmittable_thread_prompt()
+            // 투영이 없으면 planning 읽기를 기다린다 (#2803). 읽기가 진행 중이면 차례가 아니다.
+            && !(self.planning_projection_is_missing() && self.planning.runtime_refresh_has_active())
             && match self.planning.host_parallel_mode() {
                 Some(true) => true,
                 Some(false) => {
@@ -918,6 +920,9 @@ impl CoreController {
                     );
                     snapshot.doctor
                 });
+                // 읽어도 투영이 없으면 큐 머리는 기다리지 않는다 (#2803). 계속 읽으면 그 연산이 끝나지 않는다.
+                self.planning
+                    .set_planning_read_left_no_projection(self.planning_projection_is_missing());
                 CoreDispatchOutcome {
                     events: vec![AppEvent::PlanningRuntimeRefreshed {
                         correlation,
@@ -1995,6 +2000,11 @@ impl CoreController {
         if !self.queued_thread_prompt_is_due() {
             return self.unchanged_outcome();
         }
+        if self.planning_projection_is_missing()
+            && !self.planning.planning_read_left_no_projection()
+        {
+            return self.read_planning_before_queued_prompt();
+        }
         let Some(prompt) = self.planning.take_queued_thread_prompt() else {
             return self.unchanged_outcome();
         };
@@ -2025,6 +2035,42 @@ impl CoreController {
             self.planning.queue_thread_prompt(prompt);
         }
         self.unchanged_outcome()
+    }
+
+    /*
+     * planning 투영이 없으면 큐 머리를 내기 전에 그 작업 공간의 planning 을 한 번 읽는다 (#2803). 다시 조립한 커널과
+     * 새 대화를 연 커널은 투영이 비어 있다. 읽기가 끝나면 다음 단계가 그 투영으로 완료한 작업을 거른다. 읽어도 투영이
+     * 없으면(실패, planning 없음) 이전처럼 낸다. 계속 기다리면 그 연산이 끝나지 않는다.
+     */
+    fn read_planning_before_queued_prompt(&mut self) -> CoreDispatchOutcome {
+        let Some(workspace_directory) = self
+            .planning
+            .next_queued_thread_prompt()
+            .map(|prompt| prompt.workspace_directory.clone())
+        else {
+            return self.unchanged_outcome();
+        };
+        let (correlation, superseded) = self.planning.begin_runtime_refresh(workspace_directory);
+        let mut events = vec![AppEvent::PlanningRuntimeRefreshStarted {
+            correlation: correlation.clone(),
+        }];
+        events.extend(
+            superseded.map(|correlation| AppEvent::PlanningRuntimeRefreshCancelled { correlation }),
+        );
+        CoreDispatchOutcome {
+            events,
+            effects: vec![CoreEffect::LoadPlanningRuntime { correlation }],
+            snapshot: self.shared_snapshot(),
+        }
+    }
+
+    fn planning_projection_is_missing(&self) -> bool {
+        self.state
+            .shared_snapshot()
+            .planning_parallel
+            .planning_runtime
+            .queue_projection()
+            .is_none()
     }
 
     fn planning_task_is_finished(&self, task_id: &str) -> bool {
@@ -8505,6 +8551,7 @@ mod tests {
             controller.next_post_turn_host_step(),
             Some(super::super::PostTurnHostStep::ResubmitQueuedThreadPrompt)
         );
+        finish_planning_read_before_queued_prompt(&mut controller, Some(&[]));
         let resubmitted =
             controller.handle_input(CoreInput::Command(AppCommand::ResubmitQueuedThreadPrompt));
         assert!(matches!(
@@ -11191,6 +11238,7 @@ mod tests {
         );
 
         end_test_turn(&mut controller, running);
+        finish_planning_read_before_queued_prompt(&mut controller, Some(&[]));
         controller.handle_input(CoreInput::Command(AppCommand::ResubmitQueuedThreadPrompt));
         let (records, state) = operation_records(&mut controller, 7);
         assert_eq!(
@@ -11541,44 +11589,133 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_restored_queued_thread_prompt_is_resubmitted_when_the_kernel_is_idle() {
-        // plan 19 Q3-1: a new kernel restores the open queued prompts from the event log.
-        let mut controller = hosted_controller(false);
-        let _ =
-            controller.handle_input(CoreInput::Command(AppCommand::RestoreQueuedThreadPrompts(
-                vec![crate::domain::kernel_event::QueuedThreadPrompt {
-                    thread_id: "thread-beta".to_string(),
-                    workspace_directory: "/tmp/workspace".to_string(),
-                    handoff: crate::domain::planning::ManualPromptMainSessionHandoff {
-                        prompt: "planned prompt".to_string(),
-                        transcript_text: "fix the test".to_string(),
-                        task: None,
-                    },
-                    task_id: "task-1".to_string(),
-                    op_id: None,
-                }],
-            )));
-        assert!(
-            queue_records(&mut controller).is_empty(),
-            "a restored prompt is already recorded"
+    fn restored_test_prompt(task_id: &str) -> crate::domain::kernel_event::QueuedThreadPrompt {
+        crate::domain::kernel_event::QueuedThreadPrompt {
+            thread_id: "thread-beta".to_string(),
+            workspace_directory: "/tmp/workspace".to_string(),
+            handoff: crate::domain::planning::ManualPromptMainSessionHandoff {
+                prompt: "planned prompt".to_string(),
+                transcript_text: "fix the test".to_string(),
+                task: None,
+            },
+            task_id: task_id.to_string(),
+            op_id: None,
+        }
+    }
+
+    /*
+     * 투영이 없을 때 큐 머리 앞의 planning 읽기를 끝낸다 (#2803). 읽는 동안 프롬프트는 차례가 아니다. `finished` 가
+     * 있으면 그 작업들이 투영에 `done` 으로 실리고, `None` 이면 읽기가 실패한다.
+     */
+    fn finish_planning_read_before_queued_prompt(
+        controller: &mut CoreController,
+        finished: Option<&[&str]>,
+    ) {
+        let read =
+            controller.handle_input(CoreInput::Command(AppCommand::ResubmitQueuedThreadPrompt));
+        let [CoreEffect::LoadPlanningRuntime { correlation }] = read.effects.as_slice() else {
+            panic!(
+                "the queued prompt waits for a planning read: {:?}",
+                read.effects
+            );
+        };
+        assert_eq!(correlation.workspace_directory, "/tmp/workspace");
+        assert_eq!(
+            controller.next_post_turn_host_step(),
+            None,
+            "the prompt waits while planning is read"
         );
+        let result = match finished {
+            Some(finished) => Ok(planning_runtime_refresh_snapshot(
+                PlanningRuntimeProjection::ready_with_queue_projection(
+                    "fragment".to_string(),
+                    "queue".to_string(),
+                    None,
+                    None,
+                    crate::domain::planning::PriorityQueueProjection {
+                        next_task: None,
+                        active_tasks: Vec::new(),
+                        proposed_tasks: Vec::new(),
+                        skipped_tasks: finished
+                            .iter()
+                            .map(
+                                |task_id| crate::domain::planning::PriorityQueueSkippedTask {
+                                    task_id: task_id.to_string(),
+                                    task_title: "Fix the test".to_string(),
+                                    direction_id: "direction-1".to_string(),
+                                    status: crate::domain::planning::TaskStatus::Done,
+                                    reason: "done".to_string(),
+                                },
+                            )
+                            .collect(),
+                    },
+                ),
+            )),
+            None => Err("planning could not be read".to_string()),
+        };
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PlanningRuntimeLoaded {
+                correlation: correlation.clone(),
+                result,
+            },
+        ));
         assert_eq!(
             controller.next_post_turn_host_step(),
             Some(super::super::PostTurnHostStep::ResubmitQueuedThreadPrompt)
         );
-        let resubmitted =
-            controller.handle_input(CoreInput::Command(AppCommand::ResubmitQueuedThreadPrompt));
-        assert!(matches!(
-            resubmitted.effects.as_slice(),
-            [CoreEffect::SubmitTurn { request, .. }]
-                if request.thread_id.as_deref() == Some("thread-beta")
-                    && request.prompt == "planned prompt"
+    }
+
+    #[test]
+    fn a_restored_queued_thread_prompt_is_resubmitted_when_the_kernel_is_idle() {
+        // plan 19 Q3-1: a new kernel restores the open queued prompts from the event log.
+        // #2803: it reads planning first. A failed read does not keep the prompt waiting.
+        for finished in [Some(&["task-other"][..]), None] {
+            let mut controller = hosted_controller(false);
+            let _ = controller.handle_input(CoreInput::Command(
+                AppCommand::RestoreQueuedThreadPrompts(vec![restored_test_prompt("task-1")]),
+            ));
+            assert!(
+                queue_records(&mut controller).is_empty(),
+                "a restored prompt is already recorded"
+            );
+            assert_eq!(
+                controller.next_post_turn_host_step(),
+                Some(super::super::PostTurnHostStep::ResubmitQueuedThreadPrompt)
+            );
+            finish_planning_read_before_queued_prompt(&mut controller, finished);
+            let resubmitted =
+                controller.handle_input(CoreInput::Command(AppCommand::ResubmitQueuedThreadPrompt));
+            assert!(matches!(
+                resubmitted.effects.as_slice(),
+                [CoreEffect::SubmitTurn { request, .. }]
+                    if request.thread_id.as_deref() == Some("thread-beta")
+                        && request.prompt == "planned prompt"
+            ));
+            assert_eq!(
+                settlement_of(&mut controller),
+                Some(ThreadPromptSettlement::Submitted)
+            );
+        }
+    }
+
+    #[test]
+    fn a_restored_queued_thread_prompt_of_a_finished_task_does_not_start_a_turn() {
+        // #2803: the task finished while no kernel ran. Before the fix the new kernel had no projection
+        // and sent the prompt anyway.
+        let mut controller = hosted_controller(false);
+        let _ = controller.handle_input(CoreInput::Command(
+            AppCommand::RestoreQueuedThreadPrompts(vec![restored_test_prompt("task-1")]),
         ));
+        finish_planning_read_before_queued_prompt(&mut controller, Some(&["task-1"]));
+        let dropped =
+            controller.handle_input(CoreInput::Command(AppCommand::ResubmitQueuedThreadPrompt));
+        assert!(dropped.effects.is_empty(), "the finished task does not run");
         assert_eq!(
             settlement_of(&mut controller),
-            Some(ThreadPromptSettlement::Submitted)
+            Some(ThreadPromptSettlement::TaskFinished)
         );
+        assert!(!controller.has_remaining_work());
+        assert_eq!(controller.next_post_turn_host_step(), None);
     }
 
     /// 정지를 요청하고 그 시도의 correlation 과 종류를 돌려준다.
@@ -11743,6 +11880,8 @@ mod tests {
             controller.next_post_turn_host_step(),
             Some(super::super::PostTurnHostStep::ResubmitQueuedThreadPrompt)
         );
+        // #2803: no planning projection yet. The kernel reads planning before the prompt leaves.
+        finish_planning_read_before_queued_prompt(&mut controller, Some(&[]));
 
         let resubmitted =
             controller.handle_input(CoreInput::Command(AppCommand::ResubmitQueuedThreadPrompt));
@@ -11790,6 +11929,7 @@ mod tests {
             Some(super::super::PostTurnHostStep::ResubmitQueuedThreadPrompt),
             "parallel mode settles the queued prompt without waiting for the turn"
         );
+        finish_planning_read_before_queued_prompt(&mut controller, Some(&[]));
 
         let settled =
             controller.handle_input(CoreInput::Command(AppCommand::ResubmitQueuedThreadPrompt));

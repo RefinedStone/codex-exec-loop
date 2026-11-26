@@ -8,7 +8,8 @@
 //! - 가짜 app-server: 턴을 시작하고, 시작 알림과 종료 알림을 따로 보낸다. 시작 전후에 스트림이 실패할 수 있다.
 //!   중지 요청이 닿으면 그 요청이 가리키는 턴을 중단으로 끝낸다.
 //! - 가짜 평가기: 턴 뒤 평가에 자동 후속 프롬프트 또는 멈춤을 답한다.
-//! - 가짜 planner: thread 지정 프롬프트의 준비에 작업 하나와 실행할 프롬프트를 답한다.
+//! - 가짜 planner: thread 지정 프롬프트의 준비에 작업 하나와 실행할 프롬프트를 답한다. planning 읽기와 평가에는 끝난
+//!   작업을 `skipped_tasks` 에 `done` 으로 답한다. 다시 켤 때 남은 작업의 일부는 커널이 꺼진 동안 끝난다 (#2803, I13).
 //! - 재시작: 커널을 버리고 같은 기록으로 다시 조립한다. 이전 커널의 진행 중 일은 바깥 세계에서도 버린다.
 //!
 //! 무엇을 언제 할지는 seed 하나로 만든 난수가 고른다. 같은 seed 는 같은 순서를 만든다. 실패하면 seed 를 알리므로
@@ -43,7 +44,8 @@ use crate::composition::native_client_runtime::NativeClientRuntime;
 use crate::composition::native_client_runtime::tests::post_turn_execution;
 use crate::core::app::{
     AppCommand, AppEvent, ApprovalDecisionCorrelation, CoreEffect, CoreEffectCompletion, CoreInput,
-    CorePromptOrigin, PlanningWorkspaceOperationCorrelation, PlanningWorkspaceResetIntent,
+    CorePromptOrigin, PlanningRuntimeRefreshCorrelation, PlanningRuntimeRefreshSnapshot,
+    PlanningWorkspaceOperationCorrelation, PlanningWorkspaceResetIntent,
     PlanningWorkspaceResetSnapshot, PlanningWorkspaceResetTarget, PostTurnEvaluationCorrelation,
     SessionCatalogLoadCorrelation, SessionCatalogLoadIntent, SessionCatalogReadySnapshot,
     StopRequestAttempt, StopRequestCorrelation, ThreadPromptSubmission, TurnConcurrencyPolicy,
@@ -279,6 +281,10 @@ enum PendingCompletion {
         request: ConversationTurnSteerRequest,
         op: usize,
     },
+    /// planning 투영 읽기이다 (#2803). 가짜 planner 는 끝난 작업을 `skipped_tasks` 에 `done` 으로 답한다.
+    PlanningRuntime {
+        correlation: PlanningRuntimeRefreshCorrelation,
+    },
     /// planning 초기화이다. 가짜 실행기는 지울 파일이 없다고 답한다.
     PlanningReset {
         correlation: PlanningWorkspaceOperationCorrelation,
@@ -346,6 +352,8 @@ struct PlannedPrompt {
     resubmissions_allowed: usize,
     /// 강제 종료가 기록은 남기고 제출 효과를 버렸다. app-server 가 한 번도 받지 못했을 수 있다 (계약 C3).
     submission_may_be_lost: bool,
+    /// 커널이 꺼진 동안 그 작업이 끝났다 (#2803). 새 커널은 이 프롬프트를 내면 안 된다 (I13).
+    finished_while_down: bool,
 }
 
 /// 불변식 I2, I3 을 보려고 모으는 기록이다. 어긋나면 위반 문장을 돌려준다.
@@ -401,6 +409,13 @@ impl InvariantLedger {
         let Some(planned) = self.planned_prompts.get_mut(&request.prompt) else {
             return Ok(());
         };
+        // I13 (#2803): 새 커널은 planning 을 읽기 전에 되돌린 프롬프트를 내지 않는다. 읽으면 그 작업이 끝났다고 보인다.
+        if planned.finished_while_down {
+            return Err(format!(
+                "I13: the prompt of {} reached the app-server after its task finished while the kernel was down",
+                planned.task_id
+            ));
+        }
         planned.submissions += 1;
         if planned.submissions > 1 + planned.resubmissions_allowed {
             return Err(format!(
@@ -959,6 +974,12 @@ struct Simulation {
     lifetime_starts: Vec<usize>,
     /// 마지막으로 커널을 다시 켤 때 큐에 남아 있던 프롬프트이다. 다시 나가면 기록에 적는다.
     carried_prompts: BTreeSet<String>,
+    /// 가짜 planner 가 끝났다고 답하는 작업이다 (#2803). planning 투영의 `skipped_tasks` 에 `done` 으로 실린다.
+    finished_tasks: BTreeSet<String>,
+    /// 다시 켤 때 큐에 남은 프롬프트의 작업이 커널이 꺼진 동안 끝났을 확률(%)이다 (#2803).
+    finish_carried_percent: u64,
+    /// 다시 켠 뒤 클라이언트가 대화 화면처럼 붙는다. 거짓이면 아무도 붙지 않는다 (#2803: 저장 명령만 보내는 접속).
+    reopen_client_after_restart: bool,
     /// 클라이언트가 보낸 thread 지정 프롬프트와 그 thread 이다. 준비가 끝난 프롬프트가 닿을 곳이다.
     thread_prompt_targets: BTreeMap<String, String>,
     /// 턴이 도는 동안 준비 완료를 넣었다. 다음 주기에서 커널이 그 프롬프트를 큐에 남긴다.
@@ -1031,6 +1052,9 @@ impl Simulation {
             restarts: 0,
             lifetime_starts: Vec::new(),
             carried_prompts: BTreeSet::new(),
+            finished_tasks: BTreeSet::new(),
+            finish_carried_percent: 30,
+            reopen_client_after_restart: true,
             thread_prompt_targets: BTreeMap::new(),
             prompt_prepared_behind_turn: false,
             prompt_probably_queued: false,
@@ -1321,6 +1345,21 @@ impl Simulation {
             "kernel restarted with {} queued thread prompt(s)",
             carried.len()
         ));
+        // 커널이 꺼진 동안 다른 클라이언트가 그 작업을 끝냈을 수 있다 (#2803). 새 커널은 planning 을 읽어야 안다.
+        for prompt in &carried {
+            // 0 이면 난수를 쓰지 않는다. 정해진 순서 시험의 완료 순서가 그대로이다.
+            if self.finish_carried_percent == 0 || !self.rng.percent(self.finish_carried_percent) {
+                continue;
+            }
+            self.finished_tasks.insert(prompt.task_id.clone());
+            if let Some(planned) = self.ledger.planned_prompts.get_mut(&prompt.handoff.prompt) {
+                planned.finished_while_down = true;
+            }
+            self.record(format!(
+                "planner: {} finished while the kernel was down",
+                prompt.task_id
+            ));
+        }
         self.carried_prompts = carried
             .into_iter()
             .map(|prompt| prompt.handoff.prompt)
@@ -1330,7 +1369,9 @@ impl Simulation {
             .attach_kernel_event_log(self.kernel_log.clone(), "/sim");
         // 되돌린 프롬프트는 기록을 붙이는 dispatch 안에서 바로 다시 나갈 수 있다.
         self.accept_effects()?;
-        self.open_client_session();
+        if self.reopen_client_after_restart {
+            self.open_client_session();
+        }
         Ok(())
     }
 
@@ -2101,6 +2142,12 @@ impl Simulation {
                 });
                 Ok(())
             }
+            CoreEffect::LoadPlanningRuntime { correlation } => {
+                self.record("planner: read the planning projection".to_string());
+                self.pending
+                    .push(PendingCompletion::PlanningRuntime { correlation });
+                Ok(())
+            }
             CoreEffect::ResetPlanningWorkspace { correlation } => {
                 let op = self.accepted_resets.pop_front();
                 self.pending
@@ -2429,6 +2476,9 @@ impl Simulation {
             PendingCompletion::PlanningReset { correlation, op } => {
                 self.deliver_planning_reset(correlation, op);
             }
+            PendingCompletion::PlanningRuntime { correlation } => {
+                self.complete_planning_runtime(correlation);
+            }
             PendingCompletion::LateCompletion {
                 input,
                 op,
@@ -2441,6 +2491,50 @@ impl Simulation {
                 self.send_client_completion(op, input, succeeded);
             }
         }
+    }
+
+    fn complete_planning_runtime(&mut self, correlation: PlanningRuntimeRefreshCorrelation) {
+        self.record(format!(
+            "planner: answer the planning projection {} (finished {:?})",
+            correlation.generation, self.finished_tasks
+        ));
+        let projection = self.planning_projection();
+        self.send_core_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::PlanningRuntimeLoaded {
+                correlation,
+                result: Ok(Box::new(PlanningRuntimeRefreshSnapshot::new(projection))),
+            },
+        ));
+    }
+
+    /// 가짜 planner 의 투영이다. 끝난 작업만 `skipped_tasks` 에 `done` 으로 싣는다 (#2803).
+    fn planning_projection(&self) -> RuntimeProjection {
+        use crate::domain::planning::{
+            PriorityQueueProjection, PriorityQueueSkippedTask, TaskStatus,
+        };
+        let skipped_tasks = self
+            .finished_tasks
+            .iter()
+            .map(|task_id| PriorityQueueSkippedTask {
+                task_id: task_id.clone(),
+                task_title: task_id.clone(),
+                direction_id: "direction-1".to_string(),
+                status: TaskStatus::Done,
+                reason: "done".to_string(),
+            })
+            .collect();
+        RuntimeProjection::ready_with_queue_projection(
+            "simulation".to_string(),
+            "simulation".to_string(),
+            None,
+            None,
+            PriorityQueueProjection {
+                next_task: None,
+                active_tasks: Vec::new(),
+                proposed_tasks: Vec::new(),
+                skipped_tasks,
+            },
+        )
     }
 
     fn complete_session_catalog(&mut self, correlation: SessionCatalogLoadCorrelation) {
@@ -2482,6 +2576,7 @@ impl Simulation {
                 submissions: 0,
                 resubmissions_allowed: 0,
                 submission_may_be_lost: false,
+                finished_while_down: false,
             },
         );
         self.record(format!("planner: '{raw_prompt}' -> {task_id}"));
@@ -2520,6 +2615,8 @@ impl Simulation {
         skip_auto_follow: bool,
     ) {
         let mut execution = post_turn_execution(&correlation);
+        // 실제 평가기는 그때의 planning 을 읽는다. 가짜 planner 와 같은 투영을 답한다 (#2803).
+        execution.evaluation.runtime_projection = self.planning_projection();
         if skip_auto_follow {
             execution.evaluation.action = PostTurnContinuationAction::SkipAutoFollow {
                 reason: PostTurnAutoFollowSkipReason::StopKeywordMatched,
@@ -2863,6 +2960,8 @@ fn kernel_simulation_restores_a_queued_prompt_after_a_restart() {
      * 큐에 남는다 → 커널을 다시 켠다 → 새 커널이 그 프롬프트를 한 번 낸다.
      */
     let mut simulation = Simulation::new(0, 1);
+    // 남긴 작업이 꺼진 동안 끝나는 경우는 그것을 보는 시험만 고른다 (#2803).
+    simulation.finish_carried_percent = 0;
     let script = |simulation: &mut Simulation| -> Result<(), Violation> {
         let cycle = Duration::from_millis(10);
         simulation.open_client_session();
@@ -2909,6 +3008,93 @@ fn kernel_simulation_restores_a_queued_prompt_after_a_restart() {
     }
 }
 
+/// 프롬프트 하나가 턴 뒤의 큐에 남은 상태까지 간다. 재시작 시험들의 공통 앞부분이다.
+fn queue_a_thread_prompt_behind_a_turn(simulation: &mut Simulation) -> Result<(), Violation> {
+    let cycle = Duration::from_millis(10);
+    simulation.open_client_session();
+    simulation.run_host_cycle(cycle)?;
+    simulation.deliver_completion();
+    simulation.run_host_cycle(cycle)?;
+
+    simulation.submit_thread_prompt();
+    simulation.run_host_cycle(cycle)?;
+    simulation.submit_manual_turn();
+    simulation.run_host_cycle(cycle)?;
+    let turn = simulation
+        .turns
+        .first()
+        .cloned()
+        .expect("the manual turn should reach the app-server");
+    simulation.start_turn(turn);
+    simulation.run_host_cycle(cycle)?;
+    simulation.deliver_completion();
+    simulation.run_host_cycle(cycle)
+}
+
+#[test]
+fn kernel_simulation_drops_a_restored_prompt_whose_task_finished_while_the_kernel_was_down() {
+    /*
+     * #2803: 남긴 프롬프트의 작업이 커널이 꺼진 동안 끝났다. 새 커널은 planning 을 먼저 읽고 그 프롬프트를 내지 않는다.
+     * 읽기 전에 내면 I13 이 잡는다.
+     */
+    let (trace, records) = run_script(|simulation| {
+        simulation.finish_carried_percent = 100;
+        queue_a_thread_prompt_behind_a_turn(simulation)?;
+        simulation.restart_kernel()?;
+        simulation.settle()
+    });
+    let text = trace.join("\n");
+    assert!(
+        text.contains("finished while the kernel was down"),
+        "{text}"
+    );
+    assert!(
+        text.contains("planner: read the planning projection"),
+        "{text}"
+    );
+    assert!(!text.contains("submitted after the restart"), "{text}");
+    assert!(
+        records.iter().any(|record| matches!(
+            record.event,
+            KernelEvent::ThreadPromptSettled {
+                settlement: ThreadPromptSettlement::TaskFinished,
+                ..
+            }
+        )),
+        "{text}"
+    );
+}
+
+#[test]
+fn kernel_simulation_a_storage_command_alone_resubmits_the_restored_prompt_of_an_open_task() {
+    /*
+     * #2803 범위 (2): `akra reset`, admin 편집, `akra kernel` 처럼 저장 명령 하나만 보내고 떠나는 접속이 커널을 조립한다.
+     * 정한 답: 그 커널은 되돌린 프롬프트를 planning 을 읽은 뒤 한 번 낸다. 작업이 끝났으면 내지 않는다. 그 프롬프트는
+     * 사용자가 이미 보낸 명령이고 연산이 열려 있다. 내지 않으면 그 연산이 끝나지 않는다. 문서:
+     * `docs/plan/18-k4-9d-planning-mutations.md` 의 위험 표, `docs/reference/kernel-crash-recovery.md`.
+     */
+    let (trace, _) = run_script(|simulation| {
+        let cycle = Duration::from_millis(10);
+        queue_a_thread_prompt_behind_a_turn(simulation)?;
+        simulation.reopen_client_after_restart = false;
+        simulation.restart_kernel()?;
+        simulation.attach_client();
+        simulation.reset_planning();
+        simulation.run_host_cycle(cycle)?;
+        deliver_everything(simulation, cycle)?;
+        simulation.toggle_client();
+        simulation.settle()
+    });
+    let text = trace.join("\n");
+    let read = text
+        .find("planner: read the planning projection")
+        .unwrap_or_else(|| panic!("the kernel should read planning first:\n{text}"));
+    let submitted = text
+        .find("submitted after the restart")
+        .unwrap_or_else(|| panic!("the restored prompt should run:\n{text}"));
+    assert!(read < submitted, "{text}");
+}
+
 #[test]
 fn kernel_simulation_closes_an_open_approval_as_lost_after_a_restart() {
     /*
@@ -2916,6 +3102,8 @@ fn kernel_simulation_closes_an_open_approval_as_lost_after_a_restart() {
      * 커널이 그 승인을 잃은 것으로 닫는다. 결정 없이 턴이 끝난 승인은 결정 없이 사라진 것으로 남는다.
      */
     let mut simulation = Simulation::new(0, 1);
+    // 남긴 작업이 꺼진 동안 끝나는 경우는 그것을 보는 시험만 고른다 (#2803).
+    simulation.finish_carried_percent = 0;
     let script = |simulation: &mut Simulation| -> Result<(), Violation> {
         let cycle = Duration::from_millis(10);
         let run_turn_to_approval = |simulation: &mut Simulation| -> Result<FakeTurn, Violation> {
@@ -2994,6 +3182,8 @@ fn kernel_simulation_answers_a_resend_with_the_first_receipt_after_a_restart() {
     // plan 19 Q3-6 의 중심 경로를 정해진 순서로 지난다: 키가 있는 프롬프트를 보낸다 → 커널을 다시 켠다 → 같은 키로 다시
     // 보낸다. 새 커널은 기록에서 키를 되돌렸으므로 실행하지 않고 처음의 영수증을 답한다.
     let mut simulation = Simulation::new(0, 1);
+    // 남긴 작업이 꺼진 동안 끝나는 경우는 그것을 보는 시험만 고른다 (#2803).
+    simulation.finish_carried_percent = 0;
     let script = |simulation: &mut Simulation| -> Result<(), Violation> {
         let cycle = Duration::from_millis(10);
         simulation.open_client_session();
@@ -3035,6 +3225,8 @@ fn run_script(
     script: impl FnOnce(&mut Simulation) -> Result<(), Violation>,
 ) -> (Vec<String>, Vec<RecordedKernelEvent>) {
     let mut simulation = Simulation::new(0, 1);
+    // 남긴 작업이 꺼진 동안 끝나는 경우는 그것을 보는 시험만 고른다 (#2803).
+    simulation.finish_carried_percent = 0;
     let result = script(&mut simulation);
     let log = simulation.kernel_log.clone();
     match simulation.finish(result) {
@@ -3086,6 +3278,8 @@ fn kernel_simulation_submits_a_queued_prompt_again_when_a_crash_lost_its_settlem
         simulation.run_host_cycle(cycle)?;
 
         simulation.restart_kernel()?;
+        // 새 커널은 planning 을 읽은 뒤에 낸다 (#2803).
+        deliver_everything(simulation, cycle)?;
         simulation.crash_kernel(
             &keep_before(|event| {
                 matches!(

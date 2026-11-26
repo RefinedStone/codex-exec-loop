@@ -3410,6 +3410,26 @@ pub(crate) mod tests {
             )),
         )));
         assert!(runtime.has_remaining_work(), "the queued prompt is work");
+        // A real turn end brings the evaluation's planning projection. Without one the kernel reads planning first (#2803).
+        let _ = runtime.dispatch_client_event(NativeClientEvent::core(
+            CoreInput::RuntimeProjectionChanged {
+                workspace_directory: "/workspace".to_string(),
+                projection: Box::new(
+                    crate::application::service::planning::PlanningRuntimeProjection::ready_with_queue_projection(
+                        "fragment".to_string(),
+                        "queue".to_string(),
+                        None,
+                        None,
+                        crate::domain::planning::PriorityQueueProjection {
+                            next_task: None,
+                            active_tasks: Vec::new(),
+                            proposed_tasks: Vec::new(),
+                            skipped_tasks: Vec::new(),
+                        },
+                    ),
+                ),
+            },
+        ));
 
         let NativeClientDispatchOutcome::Core(ended) = stream(&mut runtime, blocking, failed())
         else {
@@ -3742,10 +3762,11 @@ pub(crate) mod tests {
         let (mut runtime, turns) = recording_runtime_for_test();
         runtime.attach_kernel_event_log(log.clone(), "/workspace");
 
+        // #2803: the new kernel reads planning before it resubmits. The host cycle takes that read's completion.
         let deadline = Instant::now() + WORKER_COMPLETION_TIMEOUT_FOR_HOST_TEST;
         while turns.lock().expect("recorded turns should lock").is_empty() {
             assert!(Instant::now() < deadline, "the restored turn should run");
-            std::thread::sleep(Duration::from_millis(20));
+            let _ = runtime.run_host_cycle(Instant::now(), Duration::from_millis(50), 16);
         }
         assert_eq!(
             turns.lock().expect("recorded turns should lock").as_slice(),
