@@ -48,17 +48,13 @@ fn reachable_gateway_endpoint() -> Option<String> {
 
 async fn endpoint_accepts(endpoint: &str) -> bool {
     matches!(
-        tokio::time::timeout(
-            PROBE_TIMEOUT,
-            super::super::gateway_kernel_client::connect(endpoint)
-        )
-        .await,
+        tokio::time::timeout(PROBE_TIMEOUT, connect_with_retry(endpoint)).await,
         Ok(Ok(_))
     )
 }
 
 /// Windows 의 Gateway 는 접속 하나를 받은 뒤에 다음 pipe 를 연다. 그 사이의 접속은 pipe busy 로 실패하므로 잠깐
-/// 다시 해 본다. Gateway 가 없으면 마지막 오류를 돌려준다.
+/// 다시 해 본다. 다른 오류(Gateway 가 없음)는 바로 돌려준다. 그래서 Gateway 가 없을 때 TUI 시작이 늦지 않다.
 async fn connect_with_retry(
     endpoint: &str,
 ) -> std::io::Result<impl AsyncRead + AsyncWrite + Unpin + use<>> {
@@ -66,13 +62,18 @@ async fn connect_with_retry(
     loop {
         match super::super::gateway_kernel_client::connect(endpoint).await {
             Ok(stream) => return Ok(stream),
-            Err(error) if attempts_left <= 1 => return Err(error),
-            Err(_) => {
+            Err(error) if attempts_left > 1 && is_pipe_busy(&error) => {
                 attempts_left -= 1;
                 tokio::time::sleep(CONNECT_RETRY_INTERVAL).await;
             }
+            Err(error) => return Err(error),
         }
     }
+}
+
+fn is_pipe_busy(error: &std::io::Error) -> bool {
+    // ERROR_PIPE_BUSY. unix 소켓에는 이 상태가 없다.
+    cfg!(windows) && error.raw_os_error() == Some(231)
 }
 
 /// relay 자식의 본체이다. 연결하지 못하면 이유를 stderr 에 적고 1 로 끝난다. 어느 한쪽이 닫히면 0 으로 끝난다.
@@ -223,6 +224,17 @@ mod tests {
             command.get_args().collect::<Vec<_>>(),
             [GATEWAY_RELAY_COMMAND, "/home/user/.akra/run/gateway.sock"]
         );
+    }
+
+    #[test]
+    fn only_a_busy_pipe_is_retried() {
+        assert_eq!(
+            is_pipe_busy(&std::io::Error::from_raw_os_error(231)),
+            cfg!(windows)
+        );
+        assert!(!is_pipe_busy(&std::io::Error::from(
+            std::io::ErrorKind::NotFound
+        )));
     }
 
     #[test]
