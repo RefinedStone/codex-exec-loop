@@ -373,6 +373,7 @@ export function Sidebar({ onOpenThread, onOpenRemoteThread, onReloadChats, threa
   threadActions?: ThreadActions;
 }) {
   const [archived, setArchived] = useState<WorkspaceThread | null>(null);
+  const [undoing, setUndoing] = useState(false);
   const diagnosticOpen = useUiStore(state => state.overlay === "diagnostics");
   const folders = useDesktopStore((state) => state.folders);
   // 원격 구역은 사용자가 켰고 Gateway 에 원격 호스트가 있을 때만 보인다.
@@ -418,10 +419,14 @@ export function Sidebar({ onOpenThread, onOpenRemoteThread, onReloadChats, threa
         {archived && threadActions && (
           <div className="archived-notice" role="status" data-testid="archived-notice">
             <span>‘{archived.title}’ 을(를) 보관했습니다.</span>
-            <button type="button" className="button" data-testid="archived-undo" onClick={() => {
+            <button type="button" className="button" data-testid="archived-undo" disabled={undoing} onClick={() => {
               const thread = archived;
-              setArchived(null);
-              threadActions.unarchive(thread.id).catch((cause: unknown) => toast(`보관을 되돌리지 못했습니다: ${failure(cause)}`));
+              setUndoing(true);
+              // 실패하면 알림을 남겨 다시 누를 수 있게 한다. 보관한 스레드를 되돌릴 다른 화면이 없다.
+              threadActions.unarchive(thread.id).then(
+                () => setArchived((current) => (current === thread ? null : current)),
+                (cause: unknown) => toast(`보관을 되돌리지 못했습니다: ${failure(cause)}`),
+              ).finally(() => setUndoing(false));
             }}>되돌리기</button>
             <button type="button" className="icon-button" title="닫기" onClick={() => setArchived(null)}><Icon name="close" size={12} /></button>
           </div>

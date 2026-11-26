@@ -22,6 +22,7 @@ const check = (name, ok, detail = "") => {
 const listed = readFileSync(fake.APPROVAL_THREAD_LIST_RECORDING, "utf8").split(/\r?\n/).filter(Boolean)
   .map((line) => JSON.parse(JSON.parse(line).text)).find((message) => message.result?.data)?.result.data[0];
 const requests = [];
+let failUnarchive = true;
 const userData = mkdtempSync(join(tmpdir(), "akra-e2e-thread-menu-"));
 const endpoint = fake.uniqueTestEndpoint();
 // 녹화 둘: 스레드 목록과, initialize 응답이 있는 턴 녹화이다.
@@ -29,6 +30,10 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST
   appServer(method, params) {
     if (!["thread/name/set", "thread/archive", "thread/unarchive"].includes(method)) return undefined;
     requests.push({ method, params });
+    if (method === "thread/unarchive" && failUnarchive) {
+      failUnarchive = false;
+      return { error: { code: -32000, message: "일시 오류" } };
+    }
     return { result: method === "thread/unarchive" ? { thread: listed } : {} };
   },
 });
@@ -62,8 +67,24 @@ try {
   check("archive sends thread/archive and removes the thread", requests.at(-1)?.method === "thread/archive"
     && (await page.getByTestId("thread-entry").count()) === 0, JSON.stringify(requests.at(-1)));
   await page.getByTestId("archived-undo").click();
+  await page.getByTestId("archived-undo").and(page.locator(":enabled")).waitFor({ timeout: 5_000 });
+  check("a failed undo keeps the undo button", requests.at(-1)?.method === "thread/unarchive"
+    && (await page.getByTestId("thread-entry").count()) === 0);
+  await page.getByTestId("archived-undo").click();
   await page.getByTestId("thread-entry").first().waitFor({ timeout: 5_000 });
+  await page.getByTestId("archived-notice").waitFor({ state: "detached", timeout: 5_000 });
+  check("the undo notice closes after a successful undo", true);
   check("undo sends thread/unarchive and brings the thread back", requests.at(-1)?.method === "thread/unarchive");
+
+  // 사이드바가 150% 일 때도 메뉴는 누른 자리에 열린다.
+  await page.locator(".sidebar").evaluate((sidebar) => { sidebar.style.zoom = "1.5"; });
+  const box = await page.getByTestId("thread-entry").first().boundingBox();
+  const click = { x: box.x + 10, y: box.y + 5 };
+  await page.mouse.click(click.x, click.y, { button: "right" });
+  const menu = await page.getByTestId("thread-menu").evaluate((element) => element.getBoundingClientRect().toJSON());
+  check("the menu opens at the click point in a zoomed sidebar", Math.abs(menu.left - click.x) < 2 && Math.abs(menu.top - click.y) < 2,
+    JSON.stringify({ click, menu }));
+  await page.keyboard.press("Escape");
 } catch (error) {
   check(`flow finished without error (${String(error).split("\n")[0]})`, false);
 } finally {
