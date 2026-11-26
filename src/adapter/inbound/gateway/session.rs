@@ -39,6 +39,7 @@ use crate::application::port::inbound::git_graph_port::GitGraphPort;
 use crate::application::port::inbound::git_operation_port::GitOperationPort;
 use crate::application::port::inbound::issue_draft_port::IssueDraftPort;
 use crate::application::port::inbound::issue_handoff_port::IssueHandoffPort;
+use crate::application::port::inbound::turn_activity_port::TurnActivityPort;
 use crate::application::port::inbound::work_context_port::WorkContextPort;
 use crate::application::port::outbound::chats_port::ChatsPort;
 use crate::application::port::outbound::dots_port::DotsPort;
@@ -78,8 +79,7 @@ pub(super) struct GatewayServices {
     /// git 작업 엔진이다 (plan 27 G3). `git_graph` 와 같은 `akra/git/*` 에서 답한다. `local` 접속에만 답한다.
     pub(super) git_operations: Option<Arc<dyn GitOperationPort>>,
     /// Gateway 가 넘기는 턴의 기록이다 (#2850). `local` 접속의 upstream 메시지로 채운다.
-    pub(super) turn_activity:
-        Option<Arc<crate::application::service::turn_activity::TurnActivityRegistry>>,
+    pub(super) turn_activity: Option<Arc<dyn TurnActivityPort>>,
     pub(super) conversation_workspaces: Option<Arc<dyn crate::application::port::inbound::conversation_workspace_port::ConversationWorkspacePort>>,
     /// 이슈 인계의 공유본이다 (#2428). 이 기기의 정책 파일과 `gh` 를 쓰므로 `local` 접속에만 답한다.
     pub(super) issue_handoff: Option<Arc<dyn IssueHandoffPort>>,
@@ -187,7 +187,9 @@ where
         .turn_activity
         .as_ref()
         .filter(|_| is_local)
-        .map(|registry| super::turn_activity::TurnActivityTracker::new(registry.observer()));
+        .map(|registry| {
+            super::turn_activity::TurnActivityTracker::new(registry.clone().observe_connection())
+        });
     let provider_session = if is_local {
         services
             .resource_versions

@@ -437,7 +437,7 @@ pub(crate) struct GatewayBackend {
         Arc<dyn crate::application::port::inbound::git_operation_port::GitOperationPort>,
     /// Gateway 가 넘기는 턴의 기록이다. git 작업 엔진이 읽는다 (#2850).
     pub(crate) turn_activity:
-        Arc<crate::application::service::turn_activity::TurnActivityRegistry>,
+        Arc<dyn crate::application::port::inbound::turn_activity_port::TurnActivityPort>,
     pub(crate) conversation_workspaces:
         Arc<dyn crate::application::port::inbound::conversation_workspace_port::ConversationWorkspacePort>,
     /// 이슈 인계의 공유본이다 (#2428).

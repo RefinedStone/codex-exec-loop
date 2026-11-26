@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use serde_json::Value;
 
-use crate::application::service::turn_activity::TurnActivityObserver;
+use crate::application::port::inbound::turn_activity_port::TurnActivityObserverPort;
 
 enum PendingThreadRequest {
     Subscribe { expected_thread: Option<String> },
@@ -14,12 +14,12 @@ enum PendingThreadRequest {
 
 /// 클라이언트와 upstream 고리가 함께 쓴다. 접속 종료 때 observer가 이 접속의 기록만 지운다.
 pub(super) struct TurnActivityTracker {
-    observer: TurnActivityObserver,
+    observer: Box<dyn TurnActivityObserverPort>,
     pending: Mutex<HashMap<String, PendingThreadRequest>>,
 }
 
 impl TurnActivityTracker {
-    pub(super) fn new(observer: TurnActivityObserver) -> Self {
+    pub(super) fn new(observer: Box<dyn TurnActivityObserverPort>) -> Self {
         Self {
             observer,
             pending: Mutex::new(HashMap::new()),
@@ -141,12 +141,13 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::application::port::inbound::turn_activity_port::TurnActivityPort;
     use crate::application::service::turn_activity::TurnActivityRegistry;
 
     #[test]
     fn upstream_turn_and_thread_messages_update_running_folders() {
         let registry = Arc::new(TurnActivityRegistry::default());
-        let tracker = TurnActivityTracker::new(registry.observer());
+        let tracker = TurnActivityTracker::new(registry.clone().observe_connection());
         tracker.client_message(r#"{"id":2,"method":"thread/resume","params":{"threadId":"t1"}}"#);
         tracker.upstream_message(
             r#"{"id":2,"result":{"thread":{"id":"t1","cwd":"/repo/app","status":{"type":"idle"}}}}"#,
@@ -178,7 +179,7 @@ mod tests {
     fn active_thread_snapshot_blocks_before_the_next_notification() {
         for method in ["thread/start", "thread/resume", "thread/fork"] {
             let registry = Arc::new(TurnActivityRegistry::default());
-            let tracker = TurnActivityTracker::new(registry.observer());
+            let tracker = TurnActivityTracker::new(registry.clone().observe_connection());
             tracker.client_message(
                 &serde_json::json!({"id":2,"method":method,"params":{"threadId":"active"}})
                     .to_string(),
@@ -197,10 +198,10 @@ mod tests {
     #[test]
     fn closed_thread_forgets_only_its_own_connection_record() {
         let registry = Arc::new(TurnActivityRegistry::default());
-        let tracker = TurnActivityTracker::new(registry.observer());
+        let tracker = TurnActivityTracker::new(registry.clone().observe_connection());
         let other = registry.observer();
         for method in ["thread/closed", "thread/archived", "thread/deleted"] {
-            tracker.observer.thread_folder("closed", "/repo");
+            tracker.observer.thread_snapshot("closed", "/repo", None);
             tracker.observer.turn_running("closed", true);
             other.thread_folder("closed", "/repo");
             other.turn_running("closed", true);
@@ -219,8 +220,8 @@ mod tests {
     fn only_successful_unsubscribe_responses_forget_the_running_thread() {
         for status in ["unsubscribed", "notSubscribed", "notLoaded"] {
             let registry = Arc::new(TurnActivityRegistry::default());
-            let tracker = TurnActivityTracker::new(registry.observer());
-            tracker.observer.thread_folder("t1", "/repo");
+            let tracker = TurnActivityTracker::new(registry.clone().observe_connection());
+            tracker.observer.thread_snapshot("t1", "/repo", None);
             tracker.observer.turn_running("t1", true);
             tracker.client_message(
                 r#"{"id":1,"method":"thread/unsubscribe","params":{"threadId":"t1"}}"#,
@@ -248,7 +249,7 @@ mod tests {
     #[test]
     fn a_one_off_read_does_not_seed_unobserved_turns_or_override_a_subscription() {
         let registry = Arc::new(TurnActivityRegistry::default());
-        let tracker = TurnActivityTracker::new(registry.observer());
+        let tracker = TurnActivityTracker::new(registry.clone().observe_connection());
         tracker.client_message(r#"{"id":1,"method":"thread/resume","params":{"threadId":"live"}}"#);
         tracker.client_message(
             r#"{"id":2,"method":"thread/read","params":{"threadId":"unobserved"}}"#,
