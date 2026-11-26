@@ -831,6 +831,7 @@ export function App() {
   };
 
   const composerActions: ComposerActions = {
+    modelSettings: session.current?.nextTurnSettings,
     queue: session.current?.nextTurnQueue,
     queueMessage: (text) => session.current?.queueMessage(text),
     resumeQueuedMessages: () => session.current?.resumeQueuedMessages(),

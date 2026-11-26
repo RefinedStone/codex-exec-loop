@@ -41,6 +41,7 @@ import { JsonRpcClient, JsonRpcError, type JsonRpcId, NO_RESPONSE } from "../rpc
 import { checkCodexVersion } from "./codexVersion";
 import { ChatHistory } from "./chatHistory";
 import { NextTurnQueue } from "./nextTurnQueue";
+import { NextTurnSettingsController } from "./nextTurnSettings";
 import { ThreadCompactionController } from "./threadCompaction";
 import { type DotLiveState, type DotSummary, type GatewayInfo, type SessionStore, sortFolders, type WorkspaceFolder, type WorkspaceThread } from "./desktopStore";
 
@@ -196,9 +197,12 @@ const READ_ONLY_ERROR = "원격 호스트의 대화는 읽기 전용입니다.";
 interface OpenedThread {
   thread: Thread;
   writerElsewhere: boolean;
+  model?: string | null;
+  effort?: string | null;
 }
 
 export class DesktopSession {
+  readonly nextTurnSettings: NextTurnSettingsController;
   readonly nextTurnQueue: NextTurnQueue;
   readonly compaction: ThreadCompactionController;
   private readonly pendingTurnStarts = new Set<string>();
@@ -260,6 +264,7 @@ export class DesktopSession {
     private readonly readOnly = false,
   ) {
     this.client = new JsonRpcClient((text) => bridge.send(text));
+    this.nextTurnSettings = new NextTurnSettingsController((params) => this.client.request("model/list", params));
     this.nextTurnQueue = new NextTurnQueue(async (threadId, text) => {
       this.assertWritable();
       this.assertSubscribed(threadId);
@@ -268,7 +273,8 @@ export class DesktopSession {
       const response = await this.startTextTurn(threadId, text);
       return response?.turn?.id ?? "";
     }, (threadId) => this.connected && this.canSend() && !this.loading && !this.pendingTurnStarts.has(threadId) && !this.compaction.isBlocking(threadId)
-      && this.store.getOpenThreadId() === threadId && this.writerElsewhereThreadId !== threadId);
+      && this.store.getOpenThreadId() === threadId && this.writerElsewhereThreadId !== threadId,
+      (threadId) => this.nextTurnSettings.validationReason(threadId));
     this.compaction = new ThreadCompactionController({
       request: (method, params) => this.client.request(method, params),
       reload: async (threadId, turnId, status) => {
@@ -323,6 +329,7 @@ export class DesktopSession {
         if (this.connected) {
           void this.initialize();
         } else {
+          this.nextTurnSettings.connectionChanged(false);
           this.chatHistory?.disconnected();
           this.invalidateConversation();
           this.taskAuthoringEpoch++;
@@ -339,6 +346,7 @@ export class DesktopSession {
 
   stop(): void {
     this.compaction.dispose();
+    this.nextTurnSettings.dispose();
     this.nextTurnQueue.dispose();
     this.providerVersionScope = "";
     for (const unsubscribe of this.unsubscribers.splice(0)) {
@@ -542,11 +550,13 @@ export class DesktopSession {
 
   private async startTextTurn(threadId: string, text: string): Promise<TurnStartResponse> {
     const generation = this.conversationGeneration;
+    const settings = this.nextTurnSettings.prepare(threadId);
     this.pendingTurnStarts.add(threadId);
     try {
       const input: UserInput[] = [{ type: "text", text, text_elements: [] }];
-      const response = await this.client.request<TurnStartResponse>("turn/start", { threadId, input });
-      if (typeof response?.turn?.id === "string") {
+      const response = await this.client.request<TurnStartResponse>("turn/start", { threadId, input, ...settings.params });
+      if (typeof response?.turn?.id === "string" && response.turn.id.length > 0) {
+        this.nextTurnSettings.accepted(settings);
         this.nextTurnQueue.started(threadId, response.turn.id);
         if (generation === this.conversationGeneration && this.nextTurnQueue.snapshot(threadId).waitingTurnId === response.turn.id) {
           this.acknowledgedTurnStarts.set(threadId, response.turn.id);
@@ -576,6 +586,7 @@ export class DesktopSession {
   async startThread(cwd: string): Promise<string> {
     this.assertWritable();
     const response = await this.client.request<ThreadStartResponse>("thread/start", { cwd });
+    this.nextTurnSettings.observeSnapshot(response.thread.id, response.model ?? response.thread.model, response.reasoningEffort ?? response.thread.reasoningEffort);
     const transcript = transcriptFromThread(response.thread);
     this.invalidateConversation();
     this.batcher.clear();
@@ -599,6 +610,7 @@ export class DesktopSession {
         },
       });
       const threadId = response.thread.id;
+      this.nextTurnSettings.observeSnapshot(threadId, response.model ?? response.thread.model, response.reasoningEffort ?? response.thread.reasoningEffort);
       await agent.setActiveThread(threadId);
       await agent.bind(registration.registrationId, threadId);
       let cursor: string | null = null;
@@ -816,12 +828,14 @@ export class DesktopSession {
   }
 
   private async initialize(): Promise<void> {
+    const settingsEpoch = this.nextTurnSettings.connectionChanged(false);
     this.client.reset("reconnected");
     // 커널 붙음은 접속마다 따로이다. 대기 중 요청을 정리한 뒤 다시 붙는다.
     this.kernel.connectionChanged(true);
     try {
       await this.client.request("initialize", initializeParams(this.clientVersion));
       this.client.notify("initialized");
+      this.nextTurnSettings.connectionChanged(true, settingsEpoch);
       const gateway = await this.client.request<GatewayInfo>("akra/gateway/info");
       // 목록을 읽는 동안 온 상태 변경은 목록의 상태보다 새롭다. 따로 모았다가 목록 결과 위에 덮는다.
       const statusChanges = new Map<string, boolean>();
@@ -936,6 +950,7 @@ export class DesktopSession {
     if (!threadId || !this.connected) {
       return;
     }
+    const settingsRevision = this.nextTurnSettings.snapshot(threadId).currentRevision;
     // 요청마다 버퍼를 따로 둔다. 빠르게 스레드를 바꿔 resume 이 겹쳐도 먼저 끝난 요청이 다음 요청의 버퍼를 지우지 않는다.
     const loading: ResumeLoading = { threadId, buffer: [] };
     this.loading = loading;
@@ -951,6 +966,8 @@ export class DesktopSession {
       }
       this.writerElsewhereThreadId = opened.writerElsewhere ? threadId : null;
       this.store.setWriterElsewhere(opened.writerElsewhere);
+      this.nextTurnSettings.observeSnapshot(threadId, opened.model ?? opened.thread.model,
+        opened.effort ?? opened.thread.reasoningEffort, settingsRevision);
       let transcript = transcriptFromThread(opened.thread);
       // 서버가 턴을 함께 보냈으면(예: 녹화 재생) 그대로 쓴다.
       if (transcript.turns.length === 0) {
@@ -976,7 +993,7 @@ export class DesktopSession {
   private async subscribeOrRead(threadId: string): Promise<OpenedThread> {
     try {
       const response = await this.client.request<ThreadResumeResponse>("thread/resume", { threadId, excludeTurns: true });
-      return { thread: response.thread, writerElsewhere: false };
+      return { thread: response.thread, writerElsewhere: false, model: response.model, effort: response.reasoningEffort };
     } catch (error) {
       if (!(error instanceof JsonRpcError && WRITER_ELSEWHERE_ERROR.test(error.message))) {
         throw error;
@@ -1083,6 +1100,7 @@ export class DesktopSession {
     }
     if (method === "thread/started") {
       const thread = (params as { thread?: Thread } | null)?.thread;
+      if (typeof thread?.id === "string") this.nextTurnSettings.observeSnapshot(thread.id, thread.model, thread.reasoningEffort);
       // thread/list 처럼 하위 에이전트와 디스크에 남지 않는 스레드는 목록에 넣지 않는다. 이미 있는 스레드는 그대로 둔다.
       if (thread && !thread.ephemeral && !thread.parentThreadId) {
         this.addedThreads.set(thread.id, thread);
@@ -1092,6 +1110,11 @@ export class DesktopSession {
     }
     const threadId = notificationThreadId(params);
     if (!threadId) {
+      return;
+    }
+    if (method === "thread/settings/updated") {
+      const settings = (params as { threadSettings?: { model?: unknown; effort?: unknown } } | null)?.threadSettings;
+      if (settings && typeof settings === "object") this.nextTurnSettings.observeNotification(threadId, settings.model, settings.effort);
       return;
     }
     if (method === "turn/completed") {

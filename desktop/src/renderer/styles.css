@@ -2320,3 +2320,10 @@ button.issues-title:hover {
 .queued-inputs button { margin-left: 6px; }
 .queued-input-text { display: block; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 72px; overflow: auto; }
 .queued-inputs textarea { width: 100%; min-height: 48px; }
+
+.next-turn-settings { margin-bottom: 8px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
+.next-turn-settings summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.next-turn-settings-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; }
+.next-turn-settings-fields label { display: flex; align-items: center; gap: 6px; }
+.next-turn-settings-fields select { max-width: 260px; color: var(--text); background: var(--bg-elevated); border: 1px solid var(--line); border-radius: 5px; padding: 4px; }
+.next-turn-settings p { margin: 8px 0 0; }
