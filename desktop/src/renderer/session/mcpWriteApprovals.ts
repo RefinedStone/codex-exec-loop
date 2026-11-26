@@ -9,6 +9,7 @@ export interface McpWriteApprovalRequest {
   arguments: unknown;
 }
 
+export const MCP_WRITE_APPROVAL_SUBSCRIBE = "akra/mcp/writeApproval/subscribe";
 export const MCP_WRITE_APPROVAL_REQUESTED = "akra/mcp/writeApproval/requested";
 export const MCP_WRITE_APPROVAL_RESOLVED = "akra/mcp/writeApproval/resolved";
 export const MCP_WRITE_APPROVAL_ANSWER = "akra/mcp/writeApproval/answer";

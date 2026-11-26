@@ -26,6 +26,9 @@ pub const MCP_HUB_GATEWAY_CALL: &str = "akra/mcp/call";
 /// params `{ hubHome }` -> result `{}`. 등록부나 로그인이 바뀐 뒤 상주 엔진을 내린다.
 pub const MCP_HUB_GATEWAY_RELOAD: &str = "akra/mcp/reload";
 pub const MCP_HUB_GATEWAY_OTHER_HUB: i64 = -32040;
+/// Desktop -> Gateway 요청 `{}` -> result `{ subscribed }`. 승인 카드를 띄우는 접속만 보낸다. 이 접속만 아래 두
+/// 알림을 받는다. 보낸 접속이 없으면 쓰기 호출은 바로 거절된다.
+pub const MCP_HUB_GATEWAY_WRITE_APPROVAL_SUBSCRIBE: &str = "akra/mcp/writeApproval/subscribe";
 /// Gateway -> Desktop 알림 `{ id, server, tool, arguments }`. 쓰기 도구 호출 하나의 승인을 묻는다 (#2830).
 pub const MCP_HUB_GATEWAY_WRITE_APPROVAL_REQUESTED: &str = "akra/mcp/writeApproval/requested";
 /// Gateway -> Desktop 알림 `{ id }`. 답했거나 제한 시간이 지나서 그 요청이 끝났다.

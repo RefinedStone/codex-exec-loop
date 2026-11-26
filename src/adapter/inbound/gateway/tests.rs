@@ -1172,6 +1172,10 @@ async fn gateway_stop_stops_kernels_before_the_upstream_app_server() {
 
 /// MCP hub 가 필요 없는 테스트용이다. 등록된 서버가 없고 엔진도 없다.
 fn empty_mcp_hub() -> Arc<super::GatewayMcpHub> {
+    Arc::new(empty_hub())
+}
+
+fn empty_hub() -> super::GatewayMcpHub {
     struct EmptyHub;
     impl crate::application::port::outbound::mcp_hub_backend_port::McpHubBackendPort for EmptyHub {
         fn registered_servers(
@@ -1206,7 +1210,76 @@ fn empty_mcp_hub() -> Arc<super::GatewayMcpHub> {
             Ok(())
         }
     }
-    Arc::new(super::GatewayMcpHub::new(String::new(), Arc::new(EmptyHub)))
+    super::GatewayMcpHub::new(String::new(), Arc::new(EmptyHub))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn only_a_connection_that_declares_itself_receives_mcp_write_approvals() {
+    // #2830 review: the `akra mcp` connection that calls a write tool must not count as an approver.
+    use crate::application::port::outbound::mcp_write_approval_port::{
+        McpWriteApproval, McpWriteApprovalPort, McpWriteApprovalRequest,
+    };
+    let broker = Arc::new(
+        crate::application::service::mcp_write_approval::McpWriteApprovalBroker::new(
+            Duration::from_secs(5),
+        ),
+    );
+    let services = super::session::GatewayServices {
+        mcp_hub: Some(Arc::new(empty_hub().with_write_approvals(broker.clone()))),
+        ..Default::default()
+    };
+    let ask =
+        |broker: Arc<crate::application::service::mcp_write_approval::McpWriteApprovalBroker>| {
+            tokio::task::spawn_blocking(move || {
+                broker.request_approval(&McpWriteApprovalRequest {
+                    server: "notion".into(),
+                    tool: "update".into(),
+                    arguments: json!({}),
+                })
+            })
+        };
+
+    let mut cli = connect_with_services("/", services.clone()).await;
+    let statuses = kernel_request(&mut cli, "s", "akra/mcp/statuses", json!({})).await;
+    assert!(statuses["result"].is_object(), "the CLI session is up");
+    assert_eq!(
+        ask(broker.clone()).await.unwrap(),
+        McpWriteApproval::NoApprover
+    );
+
+    let mut remote = connect_with_services("/host/cloud", services.clone()).await;
+    let refused = kernel_request(
+        &mut remote,
+        "r",
+        "akra/mcp/writeApproval/subscribe",
+        json!({}),
+    )
+    .await;
+    assert_eq!(refused["result"]["subscribed"], json!(false));
+
+    let mut desktop = connect_with_services("/", services).await;
+    let subscribed = kernel_request(
+        &mut desktop,
+        "d",
+        "akra/mcp/writeApproval/subscribe",
+        json!({}),
+    )
+    .await;
+    assert_eq!(subscribed["result"]["subscribed"], json!(true));
+    let pending = ask(broker.clone());
+    let requested = next_json_matching(&mut desktop, |value| {
+        value["method"] == json!("akra/mcp/writeApproval/requested")
+    })
+    .await;
+    let answer = kernel_request(
+        &mut desktop,
+        "a",
+        "akra/mcp/writeApproval/answer",
+        json!({ "id": requested["params"]["id"], "approve": true }),
+    )
+    .await;
+    assert_eq!(answer["result"]["accepted"], json!(true));
+    assert_eq!(pending.await.unwrap(), McpWriteApproval::Approved);
 }
 
 /// plan 25 S1a: `local` 과 가짜 두 번째 호스트 `cloud` 가 있는 Gateway 에 `path` 로 붙는다.
