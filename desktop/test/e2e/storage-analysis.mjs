@@ -24,7 +24,12 @@ const protectionReasons = [
   ["untracked_observed","3 observed file paths are absent from the index; ignore rules were not read or applied"],
   ["index_conflicts","2 index paths have unresolved stages"],
   ["index_paths_unknown","Index path observation failed, exceeded a bound, or contained an unsupported path; no working tree status was inferred"],
-  ["status_unknown","Working tree contents and ignore rules are not read; observed index/path evidence is not a complete or clean status"],
+  ["status_unknown","파일 내용의 변경 여부는 비교하지 않습니다. stat·인덱스·저장소 규칙의 관측만으로 내용 동일성이나 삭제 가능 여부를 판단하지 않습니다."],
+  ["worktree_stat_changes","추적 경로 3개: 없음 1, 크기 1, 시각 2. 파일 내용은 비교하지 않았습니다."],
+  ["worktree_stat_unknown","특수 인덱스 항목 2개는 미확인입니다."],
+  ["untracked_files","저장소 ignore 규칙을 적용한 뒤 인덱스 밖 관측 파일 4개가 남았습니다."],
+  ["ignore_rules_observed","저장소 규칙으로 5개를 제외했습니다. 전역 exclude는 읽지 않았습니다."],
+  ["git_operation_locked","Git 작업 잠금 경로 1개가 존재합니다."],
   ["future_protection_reason","추가로 확인한 보호 근거"],
 ].map(([code, detail]) => ({ code, detail, observed_at: "2026-11-23T00:00:00Z" }));
 const snapshot = () => ({ schema_version: 1, id: "scan-1", revision: snapshotRevision, volume_id: "volume-c-stable", root_node_id: "root", state: "complete", started_at: 1, finished_at: 2, files_scanned: 3 + snapshotRevision, directories_scanned: 6, issues: [] });
@@ -139,7 +144,7 @@ try {
   await view.keyboard.press("ArrowDown");
   assert.equal(await target.getAttribute("aria-selected"), "true");
   const detail = panel.getByRole("region", { name: "선택 항목 상세", exact: true });
-  for (const title of ["기존 Akra 커널의 저장소 관측", "기존 커널 목록 일부 미확인", "Git 인덱스에 없는 경로 관측", "Git 인덱스 충돌 관측", "Git 인덱스 경로 미확인", "작업 트리 상태 미확인"]) {
+  for (const title of ["기존 Akra 커널의 저장소 관측", "기존 커널 목록 일부 미확인", "Git 인덱스에 없는 경로 관측", "Git 인덱스 충돌 관측", "Git 인덱스 경로 미확인", "작업 트리 상태 미확인", "추적 파일 메타데이터 차이", "추적 파일 메타데이터 일부 미확인", "저장소 규칙 적용 후 미추적 관측", "저장소 무시 규칙 관측", "Git 작업 잠금 관측"]) {
     await detail.getByRole("note", { name: "검토 필요 · " + title, exact: true }).waitFor();
   }
   const untrackedNote = detail.getByRole("note", { name: "검토 필요 · Git 인덱스에 없는 경로 관측", exact: true });
@@ -147,8 +152,14 @@ try {
   await untrackedNote.locator("summary").click();
   assert.match(await untrackedNote.innerText(), /3 observed file paths/);
   const unknownStatus = detail.getByRole("note", { name: "검토 필요 · 작업 트리 상태 미확인", exact: true });
-  assert.match(await unknownStatus.innerText(), /파일 본문과 ignore 규칙을 읽지 않았습니다/);
-  assert.match(await unknownStatus.innerText(), /변경 없음이나 삭제 가능 여부를 판단할 수 없습니다/);
+  assert.match(await unknownStatus.innerText(), /파일 내용의 변경 여부는 비교하지 않았습니다/);
+  const statChanges = detail.getByRole("note", { name: "검토 필요 · 추적 파일 메타데이터 차이", exact: true });
+  assert.match(await statChanges.innerText(), /본문 변경이 확정된 것은 아닙니다/);
+  await statChanges.locator("summary").click();
+  assert.match(await statChanges.innerText(), /없음 1, 크기 1/);
+  const ignored = detail.getByRole("note", { name: "검토 필요 · 저장소 규칙 적용 후 미추적 관측", exact: true });
+  assert.match(await ignored.innerText(), /전역 제외 규칙/);
+  assert.match(await unknownStatus.innerText(), /내용 동일성이나 삭제 가능 여부를 판단할 수 없/);
   assert.match(await detail.getByRole("note", { name: "검토 필요 · 추가 보호 사유", exact: true }).innerText(), /추가로 확인한 보호 근거/);
   await panel.getByRole("button", { name: "huge-cache.bin", exact: true }).waitFor();
   await panel.getByRole("button", { name: "파일 다음 항목", exact: true }).click();

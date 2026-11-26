@@ -631,7 +631,8 @@ fn storage_analysis_git_observation_preserves_index_and_protection_reasons() {
         "main_checkout",
         "active_slot",
         "index_changes",
-        "untracked_observed",
+        "untracked_files",
+        "worktree_stat_changes",
         "status_unknown",
         "upstream_unknown",
     ] {

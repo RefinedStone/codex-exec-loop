@@ -1,4 +1,8 @@
+#[cfg(test)]
+mod g2_tests;
 mod git_metadata;
+mod ignore;
+mod stat;
 mod tracked;
 
 use super::index::StorageIndex;
@@ -260,7 +264,7 @@ pub(super) fn annotate(
         }
         reasons.push(evidence(
             "status_unknown",
-            "Working tree contents and ignore rules are not read; observed index/path evidence is not a complete or clean status",
+            "파일 내용의 변경 여부는 비교하지 않습니다. stat·인덱스·저장소 ignore 규칙의 관측만으로 내용 동일성·전역 제외 규칙·삭제 가능 여부를 판단할 수 없습니다.",
         ));
         let metadata = if git_discovered {
             git_metadata::observe(db, &path)
@@ -273,6 +277,13 @@ pub(super) fn annotate(
                 "Git metadata is unobserved, partial, changed, external, or contains a placeholder/link; Git commands were skipped",
             )),
             Ok(metadata) => {
+                let (locks, locks_unknown) = git_metadata::lock_observations(db, &metadata);
+                if locks > 0 {
+                    reasons.push(evidence("git_operation_locked", format!("Git 작업 잠금 경로 {locks}개가 존재합니다. 잠금 내용이나 소유 프로세스는 읽지 않았으며 다른 작업이 사용 중일 수 있습니다.")));
+                }
+                if locks_unknown {
+                    reasons.push(evidence("git_lock_unknown", "일부 Git 잠금 경로를 확인하지 못했습니다. 잠금 부재나 비활성을 추론하지 않습니다."));
+                }
                 let records = cached_worktrees(db, &path, &metadata, cancelled);
                 match &records {
                     Ok(records) => {
@@ -355,7 +366,12 @@ pub(super) fn annotate(
                     )),
                 }
                 if cancelled.load(Ordering::Acquire) { break; }
-                reasons.extend(tracked::observe(db, id, &path, &metadata, cancelled));
+                if metadata.work_tree.is_some() {
+                    reasons.extend(tracked::observe(db, id, &path, &metadata, cancelled));
+                    if !cancelled.load(Ordering::Acquire) {
+                        reasons.extend(stat::observe(db, &path, &metadata, cancelled));
+                    }
+                }
                 if cancelled.load(Ordering::Acquire) { break; }
                 match git(&path, &metadata, &["rev-list", "--count", "@{upstream}..HEAD"], cancelled).map(text) {
                     Ok(count) if count.parse::<u64>().is_ok_and(|v| v > 0) => {
