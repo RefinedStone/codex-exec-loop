@@ -42,7 +42,7 @@ describe("git status parsing", () => {
 
 describe("git file actions", () => {
   const roots: string[] = [];
-  afterAll(() => roots.forEach((root) => rmSync(root, { recursive: true, force: true })));
+  afterAll(() => roots.forEach((root) => rmSync(root, { recursive: true, force: true, maxRetries: 5 })));
   /** 커밋 하나가 있는 새 저장소이다. `files` 는 첫 커밋의 파일이다. */
   const repository = (files: Record<string, string> = { "a.txt": "a\n", "b.txt": "b\n" }) => {
     const root = mkdtempSync(join(tmpdir(), "akra-git-actions-"));
@@ -285,7 +285,7 @@ describe("git file actions", () => {
         truncated: false,
       });
     } finally {
-      rmSync(outside, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true, maxRetries: 5 });
     }
   });
 
@@ -302,7 +302,7 @@ describe("git file actions", () => {
       }
       await expect(readGitFileDiff(root, "linked-parent/secret.txt", true)).rejects.toThrow(/저장소 외부/);
     } finally {
-      rmSync(outside, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true, maxRetries: 5 });
     }
   });
 
@@ -318,7 +318,7 @@ describe("git file actions", () => {
 
 describe("git status in a real repository", () => {
   const root = mkdtempSync(join(tmpdir(), "akra-git-"));
-  afterAll(() => rmSync(root, { recursive: true, force: true }));
+  afterAll(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }));
   const git = (...args: string[]) =>
     execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], {
       cwd: root,
@@ -390,7 +390,7 @@ describe("git status in a real repository", () => {
       const status = await readGitStatus(plain);
       expect(status.ok).toBe(false);
     } finally {
-      rmSync(plain, { recursive: true, force: true });
+      rmSync(plain, { recursive: true, force: true, maxRetries: 5 });
     }
   });
 });

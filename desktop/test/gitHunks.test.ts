@@ -11,7 +11,7 @@ import type { GitHunkAction } from "../src/shared/gitHunks";
 describe("Git hunk actions", () => {
   const roots: string[] = [];
   afterEach(() => {
-    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   });
 
   function repository(content = Array.from({ length: 40 }, (_, index) => `line ${index + 1}\n`).join("")) {
