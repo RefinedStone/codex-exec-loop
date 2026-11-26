@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 
 import { app, type BaseWindow, BrowserWindow, clipboard, dialog, ipcMain, Menu, type MenuItemConstructorOptions, net, powerMonitor, powerSaveBlocker, safeStorage, screen, shell, type IpcMainInvokeEvent, type WebContents, utilityProcess } from "electron";
 
+import { command } from "../shared/commands";
 import { type BrowserBounds, IPC_CHANNELS, isDotId, isRemoteHostId, type TerminalOpenRequest } from "../shared/bridge";
 import { isNotionPageUrl } from "../shared/notionLinks";
 import { mergeSettings, shouldKeepAwake, validateSettings } from "../shared/settings";
@@ -932,7 +933,7 @@ function installApplicationMenu(): void {
   const openSettingsItem: MenuItemConstructorOptions = {
     id: "open-settings",
     label: "설정…",
-    accelerator: "CmdOrCtrl+,",
+    accelerator: command("settings").accelerator,
     click: (_item, window) => {
       const target = window instanceof BrowserWindow && mainWindows.has(window) ? window : [...mainWindows][0];
       if (!target) return;
@@ -966,7 +967,7 @@ function installApplicationMenu(): void {
       label: "파일",
       submenu: [
         ...(process.platform === "darwin" ? [] : [openSettingsItem, { type: "separator" as const }]),
-        { id: "new-window", label: "새 창", accelerator: "CmdOrCtrl+Shift+N", click: () => createWindow() },
+        { id: "new-window", label: command("new-window").title, accelerator: command("new-window").accelerator, click: () => createWindow() },
         { type: "separator" },
         { role: "close", label: "창 닫기" },
       ],
@@ -975,11 +976,11 @@ function installApplicationMenu(): void {
     {
       label: "보기",
       submenu: [
-        { id: "zoom-in", label: "확대", accelerator: "CmdOrCtrl+Plus", click: (_item, window) => zoomFromMenu(window, "in") },
+        { id: "zoom-in", label: "확대", accelerator: command("zoom-in").accelerator, click: (_item, window) => zoomFromMenu(window, "in") },
         // 미국 자판에서 Shift 없이 누르는 글쇠는 `=` 이다. 같은 동작을 숨긴 항목으로 한 번 더 건다.
         { label: "확대", accelerator: "CmdOrCtrl+=", visible: false, acceleratorWorksWhenHidden: true, click: (_item, window) => zoomFromMenu(window, "in") },
-        { id: "zoom-out", label: "축소", accelerator: "CmdOrCtrl+-", click: (_item, window) => zoomFromMenu(window, "out") },
-        { id: "zoom-reset", label: "실제 크기", accelerator: "CmdOrCtrl+0", click: (_item, window) => zoomFromMenu(window, "reset") },
+        { id: "zoom-out", label: "축소", accelerator: command("zoom-out").accelerator, click: (_item, window) => zoomFromMenu(window, "out") },
+        { id: "zoom-reset", label: "실제 크기", accelerator: command("zoom-reset").accelerator, click: (_item, window) => zoomFromMenu(window, "reset") },
         { type: "separator" },
         { role: "reload" },
         { role: "toggleDevTools" },
