@@ -2,7 +2,9 @@
 
 이 문서는 저장 공간 분석기의 구현 계약, 이슈 댓글 반영, 재현 가능한 시험 범위와 남은 검증을 구분합니다. 사용자용 API·상태·공유 설명은 [저장 공간 분석기](../reference/storage-analysis.md), 공통 확장 호스트의 별도 검증은 [커널 확장 호스트](kernel-extension-host.md)를 참고하세요.
 
-**검증 기준: 소스 `3379ca69`에서 backend 회귀 75개, 확장 필터 50개와 로컬 Windows Full을 통과했습니다. 후속 `d7d165bb`·K `0d639e8f` 통합은 저장 공간 구성요소의 동일성 확인과 원격 Full로 검증하고, 마지막 Windows Full은 최종 Desktop 통합 기록에서 확인합니다. V3 native 측정은 `c690571b`의 결과로 유지합니다.** 아래의 중간 성공 이력을 최종 커밋 전체의 통과로 계산하지 않습니다. 실제 모델 턴은 검증의 전제 조건에 포함하지 않습니다.
+**기존 검증 기준: 소스 `3379ca69`에서 backend 회귀 75개, 확장 필터 50개와 로컬 Windows Full을 통과했습니다. 후속 `d7d165bb`·K `0d639e8f` 통합은 저장 공간 구성요소의 동일성 확인과 원격 Full로 검증하고, 당시 마지막 Windows Full은 Desktop 통합 기록에서 확인합니다. 최초 V3 native 측정은 `c690571b`의 결과로 유지합니다.** 아래의 중간 성공 이력을 현재 커밋 전체의 통과로 계산하지 않습니다. 실제 모델 턴은 검증의 전제 조건에 포함하지 않습니다.
+
+2026-11-26에는 [SSD/HDD 추가 측정](storage-analysis-performance.md)과 [G2 보강 PR #2753](https://github.com/RefinedStone/codex-exec-loop/pull/2753)이 머지됐습니다. 현재 상위 #2621·#2596의 완료 조건과 K/S/G/D/V/A 근거 연결은 [첫 버전 인수표](storage-analysis-acceptance.md)에서 확인합니다. 과거 측정의 SHA·실패·skip·미측정 표는 당시 기록으로 보존합니다.
 
 ## 1. 기록 원칙과 최종 결과
 
@@ -49,7 +51,7 @@ git diff --exit-code c690571b HEAD -- src/domain/storage_analysis src/applicatio
 
 ## 2. 이슈별 충족 범위와 제한
 
-표의 “구현 범위”는 현재 코드의 동작이며 이슈 자동 종료나 모든 출시 환경 검증 완료를 뜻하지 않습니다. 특히 G2와 V3의 남은 요구를 명시합니다.
+표의 “구현 범위”는 이슈 자동 종료나 모든 출시 환경 검증 완료를 뜻하지 않습니다. G2와 V3의 후속 보강을 포함하며, 상위의 현재 완료 판정과 미측정 범위는 [첫 버전 인수표](storage-analysis-acceptance.md)에 연결합니다.
 
 ### S — 볼륨 분석
 
@@ -103,7 +105,7 @@ git diff --exit-code c690571b HEAD -- src/domain/storage_analysis src/applicatio
 
 | 이슈 | 준비된 검증 | 남은 판정 |
 | --- | --- | --- |
-| [V #2621](https://github.com/RefinedStone/codex-exec-loop/issues/2621) | 결정적·native·통합 증거 층, 재현 명령, 이슈별 제한을 문서화했습니다. | 최종 SHA·환경·실행 결과를 같은 기록으로 묶어야 합니다. |
+| [V #2621](https://github.com/RefinedStone/codex-exec-loop/issues/2621) | 결정적·native·통합 증거 층, 재현 명령, 이슈별 제한을 문서화했습니다. [첫 버전 인수표](storage-analysis-acceptance.md)에 각 소스 SHA·환경·실행 결과와 두 완료 조건을 연결했습니다. | 과거의 서로 다른 시험 소스를 현재 커밋의 단일 재실행 성공으로 합산하지 않습니다. 후속 실측 범위와 최초 Full 실패 기록도 함께 유지합니다. |
 | [V1 #2622](https://github.com/RefinedStone/codex-exec-loop/issues/2622) | 독립 기대값의 설계 예시, LCA 순열, 0/unknown/부분 집계, 실제 작은 하드링크·정션, 재열거 없는 페이지를 검사합니다. | 실제 파일 크기를 지정한 것을 실제 할당량 기대값으로 간주하지 않습니다. ACL·압축·sparse·cloud별 native 범위는 실행 여부를 구분합니다. |
 | [V2 #2623](https://github.com/RefinedStone/codex-exec-loop/issues/2623) | 등록 호스트+실제 SQLite 경로, idempotency/dedupe, 취소·disable·정리, grant 경합 barrier, 대화 epoch, 근거 복귀 계약을 검사합니다. | 객체 복원·자식 호스트 프로세스 종료·실제 native 스캐너 crash·Desktop E2E의 강도를 혼동하지 않습니다. 상세 호스트 시험은 별도 문서와 연결합니다. |
 | [V3 #2624](https://github.com/RefinedStone/codex-exec-loop/issues/2624) | 기존 NVMe 기록에 이어 [후속 SSD/HDD 측정](storage-analysis-performance.md)에서 순차/병렬 첫·재실행, 실제 배정 중지, native/Electron 메모리, native 부하 중 입력, 계층형 threshold를 기록했습니다. 기본1/최대4·표시 임계값 유지 근거를 명시합니다. | OS cold cache·전체 볼륨·visible paint는 미측정입니다. HDD 첫 native progress는 일부1초 목표를 넘었고, queued DOM과 실제 진행 DOM을 구별합니다. 취소 후 새 배정과 terminal 대기도 별도 기록합니다. |
@@ -222,7 +224,7 @@ ignored benchmark는 일반 단위 시험 성공 개수에 포함하지 않습�
 
 첫 progress·첫 파일 관측·전체 시간은 서로 다른 지표이며 실제 UI 표시 지연은 별도로 측정해야 합니다.
 
-### 미측정과 보수적인 기본값
+### 당시 미측정과 보수적인 기본값 — 2026-11-23
 
 | 항목 | 상태 |
 | --- | --- |
@@ -239,6 +241,6 @@ ignored benchmark는 일반 단위 시험 성공 개수에 포함하지 않습�
 
 ## 6. 검증 기록의 해석
 
-제품 소스 SHA와 시험·측정 대상을 연결하고 중간 이력은 별도로 보존했습니다. 문서 전용 변경은 제품 소스 검증과 구분합니다. Git working tree 상세 미확인, native crash 프로세스 격리 부재, 물리 장치·cold cache·native 부하 UI 미측정을 PR과 이슈 표에서 함께 유지합니다.
+제품 소스 SHA와 시험·측정 대상을 연결하고 중간 이력은 별도로 보존했습니다. 문서 전용 변경은 제품 소스 검증과 구분합니다. 이후 G2는 cached stat·저장소 ignore·Git 잠금 근거를 보강했고, V3는 SSD/HDD와 native 부하 중 Electron 입력을 추가 측정했습니다. Git 본문 동일성·완전한 clean, native crash 프로세스 격리, cold cache·전체 볼륨·실제 제품 Gateway 동시 부하·visible paint는 여전히 보장하거나 검증한 범위가 아닙니다. [현재 인수와 후속 경계](storage-analysis-acceptance.md#5-목표값-미측정과-후속-범위)를 함께 확인합니다.
 
 민감 경로·파일명·사용 가능한 grant 원문을 검증 보고서에 복제하지 않습니다. 소스는 이 문서의 저장소 상대 링크로 연결하고 fixture의 의미·범위·결과만 기록합니다.
