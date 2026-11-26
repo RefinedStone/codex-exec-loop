@@ -57,6 +57,12 @@ try {
   await withApp(async (page) => {
     const input = page.getByTestId("composer-input");
     check("the thread draft is back after the app restarts", (await input.inputValue()) === "아직 보내지 않은 초안!", await input.inputValue());
+    // 저장 완료를 기다리는 polling 없이 마지막 입력 직후 창을 닫는다.
+    await input.fill("종료 직전의 마지막 초안");
+  });
+  await withApp(async (page) => {
+    const input = page.getByTestId("composer-input");
+    check("the last edit survives closing immediately after typing", (await input.inputValue()) === "종료 직전의 마지막 초안", await input.inputValue());
   });
 } catch (error) {
   check(`flow finished without error (${String(error).split("\n")[0]})`, false);
