@@ -4,20 +4,27 @@ import { useEffect, useMemo, useState } from "react";
 import { Picker } from "../design/Picker";
 import { Composer } from "./Composer";
 import { Icon, type IconName } from "../design/icons";
-import { PROJECTS, SUGGESTIONS, TERMINAL_LINES, type MockThread, type ThreadStatus } from "./mockData";
+import { ATTENTION_GROUPS, type Attention } from "./flow";
+import { BASE_BRANCHES, PROJECTS, SUGGESTIONS, TERMINAL_LINES, type MockThread } from "./mockData";
 import { StatusMark } from "./Sidebar";
-import { handOffToNewThread, notConnected, openThread, showView, togglePanel, toggleTheme, useBlueprint } from "./store";
+import { answerApproval, goNextInTurn, handOffToNewThread, handOffToThread, notConnected, openThread, runDelivery, showView, togglePanel, toggleTheme, useAttentionList, useBlueprint, useDelivery } from "./store";
 
 function projectName(projectId: string): string {
   return PROJECTS.find((project) => project.id === projectId)?.name ?? projectId;
 }
 
 const RUN_PLACES = ["Worktree 에서 실행", "작업 폴더에서 실행"] as const;
+const GROUP_ORDER = ATTENTION_GROUPS.map((group) => group.id);
+const RESUME_COUNT = 5;
 
 export function Home() {
   const homeProjectId = useBlueprint((state) => state.homeProjectId);
   const homeWorktree = useBlueprint((state) => state.homeWorktree);
-  const threads = useBlueprint((state) => state.threads);
+  const homeBase = useBlueprint((state) => state.homeBase);
+  // 사람을 기다리는 스레드가 먼저이다: 내 차례, 읽을 것, 작업 중, 나머지.
+  const resume = useAttentionList()
+    .sort((left, right) => GROUP_ORDER.indexOf(left.attention.group) - GROUP_ORDER.indexOf(right.attention.group))
+    .slice(0, RESUME_COUNT);
   return (
     <div className="home">
       <div className="home-inner">
@@ -35,6 +42,7 @@ export function Home() {
             options={RUN_PLACES}
             onChange={(place) => useBlueprint.setState({ homeWorktree: place === RUN_PLACES[0] })}
           />
+          {homeWorktree && <Picker value={`기준: ${homeBase}`} options={BASE_BRANCHES.map((base) => `기준: ${base}`)} onChange={(base) => useBlueprint.setState({ homeBase: base.replace("기준: ", "") })} />}
         </div>
         <Composer threadId={null} />
         <h3>제안</h3>
@@ -47,13 +55,14 @@ export function Home() {
             </button>
           ))}
         </div>
-        <h3>최근 스레드</h3>
+        <h3>이어서 하기</h3>
         <ul className="recent">
-          {threads.slice(0, 4).map((thread) => (
+          {resume.map(({ thread, attention }) => (
             <li key={thread.id}>
               <button type="button" onClick={() => openThread(thread.id)}>
                 <StatusMark status={thread.status} />
                 <span className="recent-title">{thread.title}</span>
+                {attention.reason && <span className={attention.group === "mine" ? "badge badge-warn" : "muted"}>{attention.reason}</span>}
                 <span className="muted">{projectName(thread.projectId)}</span>
                 <span className="muted">{thread.updated}</span>
               </button>
@@ -65,20 +74,20 @@ export function Home() {
   );
 }
 
-const FLEET_COLUMNS: { title: string; statuses: ThreadStatus[]; hint: string }[] = [
-  { title: "확인 필요", statuses: ["approval", "failed"], hint: "승인 또는 실패 확인을 기다립니다" },
-  { title: "진행 중", statuses: ["running"], hint: "에이전트가 작업합니다" },
-  { title: "읽지 않음", statuses: ["unread"], hint: "끝났고 아직 보지 않았습니다" },
-  { title: "최근", statuses: ["idle"], hint: "본 스레드입니다" },
-];
-
-function FleetCard({ thread }: { thread: MockThread }) {
+/** "내 차례" 카드는 스레드를 열지 않고 답한다. 엿보기는 답하기 전에 근거를 보인다. */
+function FleetCard({ thread, attention }: { thread: MockThread; attention: Attention }) {
+  const [peek, setPeek] = useState(false);
+  const approval = useBlueprint((state) => state.approvals[thread.id]);
+  const lastAnswer = useBlueprint((state) => state.turns[thread.id]?.at(-1)?.items.findLast((item) => item.type === "agent"));
+  const delivery = useDelivery(thread);
+  const inTurn = attention.group === "mine";
   return (
-    <button type="button" className="fleet-card" onClick={() => openThread(thread.id)}>
-      <span className="fleet-card-title">
+    <div className="fleet-card">
+      <button type="button" className="fleet-card-title" onClick={() => openThread(thread.id)}>
         <StatusMark status={thread.status} />
         {thread.title}
-      </span>
+      </button>
+      {attention.reason && <span className={inTurn ? "fleet-card-reason mine" : "fleet-card-reason"}>{attention.reason}</span>}
       <span className="fleet-card-meta">
         <Icon name="folder" size={12} />
         {projectName(thread.projectId)}
@@ -99,28 +108,50 @@ function FleetCard({ thread }: { thread: MockThread }) {
         <span className="bar-spacer" />
         {thread.updated}
       </span>
-    </button>
+      {inTurn && (
+        <span className="offer-buttons">
+          {thread.status === "approval" ? (
+            <>
+              <button type="button" className="button primary" onClick={() => answerApproval(thread.id, true)}>
+                허용
+              </button>
+              <button type="button" className="button" onClick={() => answerApproval(thread.id, false)}>
+                거부
+              </button>
+            </>
+          ) : (
+            <button type="button" className="button primary" onClick={() => (delivery?.next?.id === "checks" ? runDelivery(thread.id, "checks") : handOffToThread(thread.id, "실패한 턴의 원인을 찾아줘."))}>
+              실패 기록 넘기기
+            </button>
+          )}
+          <button type="button" className="ghost" onClick={() => setPeek(!peek)} aria-expanded={peek}>
+            엿보기
+          </button>
+        </span>
+      )}
+      {peek && <p className="fleet-card-peek">{approval ? `${approval.cwd}\n${approval.reason}` : lastAnswer?.type === "agent" ? lastAnswer.text : "아직 답이 없습니다"}</p>}
+    </div>
   );
 }
 
 export function Fleet() {
-  const threads = useBlueprint((state) => state.threads);
+  const rows = useAttentionList();
   return (
     <div className="fleet">
       <header className="fleet-header">
         <h1>현황판</h1>
-        <span className="muted">모든 프로젝트의 스레드를 상태별로 봅니다.</span>
+        <span className="muted">모든 프로젝트의 스레드를 주의 묶음으로 봅니다. 내 차례는 여기에서 바로 답합니다.</span>
       </header>
       <div className="fleet-columns">
-        {FLEET_COLUMNS.map((column) => {
-          const items = threads.filter((thread) => column.statuses.includes(thread.status) && !thread.done && thread.snoozedUntil === null);
+        {ATTENTION_GROUPS.map((column) => {
+          const items = rows.filter(({ attention }) => attention.group === column.id);
           return (
-            <section key={column.title} className="fleet-column">
+            <section key={column.id} className="fleet-column">
               <h3 title={column.hint}>
                 {column.title} <span className="muted">{items.length}</span>
               </h3>
-              {items.map((thread) => (
-                <FleetCard key={thread.id} thread={thread} />
+              {items.map(({ thread, attention }) => (
+                <FleetCard key={thread.id} thread={thread} attention={attention} />
               ))}
               {items.length === 0 && <p className="muted fleet-empty">없음</p>}
             </section>
@@ -143,6 +174,8 @@ function paletteEntries(threads: readonly MockThread[]): PaletteEntry[] {
   const commands: PaletteEntry[] = [
     { id: "new", icon: "pencil", label: "새 스레드", hint: "⌘N", run: () => showView("home") },
     { id: "fleet", icon: "grid", label: "현황판 열기", hint: "", run: () => showView("fleet") },
+    { id: "next", icon: "alert", label: "다음 내 차례로 이동", hint: "⌘⇧A", run: goNextInTurn },
+    { id: "group", icon: "stack", label: "사이드바 묶기 바꾸기 (프로젝트 / 상태)", hint: "", run: () => useBlueprint.setState((state) => ({ sidebarGroup: state.sidebarGroup === "project" ? "attention" : "project" })) },
     { id: "review", icon: "diff", label: "변경 검토 패널", hint: "⌘\\", run: () => togglePanel("review") },
     { id: "kernel", icon: "bolt", label: "Akra 커널 패널", hint: "", run: () => togglePanel("kernel") },
     { id: "browser", icon: "globe", label: "브라우저 패널", hint: "", run: () => togglePanel("browser") },
@@ -224,6 +257,7 @@ const SHORTCUTS = [
   ["⌘B", "사이드바 열기 / 닫기"],
   ["⌘\\", "오른쪽 패널 열기 / 닫기"],
   ["⌘J", "터미널 열기 / 닫기"],
+  ["⌘⇧A", "다음 내 차례로 이동"],
   ["⏎", "보내기 (진행 중이면 대기 목록)"],
   ["⇧⏎", "줄바꿈"],
   ["⌘⏎", "승인 요청 허용"],
@@ -301,7 +335,15 @@ export function useShortcuts(): void {
         useBlueprint.setState({ paletteOpen: false, shortcutsOpen: false });
         return;
       }
-      if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return;
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+      if (event.shiftKey) {
+        // 글쇠 자리로 찾는다. 한글 입력 상태에서도 동작한다.
+        if (event.code === "KeyA") {
+          event.preventDefault();
+          goNextInTurn();
+        }
+        return;
+      }
       const actions: Record<string, () => void> = {
         k: () => useBlueprint.setState((state) => ({ paletteOpen: !state.paletteOpen })),
         n: () => showView("home"),

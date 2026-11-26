@@ -2,8 +2,12 @@
 // 턴 재생은 타이머로 만든 가짜 진행이다. 실제 앱에서는 `DesktopSession` 과 `desktopStore` 가 이 자리를 맡는다.
 import { create } from "zustand";
 
+import { parseGitDiff } from "../conversation/diff";
+import { attentionOf, deliveryOf, isListed, nextInTurn, type Attention, type Delivery, type DeliveryStepId } from "./flow";
 import {
+  BASE_BRANCHES,
   EFFORTS,
+  MOCK_DIFF,
   initialTurns,
   MODELS,
   PERMISSIONS,
@@ -21,6 +25,10 @@ import {
 export type View = "home" | "thread" | "fleet";
 export type PanelId = "review" | "kernel" | "browser" | "work" | "docs";
 export type Theme = "light" | "dark";
+export type SidebarGroup = "project" | "attention";
+
+/** mock 은 모든 스레드에 같은 diff 를 보인다. */
+export const REVIEW_FILES = parseGitDiff(MOCK_DIFF);
 
 export interface ReviewNote {
   path: string;
@@ -45,6 +53,16 @@ export interface BlueprintState {
   openThreadId: string | null;
   homeProjectId: string;
   homeWorktree: boolean;
+  /** worktree 를 만드는 기준 브랜치이다. */
+  homeBase: string;
+  /** 사이드바를 프로젝트별로 묶는지, 주의 묶음(내 차례, 읽을 것, 작업 중, 나머지)으로 묶는지이다. */
+  sidebarGroup: SidebarGroup;
+  /** 스레드별로 "봄" 표시를 한 변경 파일의 경로이다. 그 스레드의 변경이 바뀌면 비운다. */
+  viewed: Record<string, string[]>;
+  /** 읽지 않은 스레드를 열었을 때 "새 내용" 구분선을 그릴 턴이다. */
+  newFrom: Record<string, string>;
+  /** 변경 패널이 처음 보일 파일이다. 대화의 변경 카드에서 파일을 누르면 정한다. */
+  reviewPath: string | null;
   sidebarOpen: boolean;
   panel: PanelId | null;
   terminalOpen: boolean;
@@ -54,8 +72,8 @@ export interface BlueprintState {
   effort: string;
   permission: string;
   reviewNotes: ReviewNote[];
-  /** 업무 패널이나 제안이 넘긴 글이다. 입력창이 받아서 채운다. 바로 보내지 않는다. */
-  handOff: string | null;
+  /** 넘긴 글이다. `threadId` 의 입력창이 받아서 채운다 (null 은 새 스레드 화면). 바로 보내지 않는다. */
+  handOff: { threadId: string | null; text: string } | null;
   toasts: Toast[];
 }
 
@@ -76,6 +94,11 @@ export const useBlueprint = create<BlueprintState>(() => ({
   openThreadId: "t1",
   homeProjectId: "akra",
   homeWorktree: true,
+  homeBase: BASE_BRANCHES[0],
+  sidebarGroup: "project",
+  viewed: {},
+  newFrom: {},
+  reviewPath: null,
   sidebarOpen: true,
   panel: null,
   terminalOpen: false,
@@ -113,13 +136,19 @@ function setThreadStatus(threadId: string, status: ThreadStatus): void {
 }
 
 export function openThread(threadId: string): void {
-  set((state) => ({
-    view: "thread",
-    openThreadId: threadId,
-    paletteOpen: false,
-    // 스레드를 보면 읽지 않음 상태가 없어진다.
-    threads: state.threads.map((thread) => (thread.id === threadId && thread.status === "unread" ? { ...thread, status: "idle" } : thread)),
-  }));
+  set((state) => {
+    const unread = state.threads.find((thread) => thread.id === threadId)?.status === "unread";
+    const lastTurnId = state.turns[threadId]?.at(-1)?.id;
+    const { [threadId]: _seen, ...newFrom } = state.newFrom;
+    return {
+      view: "thread",
+      openThreadId: threadId,
+      paletteOpen: false,
+      // 스레드를 보면 읽지 않음 상태가 없어진다. 떠나 있던 동안 끝난 턴 앞에 "새 내용" 구분선을 둔다.
+      threads: state.threads.map((thread) => (thread.id === threadId && unread ? { ...thread, status: "idle" } : thread)),
+      newFrom: unread && lastTurnId ? { ...newFrom, [threadId]: lastTurnId } : newFrom,
+    };
+  });
 }
 
 export function showView(view: View): void {
@@ -140,11 +169,89 @@ export function togglePinned(threadId: string): void {
 
 /** 글을 새 스레드 화면의 입력창에 채운다. */
 export function handOffToNewThread(text: string): void {
-  set({ view: "home", handOff: text, paletteOpen: false });
+  set({ view: "home", handOff: { threadId: null, text }, paletteOpen: false });
+}
+
+/** 스레드를 열고 글을 그 입력창에 채운다. 사용자가 보내기를 눌러야 턴이 시작된다 (D-13). */
+export function handOffToThread(threadId: string, text: string): void {
+  openThread(threadId);
+  set({ handOff: { threadId, text } });
+}
+
+/** 다음 "내 차례" 스레드를 연다. */
+export function goNextInTurn(): void {
+  const threadId = nextInTurn(get().threads, get().view === "thread" ? get().openThreadId : null);
+  if (threadId) {
+    openThread(threadId);
+  } else {
+    toast("내 차례인 스레드가 없습니다");
+  }
+}
+
+export function toggleViewed(threadId: string, path: string): void {
+  set((state) => {
+    const current = state.viewed[threadId] ?? [];
+    return { viewed: { ...state.viewed, [threadId]: current.includes(path) ? current.filter((item) => item !== path) : [...current, path] } };
+  });
+}
+
+/** 스레드의 전달 단계이다. */
+export function useDelivery(thread: MockThread | undefined): Delivery | null {
+  const viewed = useBlueprint((state) => (thread ? state.viewed[thread.id] : undefined));
+  return thread ? deliveryOf(thread, viewed?.length ?? 0, REVIEW_FILES.length) : null;
+}
+
+/** 목록에 있는 모든 스레드의 주의 묶음과 이유이다. */
+export function useAttentionList(): { thread: MockThread; attention: Attention }[] {
+  const threads = useBlueprint((state) => state.threads);
+  const approvals = useBlueprint((state) => state.approvals);
+  const viewed = useBlueprint((state) => state.viewed);
+  return threads.filter(isListed).map((thread) => ({
+    thread,
+    attention: attentionOf(thread, approvals[thread.id], deliveryOf(thread, viewed[thread.id]?.length ?? 0, REVIEW_FILES.length)),
+  }));
 }
 
 function updateThread(threadId: string, update: Partial<MockThread>): void {
   set((state) => ({ threads: state.threads.map((thread) => (thread.id === threadId ? { ...thread, ...update } : thread)) }));
+}
+
+/** 전달 띠의 다음 행동이다 (mock). 실제 앱에서 push 와 PR 만들기는 main 의 확인 창을 거친다. */
+export function runDelivery(threadId: string, step: DeliveryStepId): void {
+  const thread = get().threads.find((item) => item.id === threadId);
+  if (!thread) return;
+  const pullRequest = thread.pullRequest;
+  switch (step) {
+    case "review":
+      set({ panel: "review" });
+      return;
+    case "verify":
+      handOffToThread(threadId, `남은 완료 기준을 확인해줘: ${thread.criteria?.missing ?? ""}`);
+      return;
+    case "commit":
+      updateThread(threadId, { committed: true });
+      toast("커밋했습니다 (mock)");
+      return;
+    case "push":
+      updateThread(threadId, { pushed: true });
+      toast("push 했습니다 (mock)");
+      return;
+    case "pr": {
+      idCounter += 1;
+      const created = { number: 2300 + idCounter, checks: "pending" as const, merged: false };
+      updateThread(threadId, { pullRequest: created });
+      toast(`PR #${created.number} 을 만들었습니다 (mock)`);
+      window.setTimeout(() => updateThread(threadId, { pullRequest: { ...created, checks: "pass" } }), 2500);
+      return;
+    }
+    case "checks":
+      if (pullRequest) handOffToThread(threadId, `PR #${pullRequest.number} 의 실패한 CI 검사를 고쳐줘.\n\n(실패한 검사의 기록 1개 첨부)`);
+      return;
+    case "merge":
+      if (pullRequest) updateThread(threadId, { pullRequest: { ...pullRequest, merged: true } });
+      toast("GitHub 에서 머지한 것으로 표시합니다 (mock)");
+      return;
+  }
 }
 
 /** 끝난 스레드를 목록에서 뺀다. 진행 중인 스레드는 정리하지 않는다. */
@@ -271,6 +378,7 @@ async function playPushAndReport(ref: TurnRef, run: Run, approval: MockApproval)
     pushItem(ref, { type: "activity", id: activityId, steps: [step] });
     await pause(run, 1400);
     finishStep(ref, activityId, { ...step, status: "ok", duration: "1.4초", output: "remote: Create a pull request by visiting the repository page.\n * [new branch]  HEAD -> branch" });
+    updateThread(ref.threadId, { committed: true, pushed: true });
     await pause(run, 400);
     await streamAgentText(ref, run, "변경을 push 했습니다.\n\n- 검사는 통과했습니다.\n- PR 은 아직 만들지 않았습니다. `변경` 패널의 **PR 만들기** 로 만들 수 있습니다.");
   } else {
@@ -288,6 +396,15 @@ function planAt(activeIndex: number): PlanStep[] {
 
 function setPlan(ref: TurnRef, planId: string, activeIndex: number): void {
   updateItem(ref, planId, (item) => (item.type === "plan" ? { ...item, steps: planAt(activeIndex) } : item));
+}
+
+/** worktree 준비이다. 스레드는 바로 열리고, 준비는 대화 안의 한 줄로 보인다. */
+async function playWorktreeSetup(ref: TurnRef, run: Run, branch: string, base: string): Promise<void> {
+  const activityId = nextId("a");
+  const step: MockStep = { id: nextId("s"), kind: "command", label: `worktree 준비: ${branch}`, status: "running", duration: null, output: null };
+  pushItem(ref, { type: "activity", id: activityId, steps: [step] });
+  await pause(run, 1200);
+  finishStep(ref, activityId, { ...step, status: "ok", duration: "1.2초", output: `${base} 에서 ${branch} 를 만들었습니다\n설정 스크립트: npm ci` });
 }
 
 /** 새 메시지에 대한 mock 진행이다: 생각, 읽기, 수정, 검사, 승인 요청, 보고. */
@@ -311,6 +428,11 @@ async function playReply(ref: TurnRef, run: Run): Promise<void> {
   await pause(run, 1800);
   finishStep(ref, activityId, { ...check, status: "ok", duration: "1.8초", output: "> tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json" });
   pushItem(ref, { type: "changes", id: nextId("c"), files: [{ path: "src/renderer/sidebar/Sidebar.tsx", added: 12, removed: 3 }] });
+  // 변경이 바뀌면 "봄" 표시를 지우고, 커밋과 push 단계가 다시 남는다.
+  set((state) => ({
+    viewed: { ...state.viewed, [ref.threadId]: [] },
+    threads: state.threads.map((thread) => (thread.id === ref.threadId ? { ...thread, added: thread.added + 12, removed: thread.removed + 3, committed: false, pushed: false } : thread)),
+  }));
   await pause(run, 500);
   await playPushAndReport(ref, run, {
     command: "git push origin HEAD",
@@ -337,6 +459,9 @@ function finishRun(ref: TurnRef, status: MockTurn["status"]): void {
   });
   const watching = get().view === "thread" && get().openThreadId === ref.threadId;
   setThreadStatus(ref.threadId, watching ? "idle" : "unread");
+  // mock: 끝난 턴이 남은 완료 기준을 확인했다고 본다.
+  const criteria = get().threads.find((thread) => thread.id === ref.threadId)?.criteria;
+  if (criteria && status === "done") updateThread(ref.threadId, { criteria: { ...criteria, passed: criteria.total } });
   const [next, ...rest] = get().queued[ref.threadId] ?? [];
   if (next !== undefined && status === "done") {
     set((state) => ({ queued: { ...state.queued, [ref.threadId]: rest } }));
@@ -356,7 +481,7 @@ function startRun(ref: TurnRef, play: (run: Run) => Promise<void>): void {
   );
 }
 
-function startTurn(threadId: string, text: string): void {
+function startTurn(threadId: string, text: string, setup?: { branch: string; base: string }): void {
   const ref: TurnRef = { threadId, turnId: nextId("turn") };
   const turn: MockTurn = { id: ref.turnId, user: text, attachments: [], items: [], status: "running", summary: null };
   set((state) => ({
@@ -364,7 +489,10 @@ function startTurn(threadId: string, text: string): void {
     runStartedAt: { ...state.runStartedAt, [threadId]: Date.now() },
   }));
   setThreadStatus(threadId, "running");
-  startRun(ref, (run) => playReply(ref, run));
+  startRun(ref, async (run) => {
+    if (setup) await playWorktreeSetup(ref, run, setup.branch, setup.base);
+    await playReply(ref, run);
+  });
 }
 
 export function isRunning(threadId: string): boolean {
@@ -384,7 +512,7 @@ export function sendMessage(threadId: string, text: string): void {
 
 /** 홈 화면에서 보낸 첫 메시지로 새 스레드를 만든다. */
 export function startThread(text: string): void {
-  const { homeProjectId, homeWorktree } = get();
+  const { homeProjectId, homeWorktree, homeBase } = get();
   const id = nextId("new");
   const thread: MockThread = {
     id,
@@ -397,13 +525,16 @@ export function startThread(text: string): void {
     added: 0,
     removed: 0,
     pullRequest: null,
+    committed: true,
+    pushed: true,
+    criteria: null,
     pinned: false,
     done: false,
     snoozedUntil: null,
   };
   set((state) => ({ threads: [thread, ...state.threads], turns: { ...state.turns, [id]: [] } }));
   openThread(id);
-  startTurn(id, text);
+  startTurn(id, text, homeWorktree ? { branch: thread.branch, base: homeBase } : undefined);
 }
 
 export function interrupt(threadId: string): void {

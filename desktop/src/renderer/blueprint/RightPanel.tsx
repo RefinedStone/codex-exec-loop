@@ -1,10 +1,10 @@
 // 오른쪽 패널이다. 탭으로 변경 검토, Akra 커널, 브라우저, 업무, 문서를 바꾼다. 왼쪽 경계를 끌어 너비를 바꾼다.
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
-import { parseGitDiff, type DiffFile } from "../conversation/diff";
+import type { DiffFile } from "../conversation/diff";
 import { Icon, type IconName } from "../design/icons";
-import { DOCUMENTS, KERNEL, MOCK_DIFF, WORK_ITEMS } from "./mockData";
-import { addReviewNote, handOffToNewThread, notConnected, openThread, toast, useBlueprint, type PanelId } from "./store";
+import { DOCUMENTS, KERNEL, WORK_ITEMS, type MockThread } from "./mockData";
+import { addReviewNote, handOffToNewThread, notConnected, openThread, REVIEW_FILES, runDelivery, toast, toggleViewed, useBlueprint, useDelivery, type PanelId } from "./store";
 
 export const PANELS: { id: PanelId; label: string; icon: IconName }[] = [
   { id: "review", label: "변경", icon: "diff" },
@@ -68,39 +68,96 @@ function ReviewDiff({ file }: { file: DiffFile }) {
   );
 }
 
-function ReviewPanel() {
-  const files = useMemo(() => parseGitDiff(MOCK_DIFF), []);
-  const [selected, setSelected] = useState(0);
-  const noteCount = useBlueprint((state) => state.reviewNotes.length);
-  const file = files[selected];
+/**
+ * 전달 띠이다: 변경에서 머지까지의 단계와 다음 행동 1 개. 단계는 안내이고 뒤 단계를 막지 않는다.
+ * `onReview` 는 검토 단계의 행동이다 (아직 보지 않은 파일을 연다).
+ */
+function DeliveryStrip({ thread, onReview }: { thread: MockThread; onReview(): void }) {
+  const delivery = useDelivery(thread);
+  if (!delivery) return null;
+  const next = delivery.next;
   return (
-    <div className="review">
-      <div className="review-toolbar">
-        <span className="bar-spacer" />
-        <button type="button" className="button" onClick={() => notConnected("스테이지")}>
-          모두 스테이지
-        </button>
-        <button type="button" className="button" onClick={() => notConnected("커밋")}>
-          커밋
-        </button>
-        <button type="button" className="button primary" onClick={() => notConnected("PR 만들기")}>
-          <Icon name="pullRequest" size={13} />
-          PR 만들기
-        </button>
-      </div>
-      <ul className="review-files">
-        {files.map((item, index) => (
-          <li key={item.path}>
-            <button type="button" className={index === selected ? "selected" : undefined} onClick={() => setSelected(index)}>
-              <Icon name="file" size={13} />
-              <span className="review-file-name">{item.path.split("/").at(-1)}</span>
-              <span className="review-file-dir">{item.path.split("/").slice(0, -1).join("/")}</span>
-              <span className="counts">
-                <span className="count-add">+{item.added}</span> <span className="count-del">−{item.removed}</span>
-              </span>
-            </button>
+    <div className="delivery">
+      <ol className="delivery-steps" aria-label="전달 단계">
+        {delivery.steps.map((step) => (
+          <li key={step.id} className={`delivery-${step.state}`}>
+            {step.state === "done" && <Icon name="check" size={11} />}
+            {step.label}
           </li>
         ))}
+      </ol>
+      <div className="delivery-next">
+        {next ? (
+          <>
+            <span>
+              <strong>다음: {next.label}</strong> <span className="muted">{delivery.hint}</span>
+            </span>
+            {next.id === "review" ? (
+              <button type="button" className="button primary" onClick={onReview}>
+                안 본 파일 열기
+              </button>
+            ) : (
+              delivery.action && (
+                <button type="button" className="button primary" onClick={() => runDelivery(thread.id, next.id)}>
+                  {delivery.action}
+                </button>
+              )
+            )}
+          </>
+        ) : (
+          <span className="muted">머지까지 끝났습니다.</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ReviewPanel() {
+  const files = REVIEW_FILES;
+  const [selected, setSelected] = useState(0);
+  const noteCount = useBlueprint((state) => state.reviewNotes.length);
+  const thread = useBlueprint((state) => state.threads.find((item) => item.id === state.openThreadId));
+  const viewed = useBlueprint((state) => (thread ? state.viewed[thread.id] : undefined)) ?? [];
+  const reviewPath = useBlueprint((state) => state.reviewPath);
+  const file = files[selected];
+
+  // 대화의 변경 카드에서 파일을 누르면 그 파일을 보인다.
+  useEffect(() => {
+    if (reviewPath === null) return;
+    const index = files.findIndex((item) => item.path === reviewPath);
+    if (index >= 0) setSelected(index);
+    useBlueprint.setState({ reviewPath: null });
+  }, [files, reviewPath]);
+
+  const openUnviewed = () => {
+    const index = files.findIndex((item) => !viewed.includes(item.path));
+    if (index >= 0) setSelected(index);
+  };
+
+  return (
+    <div className="review">
+      {thread && <DeliveryStrip thread={thread} onReview={openUnviewed} />}
+      <ul className="review-files">
+        {files.map((item, index) => {
+          const seen = viewed.includes(item.path);
+          return (
+            <li key={item.path} className={seen ? "viewed" : undefined}>
+              <button type="button" className={index === selected ? "selected" : undefined} onClick={() => setSelected(index)}>
+                <Icon name="file" size={13} />
+                <span className="review-file-name">{item.path.split("/").at(-1)}</span>
+                <span className="review-file-dir">{item.path.split("/").slice(0, -1).join("/")}</span>
+                <span className="counts">
+                  <span className="count-add">+{item.added}</span> <span className="count-del">−{item.removed}</span>
+                </span>
+              </button>
+              {thread && (
+                <button type="button" className="viewed-toggle" aria-pressed={seen} title={seen ? "봄 표시 지우기" : "본 파일로 표시"} onClick={() => toggleViewed(thread.id, item.path)}>
+                  <Icon name={seen ? "check" : "eye"} size={13} />
+                </button>
+              )}
+            </li>
+          );
+        })}
       </ul>
       {file && <ReviewDiff key={file.path} file={file} />}
       {noteCount > 0 && <div className="review-footer">메모 {noteCount}개는 다음 메시지와 함께 에이전트에게 갑니다.</div>}
