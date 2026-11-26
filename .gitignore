@@ -26,3 +26,5 @@ npm/.staging/
 .akra/runtime/
 .akra/planning/.akra-file-sync-result-output.json
 .reference
+__pycache__/
+*.pyc
