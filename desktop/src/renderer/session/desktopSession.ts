@@ -57,6 +57,9 @@ const FORK_BOUNDARY_PAGE_SIZE = 2;
 const BROWSER_MCP_SERVER = "akra_browser";
 const FORK_NO_FINISHED_TURN = "끝난 턴이 없는 대화는 분기할 수 없습니다.";
 const FORK_UNKNOWN = "분기 결과를 확인하지 못했습니다. 사이드바에서 '분기' 표시가 있는 대화를 먼저 확인하세요. 다시 분기하면 대화가 하나 더 생길 수 있습니다.";
+/** `thread/fork` 응답을 기다리는 시간이다 (taskAuthoring 의 저장 대기와 같은 값). 지나면 결과를 모른다. */
+export const FORK_RESPONSE_TIMEOUT_MS = 20_000;
+const FORK_TIMED_OUT = Symbol("fork timed out");
 /** shortcut: 최대 50 페이지(5,000 스레드)까지만 읽는다. 더 많으면 사이드바를 필요할 때 더 읽는 방식으로 바꾼다. */
 const THREAD_LIST_MAX_PAGES = 50;
 
@@ -100,8 +103,9 @@ function workspaceThread(thread: Thread, title: string): WorkspaceThread {
 }
 
 /**
- * 대화 분기의 결과이다 (#2625). `refused` 는 서버에 대화를 만들지 않았다. `unknown` 은 접속이 끊겨서 서버가 만들었는지
- * 모른다: 자동으로 다시 보내지 않는다. `created` 는 사용자가 다른 화면으로 가서 목록에만 넣었다.
+ * 대화 분기의 결과이다 (#2625). `refused` 는 서버에 대화를 만들지 않았다. `unknown` 은 접속이 끊기거나 응답이
+ * `FORK_RESPONSE_TIMEOUT_MS` 안에 오지 않아서 서버가 만들었는지 모른다: 자동으로 다시 보내지 않는다. 늦게 온 성공은
+ * 목록에만 넣는다. `created` 는 사용자가 다른 화면으로 가서 목록에만 넣었다.
  */
 export type ForkThreadOutcome =
   | { kind: "opened"; threadId: string }
@@ -121,6 +125,12 @@ export function forkBlockReason(thread: Pick<Thread, "id" | "ephemeral" | "paren
   const browser = transcript?.threadId === thread.id
     && transcript.turns.some((turn) => turn.items.some((item) => item.type === "mcpToolCall" && item.server === BROWSER_MCP_SERVER));
   return browser ? "브라우저 대화는 아직 분기하지 않습니다. 브라우저 연결은 대화마다 따로 등록해야 합니다." : null;
+}
+
+/** `thread/fork` 응답의 새 대화이다. id 가 없거나 원본과 같으면 null 이다. */
+function forkedThreadOf(response: ThreadForkResponse | undefined, sourceThreadId: string): Thread | null {
+  const forked = response?.thread;
+  return typeof forked?.id === "string" && forked.id.length > 0 && forked.id !== sourceThreadId ? forked : null;
 }
 
 export function groupThreadsByCwd(threads: readonly Thread[]): WorkspaceFolder[] {
@@ -553,23 +563,34 @@ export class DesktopSession {
     }
     // 여기부터 서버가 대화를 만들 수 있다. 결과를 모르면 다시 보내지 않는다.
     this.unknownForkSources.delete(sourceThreadId);
-    let forked: Thread;
+    const params: ThreadForkParams = { threadId: sourceThreadId, lastTurnId, excludeTurns: true, ephemeral: false };
+    const request = this.client.request<ThreadForkResponse>("thread/fork", params);
+    let response: ThreadForkResponse | typeof FORK_TIMED_OUT;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const params: ThreadForkParams = { threadId: sourceThreadId, lastTurnId, excludeTurns: true, ephemeral: false };
-      forked = (await this.client.request<ThreadForkResponse>("thread/fork", params))?.thread;
-      if (typeof forked?.id !== "string" || forked.id.length === 0 || forked.id === sourceThreadId) {
-        throw new Error("thread/fork 응답에 새 대화 id 가 없습니다.");
-      }
+      response = await Promise.race([request, new Promise<typeof FORK_TIMED_OUT>((resolve) => { timer = setTimeout(() => resolve(FORK_TIMED_OUT), FORK_RESPONSE_TIMEOUT_MS); })]);
     } catch (error) {
       if (error instanceof JsonRpcError) {
         return { kind: "refused", reason: error.code === -32601 ? "이 Codex app-server 는 대화 분기(thread/fork)를 지원하지 않습니다." : `분기하지 못했습니다: ${error.message}` };
       }
-      this.unknownForkSources.add(sourceThreadId);
-      return { kind: "unknown", reason: FORK_UNKNOWN };
+      return this.forkOutcomeLost(sourceThreadId);
+    } finally {
+      clearTimeout(timer);
     }
-    // `thread/started` 알림이 먼저 왔어도 목록에는 한 번만 들어간다.
-    this.addedThreads.set(forked.id, forked);
-    this.store.mergeFolders(groupThreadsByCwd([forked]));
+    if (response === FORK_TIMED_OUT) {
+      // 늦게 온 성공은 목록에만 넣는다. 그동안 사용자가 본 화면을 덮지 않는다.
+      void request.then((late) => {
+        const forked = forkedThreadOf(late, sourceThreadId);
+        if (forked) {
+          this.listFork(forked);
+          this.releaseUnopenedFork(forked.id);
+        }
+      }, () => undefined);
+      return this.forkOutcomeLost(sourceThreadId);
+    }
+    const forked = forkedThreadOf(response, sourceThreadId);
+    if (!forked) return this.forkOutcomeLost(sourceThreadId);
+    this.listFork(forked);
     if (this.store.getOpenThreadId() === sourceThreadId && claimSelection(forked.id)) {
       this.leaveOpenThread(forked.id);
       this.batcher.clear();
@@ -578,10 +599,27 @@ export class DesktopSession {
       await this.resumeOpenThread({ thread: forked, writerElsewhere: false });
       return { kind: "opened", threadId: forked.id };
     }
-    if (this.store.getOpenThreadId() !== forked.id) {
-      void this.client.request("thread/unsubscribe", { threadId: forked.id }).catch(() => undefined);
-    }
+    this.releaseUnopenedFork(forked.id);
     return { kind: "created", threadId: forked.id };
+  }
+
+  /** 서버가 대화를 만들었는지 모른다. 이 원본을 다시 분기하기 전에 사용자에게 묻는다. */
+  private forkOutcomeLost(sourceThreadId: string): ForkThreadOutcome {
+    this.unknownForkSources.add(sourceThreadId);
+    return { kind: "unknown", reason: FORK_UNKNOWN };
+  }
+
+  /** `thread/started` 알림이 먼저 왔어도 목록에는 한 번만 들어간다. */
+  private listFork(forked: Thread): void {
+    this.addedThreads.set(forked.id, forked);
+    this.store.mergeFolders(groupThreadsByCwd([forked]));
+  }
+
+  /** 사용자가 열지 않은 포크는 fork 가 건 구독을 끝낸다. */
+  private releaseUnopenedFork(forkThreadId: string): void {
+    if (this.store.getOpenThreadId() !== forkThreadId) {
+      void this.client.request("thread/unsubscribe", { threadId: forkThreadId }).catch(() => undefined);
+    }
   }
 
   /** 승인 요청에 답한다. 다른 창이 먼저 답했으면 이미 닫혀 있으므로 아무것도 하지 않는다. */
