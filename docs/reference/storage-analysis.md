@@ -206,5 +206,5 @@ preview와 create는 같은 연결에 묶이므로 별도의 단발 CLI 프로�
 - reparse·offline·recall 대상은 따라가거나 내려받지 않으며 미확인으로 표시합니다. 실제 개인 클라우드 자료를 다운로드해 검증하지 않았습니다.
 - live 보기는 발견 디렉터리 탐색이며 실행 중인 바이트 트리의 확정본이 아닙니다.
 - 완료 색인 조회는 새 스캔과 동시에 제한될 수 있습니다.
-- Git 보호 정보는 관측 사실과 미확인을 함께 보여줍니다. 본문 기반 수정 판정·ignore 적용 미추적 전체 상태와 삭제 가능 판정은 제공하지 않습니다.
-- SSD/HDD별 최적 동시 수, cold-cache 성능, 실제 native 스캔 부하 중 Desktop 입력 지연은 별도 측정이 필요합니다. [검증 기록의 미측정 항목](../validation/storage-analysis-backend.md#5-v3-성능-측정-범위)을 확인하세요.
+- Git 보호 정보는 관측 사실과 미확인을 함께 보여줍니다. cached stat 차이와 검증한 저장소 ignore 규칙의 미추적 관측은 제공하지만, 본문 동일성·사용자 전역 exclude를 포함한 완전한 Git 상태·삭제 가능 여부는 확정하지 않습니다.
+- SSD/HDD의 합성 데이터와 실제 native 스캔 부하 중 Electron 입력은 [추가 성능 기록](../validation/storage-analysis-performance.md)에 있습니다. 기본 동시 수 1/최대 4와 기존 표시 임계값을 유지합니다. 이 측정은 모든 장치의 자동 최적값, cold cache·전체 볼륨·실제 제품 Gateway 동시 부하·visible paint를 증명하지 않습니다. [첫 버전 인수와 남은 범위](../validation/storage-analysis-acceptance.md)를 확인하세요.
