@@ -49,6 +49,8 @@ import { VaultRestoreWindows } from "./vaultRestoreWindow";
 import { createVaultRestoreSource } from "./vaultRestoreSource";
 import { DEFAULT_WINDOW_STATE, loadWindowState, saveWindowState, visibleBounds } from "./windowState";
 import { prepareUserData } from "./userDataMigration";
+import { DiagnosticsService } from "./diagnosticsService";
+import { readDiagnosticLogs } from "./diagnosticLogs";
 
 // 시험용이다. 브라우저 프로필의 쿠키와 설정이 사용자의 실제 앱 데이터 폴더에 쓰이지 않게 한다. ready 전에 정해야 한다.
 // 제품명(Akra ADE)으로 바뀐 userData 위치로 이전 폴더를 한 번 옮긴다 (#2588). 못 옮기면 이전 폴더를 계속 쓴다.
@@ -56,6 +58,18 @@ const userDataMigration = prepareUserData(app, process.env.AKRA_DESKTOP_USER_DAT
 if (userDataMigration.kind !== "none") console.warn("[akra] userData migration", userDataMigration);
 
 const connections = new Map<number, GatewayConnection>();
+const diagnostics = new Map<number, DiagnosticsService>();
+function diagnosticsFor(owner: number): DiagnosticsService {
+  let service = diagnostics.get(owner);
+  if (!service) {
+    service = new DiagnosticsService({
+      desktopVersion: app.getVersion(), electronVersion: process.versions.electron, nodeVersion: process.versions.node,
+      platform: process.platform, readLogs: () => readDiagnosticLogs(process.cwd(), process.env.AKRA_TRACE_FILE),
+    });
+    diagnostics.set(owner, service);
+  }
+  return service;
+}
 const providerOperations = new Map<number, Set<AbortController>>();
 function invalidateProviderOperations(owner: number): void {
   for (const operation of providerOperations.get(owner) ?? []) operation.abort();
@@ -265,6 +279,7 @@ function attachGatewayConnection(contents: WebContents, host?: string): void {
   } catch (error) {
     // 주소를 정하지 못해도 main 이 멈추지 않게 화면에 이유를 보여 준다.
     const detail = error instanceof Error ? error.message : String(error);
+    if (!host) diagnosticsFor(contents.id).observe({ phase: "disconnected", endpoint: "", detail });
     contents.send(stateChannel, ...prefix, { phase: "disconnected", endpoint: "", detail });
     return;
   }
@@ -277,6 +292,7 @@ function attachGatewayConnection(contents: WebContents, host?: string): void {
     },
     onState: (state) => {
       if (!host) {
+        diagnosticsFor(contents.id).observe(state);
         issueConfirmations.get(contents.id)?.invalidate();
         invalidateProviderOperations(contents.id);
       }
@@ -466,25 +482,32 @@ function createWindow(dotQuery?: { dotWindow: string; dot: string }): BrowserWin
   // 접속은 renderer 가 수신 함수를 등록하고 `ready` 를 보낸 뒤에 연다 (아래 ipcMain 처리).
   const contentsId = contents.id;
   window.on("close", () => {
+    diagnostics.get(contentsId)?.invalidate();
     issueConfirmations.get(contentsId)?.invalidate();
     vaultRestores.lockOpenedBy(contentsId, "window_closed");
     invalidateProviderOperations(contentsId);
   });
   contents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
     if (isMainFrame && !isInPlace) {
+      diagnostics.get(contentsId)?.invalidate();
       issueConfirmations.get(contentsId)?.invalidate();
       vaultRestores.lockOpenedBy(contentsId, "renderer_changed");
   invalidateProviderOperations(contentsId);
     }
   });
   contents.once("destroyed", () => {
+    diagnostics.get(contentsId)?.invalidate();
+    diagnostics.delete(contentsId);
     connections.get(contentsId)?.close();
     connections.delete(contentsId);
     closeRemoteConnections(contentsId);
     closeRendererResources(contentsId);
   });
   // A crashed renderer never sends ready again; close stale native resources.
-  contents.on("render-process-gone", () => closeRendererResources(contentsId));
+  contents.on("render-process-gone", () => {
+    diagnostics.get(contentsId)?.invalidate();
+    closeRendererResources(contentsId);
+  });
   if (!HIDDEN_WINDOWS) {
     window.once("ready-to-show", () => window.show());
   }
@@ -861,6 +884,34 @@ ipcMain.on(IPC_CHANNELS.vaultRestoreProjectChanged, (event) => {
   if (opener && mainWindows.has(opener) && event.senderFrame === event.sender.mainFrame) {
     vaultRestores.lockOpenedBy(event.sender.id, "project_switch");
   }
+});
+
+function diagnosticOwner(event: IpcMainInvokeEvent): BrowserWindow {
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  const frame = event.senderFrame;
+  if (!owner || !mainWindows.has(owner) || !frame || frame !== event.sender.mainFrame || !isAppUrl(frame.url, event.sender)) {
+    throw new Error("진단을 요청한 앱 창을 확인할 수 없습니다.");
+  }
+  return owner;
+}
+ipcMain.handle(IPC_CHANNELS.diagnosticsPreview, (event, versions: unknown) => {
+  diagnosticOwner(event);
+  return diagnosticsFor(event.sender.id).preview(versions);
+});
+ipcMain.handle(IPC_CHANNELS.diagnosticsDiscard, (event, id: unknown) => {
+  diagnosticOwner(event);
+  diagnosticsFor(event.sender.id).discard(id);
+});
+ipcMain.handle(IPC_CHANNELS.diagnosticsSave, (event, id: unknown) => {
+  const owner = diagnosticOwner(event);
+  return diagnosticsFor(event.sender.id).save(id, async () => {
+    const answer = await dialog.showSaveDialog(owner, {
+      title: "검토한 진단 묶음 저장", defaultPath: "akra-connection-diagnostic.json",
+      filters: [{ name: "JSON", extensions: ["json"] }],
+      properties: ["showOverwriteConfirmation"],
+    });
+    return answer.canceled ? null : answer.filePath ?? null;
+  });
 });
 
 ipcMain.handle(IPC_CHANNELS.chooseFolder, async (event) => {

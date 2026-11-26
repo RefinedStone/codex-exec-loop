@@ -6,6 +6,7 @@ import { Icon } from "../design/icons";
 import { remoteHostKey, remoteHostStore, useDesktopStore, type WorkspaceFolder, type WorkspaceThread } from "../session/desktopStore";
 import { closeChat, closeDot, isDotDockVisible, MOD_KEY, showChat, showDot, showHome, showView, toggleTheme, useUiStore } from "../session/uiStore";
 import { DotAvatar } from "../views/DotChat";
+import { DiagnosticsDialog } from "../views/DiagnosticsDialog";
 import { useZoomFactor, zoomStyle } from "../views/useZoom";
 import { allThreads, folderName, needsAttention, relativeAge, threadMark, type ThreadMark, type ThreadMarkSource } from "./threadStatus";
 
@@ -302,6 +303,7 @@ function RemoteSection({ host, onOpenThread }: { host: string; onOpenThread(host
 }
 
 export function Sidebar({ onOpenThread, onOpenRemoteThread, onReloadChats }: { onOpenThread(threadId: string): void; onOpenRemoteThread(host: string, threadId: string): void; onReloadChats(host: string): void }) {
+  const diagnosticOpen = useUiStore(state => state.overlay === "diagnostics");
   const folders = useDesktopStore((state) => state.folders);
   // 원격 구역은 사용자가 켰고 Gateway 에 원격 호스트가 있을 때만 보인다.
   const remoteAgents = useUiStore((state) => state.remoteAgents);
@@ -348,12 +350,12 @@ export function Sidebar({ onOpenThread, onOpenRemoteThread, onReloadChats }: { o
         ))}
       </div>
       <footer className="sidebar-footer">
-        <span className="connection" title="Gateway 연결 상태">
+        <button type="button" className="connection diagnostic-connection" title="Gateway 연결 상태 · 로컬 연결 진단 저장" aria-label="연결 진단 저장" data-testid="diagnostics-open" onClick={() => useUiStore.setState({ overlay: "diagnostics" })}>
           <span className={`connection-dot connection-${phase}`} />
           <span data-testid="connection-phase">{PHASE_LABEL[phase]}</span>
           {phase === "connected" && codexVersion && <span data-testid="codex-version"> · {codexVersion}</span>}
           {phase === "disconnected" && connection?.retryInMs !== undefined && <span> · {Math.round(connection.retryInMs / 1000)}초 뒤 다시 연결</span>}
-        </span>
+        </button>
         <button type="button" className="icon-button" title="단축키" onClick={() => useUiStore.setState({ overlay: "shortcuts" })}>
           <Icon name="keyboard" />
         </button>
@@ -364,6 +366,7 @@ export function Sidebar({ onOpenThread, onOpenRemoteThread, onReloadChats }: { o
           <Icon name={theme === "dark" ? "sun" : "moon"} />
         </button>
       </footer>
+      {diagnosticOpen && <DiagnosticsDialog />}
     </nav>
   );
 }

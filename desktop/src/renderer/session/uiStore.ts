@@ -8,7 +8,7 @@ import type { ZoomFactors } from "../../shared/zoom";
 
 export type View = "home" | "thread" | "fleet" | "remote";
 export type Theme = "light" | "dark";
-export type Overlay = "palette" | "shortcuts" | "settings";
+export type Overlay = "palette" | "shortcuts" | "settings" | "diagnostics";
 
 /** 단축키 표시에 쓰는 보조 키 이름이다. macOS 는 ⌘, 나머지는 Ctrl 이다. */
 export const MOD_KEY = navigator.userAgent.includes("Mac") ? "⌘" : "Ctrl+";
