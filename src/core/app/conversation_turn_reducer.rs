@@ -132,6 +132,11 @@ struct ThreadSession {
     op_id: Option<i64>,
     // 승인 검토 저장 실패를 이 thread 에 알릴 턴이다 (#2796). 턴이 끝나도 남는다. 다른 thread 의 턴은 바꾸지 않는다.
     approval_review_turn: Option<TurnSubmissionCorrelation>,
+    /*
+     * 이 thread 가 자동 후속 차선을 가진다 (plan 18 Q5-3). 동시 턴 수가 2 이상일 때만 쓴다. 턴을 받을 때 정하고, 일이
+     * 남은 동안만 뜻이 있다. 그래서 자동 후속이 끝나면(한도, 멈춤, 큐가 빔) 따로 놓지 않아도 차선이 풀린다.
+     */
+    holds_auto_follow_lane: bool,
 }
 
 impl ThreadSession {
@@ -147,6 +152,7 @@ impl ThreadSession {
             turn_options: Default::default(),
             op_id: None,
             approval_review_turn: None,
+            holds_auto_follow_lane: false,
         }
     }
 
@@ -609,6 +615,7 @@ impl ThreadSession {
         &mut self,
         next_generation: &mut u64,
         request: &mut PostTurnRequest,
+        continues_auto_follow: bool,
     ) -> Option<PostTurnEvaluationCorrelation> {
         self.prune_post_turn_evaluation_for_lifecycle();
         if self.active_post_turn_evaluation().is_some()
@@ -644,6 +651,11 @@ impl ThreadSession {
             .is_some_and(|reply| auto_follow.matches_stop_keyword(reply));
         request.context.no_file_changes_stop_matched =
             auto_follow.stop_on_no_file_changes && request.changed_planning_file_paths.is_empty();
+        if !continues_auto_follow {
+            // 자동 후속 차선은 다른 thread 가 가졌다 (plan 18 Q5-3). 평가는 planning 정산만 하고 이어 가지 않는다.
+            request.context.continuation_paused = true;
+            request.context.can_queue_next = false;
+        }
         let correlation = PostTurnEvaluationCorrelation::new(
             take_generation(next_generation, "post-turn evaluation"),
             request.context.thread_id.clone(),
@@ -1175,13 +1187,31 @@ impl ConversationTurnFeatureReducer {
                 planning_workspace_directory: pending.planning_workspace_directory.clone(),
             });
         }
-        let awaiting = sessions()
+        let mut awaiting = sessions()
             .filter_map(|session| {
                 let (correlation, execution) =
                     session.conversation_runtime.post_turn().awaiting_route()?;
                 Some((session, correlation, execution))
             })
             .collect::<Vec<_>>();
+        if self.turn_concurrency.allows_several() {
+            /*
+             * 차선이 없는 thread 의 평가는 이어 가지 않고 끝낸다 (plan 18 Q5-3). 평가기가 프롬프트를 답했어도 같다. 차선을
+             * 가진 thread 의 평가만 경로를 고른다. 그래서 planning 큐의 머리를 두 thread 가 함께 집지 않는다.
+             */
+            let (lane, plain): (Vec<_>, Vec<_>) = awaiting
+                .into_iter()
+                .partition(|(session, _, _)| session.holds_auto_follow_lane);
+            if !plain.is_empty() {
+                return Some(PostTurnHostStep::SettleWithoutContinuation {
+                    correlations: plain
+                        .iter()
+                        .map(|(_, correlation, _)| (*correlation).clone())
+                        .collect(),
+                });
+            }
+            awaiting = lane;
+        }
         match awaiting.as_slice() {
             [] => None,
             [(session, correlation, execution)] => Some(PostTurnHostStep::RouteContinuation(
@@ -1266,6 +1296,7 @@ impl ConversationTurnFeatureReducer {
         build_request: impl FnOnce(PendingPostTurnEvaluation) -> PostTurnRequest,
     ) -> Option<(PostTurnEvaluationCorrelation, PostTurnRequest)> {
         let slot = self.sessions.find(ThreadSession::has_due_post_turn)?;
+        let continues_auto_follow = self.continues_auto_follow(slot);
         let session = self.sessions.get_mut(slot);
         let started = session
             .conversation_runtime
@@ -1275,6 +1306,7 @@ impl ConversationTurnFeatureReducer {
                 let correlation = session.admit_post_turn_evaluation(
                     &mut self.next_post_turn_evaluation_generation,
                     &mut request,
+                    continues_auto_follow,
                 )?;
                 Some((correlation, request))
             });
@@ -1438,6 +1470,20 @@ impl ConversationTurnFeatureReducer {
                     .find(|session| session.streams_thread(&source.thread_id))
             })
             .unwrap_or(self.sessions.viewed);
+        /*
+         * 동시 턴 수가 2 이상이면, 사람이 낸 턴이 뒤의 session 의 thread 를 가리킬 때 받지 않는다 (plan 18 Q5-3). 뒤의
+         * session 은 일이 남았을 때만 있다. 보는 session 에 넣으면 그 thread 에 턴이 둘 돌 수 있다 (뒤의 턴이나 자동
+         * 후속과 함께). 값 1 에서는 다른 턴이 자리를 쓰므로 둘이 함께 돌지 않는다. 그래서 지금처럼 받는다.
+         */
+        if self.turn_concurrency.allows_several()
+            && request.prompt_origin != super::CorePromptOrigin::AutoFollow
+            && request
+                .thread_id
+                .as_deref()
+                .is_some_and(|thread_id| self.thread_is_background(thread_id))
+        {
+            return TurnSubmissionAdmission::RejectedUnavailable;
+        }
         let admission = self.admit_turn_submission_at(slot, request);
         self.sessions.settle(slot);
         admission
@@ -1466,6 +1512,27 @@ impl ConversationTurnFeatureReducer {
             .count();
         !self.turn_concurrency.has_room(running)
             || sessions().any(|session| session.streams_thread(thread_id) && session.is_busy())
+    }
+
+    /*
+     * 동시 턴 수가 2 이상일 때, 큐에 남긴 thread 프롬프트를 지금 낼 자리가 있다 (plan 18 Q5-3). 턴을 받는 규칙과 같은
+     * 것을 본다: 그 thread 가 쉬고, 도는 턴이 정책의 수보다 적고, 끝나지 않은 정지가 없다. 다시 낸 프롬프트는 거절되면
+     * 버려지므로 받을 수 있을 때만 낸다. 같은 planning 작업을 다른 thread 의 일이 쥐고 있으면 기다린다.
+     */
+    pub(super) fn queued_thread_prompt_has_room(&self, thread_id: &str, task_id: &str) -> bool {
+        self.turn_concurrency.allows_several()
+            && !self.thread_rejects_new_prompt(thread_id)
+            && !self.sessions.all().any(|session| {
+                session
+                    .active_stop_request
+                    .is_some_and(|active| active.pending_attempt.is_some() && !active.targeted)
+                    || (session.is_busy()
+                        && session
+                            .conversation_runtime
+                            .snapshot()
+                            .planning_handoff
+                            .is_some_and(|handoff| handoff.task_id == task_id))
+            })
     }
 
     /// 함께 도는 턴의 수의 정책을 정한다 (plan 18 Q5-1). 커널을 조립할 때 한 번 부른다.
@@ -1514,11 +1581,45 @@ impl ConversationTurnFeatureReducer {
         request: &TurnSubmissionRequest,
     ) -> TurnSubmissionAdmission {
         let other = self.other_session_blocks(slot);
-        self.sessions.get_mut(slot).admit_turn_submission(
+        let admission = self.sessions.get_mut(slot).admit_turn_submission(
             request,
             other,
             &mut self.next_turn_submission_generation,
-        )
+        );
+        if matches!(admission, TurnSubmissionAdmission::Accepted { .. })
+            && self.turn_concurrency.allows_several()
+        {
+            // 차선을 가진 다른 thread 가 없으면 이 thread 가 차선을 가진다. 있으면 이 턴은 보통의 대화 턴이다.
+            let held_elsewhere = self
+                .sessions
+                .by_key
+                .iter()
+                .any(|(key, session)| *key != slot && Self::holds_lane(session));
+            self.sessions.get_mut(slot).holds_auto_follow_lane = !held_elsewhere;
+        }
+        admission
+    }
+
+    /*
+     * 자동 후속 차선을 가진 session 이다 (plan 18 Q5-3). 차선은 일이 남은 session 만 쥔다. 턴을 받을 때 다른 session 이
+     * 쥐고 있으면 차선을 주지 않으므로, 쥔 session 은 많아야 하나이다.
+     */
+    fn auto_follow_lane_holder(&self) -> Option<SessionKey> {
+        self.sessions
+            .by_key
+            .iter()
+            .find(|(_, session)| Self::holds_lane(session))
+            .map(|(key, _)| *key)
+    }
+
+    /// 차선의 표시는 일이 남은 동안만 뜻이 있다. 일을 마친 session 의 표시는 다음 턴을 받을 때 다시 정한다.
+    fn holds_lane(session: &ThreadSession) -> bool {
+        session.holds_auto_follow_lane && session.is_busy()
+    }
+
+    /// 이 session 의 턴 뒤에 자동 후속을 이어 갈 수 있다. 동시 턴 수가 1 이면 차선이 없고 지금처럼 이어 간다.
+    fn continues_auto_follow(&self, slot: SessionKey) -> bool {
+        !self.turn_concurrency.allows_several() || self.auto_follow_lane_holder() == Some(slot)
     }
 
     pub(super) fn reduce_session_rename_projection(
@@ -1817,10 +1918,12 @@ impl ConversationTurnFeatureReducer {
                 &request.completed_turn_id,
             )
         })?;
-        let correlation = self
-            .sessions
-            .get_mut(slot)
-            .admit_post_turn_evaluation(&mut self.next_post_turn_evaluation_generation, request);
+        let continues_auto_follow = self.continues_auto_follow(slot);
+        let correlation = self.sessions.get_mut(slot).admit_post_turn_evaluation(
+            &mut self.next_post_turn_evaluation_generation,
+            request,
+            continues_auto_follow,
+        );
         self.sessions.settle(slot);
         correlation
     }
@@ -2209,6 +2312,28 @@ mod tests {
                 active_correlation
             } if active_correlation == turn
         ));
+    }
+
+    #[test]
+    fn a_queued_prompt_waits_while_another_thread_holds_its_planning_task() {
+        // plan 18 Q5-3: two threads must not run the same planning task.
+        let mut reducer = ConversationTurnFeatureReducer::new();
+        reducer.set_turn_concurrency(super::super::TurnConcurrencyPolicy::new(2));
+        let mut request = turn_request();
+        request.prompt_origin = super::super::CorePromptOrigin::ManualIntake;
+        request.planning_handoff = Some(crate::domain::planning::TaskHandoff {
+            task_id: "task-2".to_string(),
+            task_title: "Task 2".to_string(),
+            direction_id: "direction-1".to_string(),
+            combined_priority: 0,
+            updated_at: String::new(),
+            status_label: String::new(),
+        });
+        accepted_turn(reducer.admit_thread_turn_submission("thread-a", &request, None));
+
+        assert!(!reducer.queued_thread_prompt_has_room("thread-beta", "task-2"));
+        assert!(reducer.queued_thread_prompt_has_room("thread-beta", "task-3"));
+        assert!(!reducer.queued_thread_prompt_has_room("thread-a", "task-3"));
     }
 
     #[test]

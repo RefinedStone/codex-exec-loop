@@ -3852,6 +3852,8 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
         "op_id",
         // #2796: the turn whose approval review persistence failure this thread reports.
         "approval_review_turn",
+        // plan 18 Q5-3: whether this thread holds the one auto-follow lane.
+        "holds_auto_follow_lane",
     ];
     let forbidden_root_fields = [
         "turn_stream_state",

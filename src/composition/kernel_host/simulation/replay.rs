@@ -29,6 +29,7 @@ fn replay_with_rng(scenario: &Scenario, rng: SimRng) -> Result<ScenarioResult> {
             approval_budget: 0,
             decision_budget: 0,
             steer_budget: 0,
+            turn_concurrency: 1,
         },
     );
     for (index, step) in scenario.steps.iter().enumerate() {
@@ -180,9 +181,9 @@ fn apply_response(simulation: &mut Simulation, response: &ScenarioResponse) -> R
 
 fn matching_turn(simulation: &Simulation, submission: u64) -> Result<FakeTurn> {
     simulation
-        .turn
-        .as_ref()
-        .filter(|turn| turn.correlation.generation == submission)
+        .turns
+        .iter()
+        .find(|turn| turn.correlation.generation == submission)
         .cloned()
         .context("no matching turn submission effect")
 }
