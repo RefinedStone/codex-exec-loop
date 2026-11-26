@@ -1,0 +1,1847 @@
+{
+  "schema_version": 1,
+  "measured_at": "2026-11-26T02:18:19.463Z",
+  "status": "measured",
+  "platform": "win32",
+  "run_id": "ui-ssd-small-many-c4",
+  "case": "small_many",
+  "concurrency": 4,
+  "native_executable": "codex_exec_loop_native-138a415bbcec7578.exe",
+  "fixture_root_name": "akra-storage-performance-20261126-ssd",
+  "versions": {
+    "electron": "45.2.3",
+    "chrome": "156.0.8078.80",
+    "node": "24.22.2"
+  },
+  "boundary": "Actual NativeStorageAnalysisAdapter fixture scan in its own libtest process plus the real Electron composer and storage status; a synthetic Gateway transports the native progress/result.",
+  "hidden_electron": true,
+  "renderer_visibility": {
+    "initial": "visible",
+    "final": "visible"
+  },
+  "timing_method": {
+    "input": "Renderer input event to input-value microtask is separate from Playwright fill/inputValue round-trip.",
+    "frames": "First/second requestAnimationFrame are presentation opportunities, not proof of visible paint. Hidden-window throttling is preserved.",
+    "native_overlap": "Input and frame UNIX timestamps are compared with the first actual native progress callback through native scan return; worker begin, later report and process exit are not treated as proof of scan overlap.",
+    "first_status": "Click to first storage status DOM/frame is distinct from first DOM containing an actual native progress payload."
+  },
+  "exclusions": [
+    "production Gateway scheduling/authentication",
+    "live directory hierarchy rendering",
+    "physical key-to-visible-pixel latency",
+    "whole-volume scanning",
+    "GPU/utility/test-transport memory",
+    "model turns"
+  ],
+  "request_counts": {
+    "native_workers": 1,
+    "scan": 1,
+    "model_turns": 0
+  },
+  "extension_request_counts": {
+    "volumes": 9,
+    "jobs": 9,
+    "scan": 1,
+    "live_children": 7,
+    "snapshot": 1,
+    "get_node": 1,
+    "list_children": 2,
+    "list_files": 1
+  },
+  "native_interval": {
+    "worker_begin_unix_us": 1795659497482920,
+    "begin_unix_us": 1795659497504400,
+    "end_unix_us": 1795659498007404,
+    "complete_report_unix_us": 1795659498031544,
+    "start_source": "first_native_progress_callback",
+    "end_source": "native_scan_return_timestamp"
+  },
+  "native_metrics": {
+    "cancellation": null,
+    "case": "small_many",
+    "children_page_us": 4395,
+    "cold_cache_controlled": false,
+    "concurrency": 4,
+    "dispatches": 17,
+    "elapsed_us": 524522,
+    "expected_directories": 17,
+    "expected_files": 8192,
+    "expected_logical_bytes": "8388608",
+    "first_file_observation_us": 27771,
+    "first_progress_us": 21476,
+    "index_bytes": 5373952,
+    "memory_scope": "fresh native libtest worker, runtime and SQLite; fixture preparation, Gateway and Electron excluded",
+    "process_peak_with_queries_bytes": 26050560,
+    "process_peak_working_set_bytes": 26050560,
+    "process_working_set_begin_bytes": 14172160,
+    "scan_finished_unix_us": 1795659498007404,
+    "threshold_comparisons": [
+      {
+        "elapsed_us": 6251,
+        "has_next_page": false,
+        "included_bytes": [
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152"
+        ],
+        "name": "default",
+        "returned_rows": 16,
+        "thresholds": {
+          "absolute_bytes": "1073741824",
+          "parent_percent": 20,
+          "relative_min_bytes": "268435456"
+        },
+        "total_count": 16
+      },
+      {
+        "elapsed_us": 6111,
+        "has_next_page": false,
+        "included_bytes": [
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152"
+        ],
+        "name": "more_rows",
+        "returned_rows": 16,
+        "thresholds": {
+          "absolute_bytes": "134217728",
+          "parent_percent": 5,
+          "relative_min_bytes": "33554432"
+        },
+        "total_count": 16
+      },
+      {
+        "elapsed_us": 6241,
+        "has_next_page": false,
+        "included_bytes": [
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152",
+          "2097152"
+        ],
+        "name": "fewer_rows",
+        "returned_rows": 16,
+        "thresholds": {
+          "absolute_bytes": "2147483648",
+          "parent_percent": 25,
+          "relative_min_bytes": "536870912"
+        },
+        "total_count": 16
+      }
+    ]
+  },
+  "native_event_count": 7,
+  "native_events": [
+    {
+      "cancel_after_first_file": false,
+      "case": "small_many",
+      "concurrency": 4,
+      "elapsed_us": 0,
+      "event": "begin",
+      "event_unix_us": 1795659497482920,
+      "kind": "storage_performance",
+      "run_id": "ui-ssd-small-many-c4",
+      "volume_id": "fixture-volume",
+      "received_monotonic_ms": 6633.4773,
+      "received_unix_us": 1795659497482000
+    },
+    {
+      "elapsed_us": 21486,
+      "event": "progress",
+      "event_unix_us": 1795659497504400,
+      "kind": "storage_performance",
+      "progress": {
+        "directories_scanned": 0,
+        "files_scanned": 0,
+        "known_allocated_bytes": "0",
+        "snapshot_id": "ui-ssd-small-many-c4",
+        "state": "running",
+        "volume_id": "fixture-volume"
+      },
+      "run_id": "ui-ssd-small-many-c4",
+      "received_monotonic_ms": 6655.0461,
+      "received_unix_us": 1795659497504000
+    },
+    {
+      "elapsed_us": 27773,
+      "event": "progress",
+      "event_unix_us": 1795659497510677,
+      "kind": "storage_performance",
+      "progress": {
+        "directories_scanned": 1,
+        "files_scanned": 1,
+        "known_allocated_bytes": "4096",
+        "snapshot_id": "ui-ssd-small-many-c4",
+        "state": "running",
+        "volume_id": "fixture-volume"
+      },
+      "run_id": "ui-ssd-small-many-c4",
+      "received_monotonic_ms": 6661.1723,
+      "received_unix_us": 1795659497510000
+    },
+    {
+      "elapsed_us": 227865,
+      "event": "progress",
+      "event_unix_us": 1795659497710761,
+      "kind": "storage_performance",
+      "progress": {
+        "directories_scanned": 9,
+        "files_scanned": 4460,
+        "known_allocated_bytes": "18268160",
+        "snapshot_id": "ui-ssd-small-many-c4",
+        "state": "running",
+        "volume_id": "fixture-volume"
+      },
+      "run_id": "ui-ssd-small-many-c4",
+      "received_monotonic_ms": 6861.2431,
+      "received_unix_us": 1795659497710000
+    },
+    {
+      "elapsed_us": 427920,
+      "event": "progress",
+      "event_unix_us": 1795659497910817,
+      "kind": "storage_performance",
+      "progress": {
+        "directories_scanned": 13,
+        "files_scanned": 8046,
+        "known_allocated_bytes": "32956416",
+        "snapshot_id": "ui-ssd-small-many-c4",
+        "state": "running",
+        "volume_id": "fixture-volume"
+      },
+      "run_id": "ui-ssd-small-many-c4",
+      "received_monotonic_ms": 7061.3101,
+      "received_unix_us": 1795659497910000
+    },
+    {
+      "elapsed_us": 523686,
+      "event": "progress",
+      "event_unix_us": 1795659498006588,
+      "kind": "storage_performance",
+      "progress": {
+        "directories_scanned": 17,
+        "files_scanned": 8192,
+        "known_allocated_bytes": "33554432",
+        "snapshot_id": "ui-ssd-small-many-c4",
+        "state": "complete",
+        "volume_id": "fixture-volume"
+      },
+      "run_id": "ui-ssd-small-many-c4",
+      "received_monotonic_ms": 7157.0933,
+      "received_unix_us": 1795659498006000
+    },
+    {
+      "elapsed_us": 548291,
+      "event": "complete",
+      "event_unix_us": 1795659498031544,
+      "kind": "storage_performance",
+      "result": {
+        "children": {
+          "items": [
+            {
+              "allocated_bytes": "2097152",
+              "allocation_owner_id": null,
+              "classification": [],
+              "id": "n2",
+              "issues": [],
+              "kind": "directory",
+              "known_allocated_bytes": "2097152",
+              "logical_bytes": "524288",
+              "name": "d00",
+              "parent_id": "n1",
+              "protection": [],
+              "ratio": {
+                "denominator_bytes": "33554432",
+                "numerator_bytes": "2097152",
+                "provisional": false,
+                "reason": null
+              },
+              "revision": 1,
+              "snapshot_id": "ui-ssd-small-many-c4",
+              "state": "complete"
+            },
+            {
+              "allocated_bytes": "2097152",
+              "allocation_owner_id": null,
+              "classification": [],
+              "id": "n3",
+              "issues": [],
+              "kind": "directory",
+              "known_allocated_bytes": "2097152",
+              "logical_bytes": "524288",
+              "name": "d01",
+              "parent_id": "n1",
+              "protection": [],
+              "ratio": {
+                "denominator_bytes": "33554432",
+                "numerator_bytes": "2097152",
+                "provisional": false,
+                "reason": null
+              },
+              "revision": 1,
+              "snapshot_id": "ui-ssd-small-many-c4",
+              "state": "complete"
+            },
+            {
+              "allocated_bytes": "2097152",
+              "allocation_owner_id": null,
+              "classification": [],
+              "id": "n4",
+              "issues": [],
+              "kind": "directory",
+              "known_allocated_bytes": "2097152",
+              "logical_bytes": "524288",
+              "name": "d02",
+              "parent_id": "n1",
+              "protection": [],
+              "ratio": {
+                "denominator_bytes": "33554432",
+                "numerator_bytes": "2097152",
+                "provisional": false,
+                "reason": null
+              },
+              "revision": 1,
+              "snapshot_id": "ui-ssd-small-many-c4",
+              "state": "complete"
+            },
+            {
+              "allocated_bytes": "2097152",
+              "allocation_owner_id": null,
+              "classification": [],
+              "id": "n5",
+              "issues": [],
+              "kind": "directory",
+              "known_allocated_bytes": "2097152",
+              "logical_bytes": "524288",
+              "name": "d03",
+              "parent_id": "n1",
+              "protection": [],
+              "ratio": {
+                "denominator_bytes": "33554432",
+                "numerator_bytes": "2097152",
+                "provisional": false,
+                "reason": null
+              },
+              "revision": 1,
+              "snapshot_id": "ui-ssd-small-many-c4",
+              "state": "complete"
+            },
+            {
+              "allocated_bytes": "2097152",
+              "allocation_owner_id": null,
+              "classification": [],
+              "id": "n6",
+              "issues": [],
+              "kind": "directory",
+              "known_allocated_bytes": "2097152",
+              "logical_bytes": "524288",
+              "name": "d04",
+              "parent_id": "n1",
+              "protection": [],
+              "ratio": {
+                "denominator_bytes": "33554432",
+                "numerator_bytes": "2097152",
+                "provisional": false,
+                "reason": null
+              },
+              "revision": 1,
+              "snapshot_id": "ui-ssd-small-many-c4",
+              "state": "complete"
+            },
+            {
+              "allocated_bytes": "2097152",
+              "allocation_owner_id": null,
+              "classification": [],
+              "id": "n7",
+              "issues": [],
+              "kind": "directory",
+              "known_allocated_bytes": "2097152",
+              "logical_bytes": "524288",
+              "name": "d05",
+              "parent_id": "n1",
+              "protection": [],
+              "ratio": {
+                "denominator_bytes": "33554432",
+                "numerator_bytes": "2097152",
+                "provisional": false,
+                "reason": null
+              },
+              "revision": 1,
+              "snapshot_id": "ui-ssd-small-many-c4",
+              "state": "complete"
+            },
+            {
+              "allocated_bytes": "2097152",
+              "allocation_owner_id": null,
+              "classification": [],
+              "id": "n8",
+              "issues": [],
+              "kind": "directory",
+              "known_allocated_bytes": "2097152",
+              "logical_bytes": "524288",
+              "name": "d06",
+              "parent_id": "n1",
+              "protection": [],
+              "ratio": {
+                "denominator_bytes": "33554432",
+                "numerator_bytes": "2097152",
+                "provisional": false,
+                "reason": null
+              },
+              "revision": 1,
+              "snapshot_id": "ui-ssd-small-many-c4",
+              "state": "complete"
+            },
+            {
+              "allocated_bytes": "2097152",
+              "allocation_owner_id": null,
+              "classification": [],
+              "id": "n9",
+              "issues": [],
+              "kind": "directory",
+              "known_allocated_bytes": "2097152",
+              "logical_bytes": "524288",
+              "name": "d07",
+              "parent_id": "n1",
+              "protection": [],
+              "ratio": {
+                "denominator_bytes": "33554432",
+                "numerator_bytes": "2097152",
+                "provisional": false,
+                "reason": null
+              },
+              "revision": 1,
+              "snapshot_id": "ui-ssd-small-many-c4",
+              "state": "complete"
+            },
+            {
+              "allocated_bytes": "2097152",
+              "allocation_owner_id": null,
+              "classification": [],
+              "id": "n10",
+              "issues": [],
+              "kind": "directory",
+              "known_allocated_bytes": "2097152",
+              "logical_bytes": "524288",
+              "name": "d08",
+              "parent_id": "n1",
+              "protection": [],
+              "ratio": {
+                "denominator_bytes": "33554432",
+                "numerator_bytes": "2097152",
+                "provisional": false,
+                "reason": null
+              },
+              "revision": 1,
+              "snapshot_id": "ui-ssd-small-many-c4",
+              "state": "complete"
+            },
+            {
+              "allocated_bytes": "2097152",
+              "allocation_owner_id": null,
+              "classification": [],
+              "id": "n11",
+              "issues": [],
+              "kind": "directory",
+              "known_allocated_bytes": "2097152",
+              "logical_bytes": "524288",
+              "name": "d09",
+              "parent_id": "n1",
+              "protection": [],
+              "ratio": {
+                "denominator_bytes": "33554432",
+                "numerator_bytes": "2097152",
+                "provisional": false,
+                "reason": null
+              },
+              "revision": 1,
+              "snapshot_id": "ui-ssd-small-many-c4",
+              "state": "complete"
+            },
+            {
+              "allocated_bytes": "2097152",
+              "allocation_owner_id": null,
+              "classification": [],
+              "id": "n12",
+              "issues": [],
+              "kind": "directory",
+              "known_allocated_bytes": "2097152",
+              "logical_bytes": "524288",
+              "name": "d10",
+              "parent_id": "n1",
+              "protection": [],
+              "ratio": {
+                "denominator_bytes": "33554432",
+                "numerator_bytes": "2097152",
+                "provisional": false,
+                "reason": null
+              },
+              "revision": 1,
+              "snapshot_id": "ui-ssd-small-many-c4",
+              "state": "complete"
+            },
+            {
+              "allocated_bytes": "2097152",
+              "allocation_owner_id": null,
+              "classification": [],
+              "id": "n13",
+              "issues": [],
+              "kind": "directory",
+              "known_allocated_bytes": "2097152",
+              "logical_bytes": "524288",
+              "name": "d11",
+              "parent_id": "n1",
+              "protection": [],
+              "ratio": {
+                "denominator_bytes": "33554432",
+                "numerator_bytes": "2097152",
+                "provisional": false,
+                "reason": null
+              },
+              "revision": 1,
+              "snapshot_id": "ui-ssd-small-many-c4",
+              "state": "complete"
+            },
+            {
+              "allocated_bytes": "2097152",
+              "allocation_owner_id": null,
+              "classification": [],
+              "id": "n14",
+              "issues": [],
+              "kind": "directory",
+              "known_allocated_bytes": "2097152",
+              "logical_bytes": "524288",
+              "name": "d12",
+              "parent_id": "n1",
+              "protection": [],
+              "ratio": {
+                "denominator_bytes": "33554432",
+                "numerator_bytes": "2097152",
+                "provisional": false,
+                "reason": null
+              },
+              "revision": 1,
+              "snapshot_id": "ui-ssd-small-many-c4",
+              "state": "complete"
+            },
+            {
+              "allocated_bytes": "2097152",
+              "allocation_owner_id": null,
+              "classification": [],
+              "id": "n15",
+              "issues": [],
+              "kind": "directory",
+              "known_allocated_bytes": "2097152",
+              "logical_bytes": "524288",
+              "name": "d13",
+              "parent_id": "n1",
+              "protection": [],
+              "ratio": {
+                "denominator_bytes": "33554432",
+                "numerator_bytes": "2097152",
+                "provisional": false,
+                "reason": null
+              },
+              "revision": 1,
+              "snapshot_id": "ui-ssd-small-many-c4",
+              "state": "complete"
+            },
+            {
+              "allocated_bytes": "2097152",
+              "allocation_owner_id": null,
+              "classification": [],
+              "id": "n16",
+              "issues": [],
+              "kind": "directory",
+              "known_allocated_bytes": "2097152",
+              "logical_bytes": "524288",
+              "name": "d14",
+              "parent_id": "n1",
+              "protection": [],
+              "ratio": {
+                "denominator_bytes": "33554432",
+                "numerator_bytes": "2097152",
+                "provisional": false,
+                "reason": null
+              },
+              "revision": 1,
+              "snapshot_id": "ui-ssd-small-many-c4",
+              "state": "complete"
+            },
+            {
+              "allocated_bytes": "2097152",
+              "allocation_owner_id": null,
+              "classification": [],
+              "id": "n17",
+              "issues": [],
+              "kind": "directory",
+              "known_allocated_bytes": "2097152",
+              "logical_bytes": "524288",
+              "name": "d15",
+              "parent_id": "n1",
+              "protection": [],
+              "ratio": {
+                "denominator_bytes": "33554432",
+                "numerator_bytes": "2097152",
+                "provisional": false,
+                "reason": null
+              },
+              "revision": 1,
+              "snapshot_id": "ui-ssd-small-many-c4",
+              "state": "complete"
+            }
+          ],
+          "next_cursor": null,
+          "revision": 1,
+          "snapshot_id": "ui-ssd-small-many-c4",
+          "total_count": 16
+        },
+        "hotspots": {
+          "items": [
+            {
+              "included_bytes": "2097152",
+              "node": {
+                "allocated_bytes": "2097152",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n2",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "2097152",
+                "logical_bytes": "524288",
+                "name": "d00",
+                "parent_id": "n1",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "33554432",
+                  "numerator_bytes": "2097152",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "ui-ssd-small-many-c4",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "no_child_above_threshold",
+              "role": "folder"
+            },
+            {
+              "included_bytes": "2097152",
+              "node": {
+                "allocated_bytes": "2097152",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n3",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "2097152",
+                "logical_bytes": "524288",
+                "name": "d01",
+                "parent_id": "n1",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "33554432",
+                  "numerator_bytes": "2097152",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "ui-ssd-small-many-c4",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "no_child_above_threshold",
+              "role": "folder"
+            },
+            {
+              "included_bytes": "2097152",
+              "node": {
+                "allocated_bytes": "2097152",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n4",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "2097152",
+                "logical_bytes": "524288",
+                "name": "d02",
+                "parent_id": "n1",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "33554432",
+                  "numerator_bytes": "2097152",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "ui-ssd-small-many-c4",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "no_child_above_threshold",
+              "role": "folder"
+            },
+            {
+              "included_bytes": "2097152",
+              "node": {
+                "allocated_bytes": "2097152",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n5",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "2097152",
+                "logical_bytes": "524288",
+                "name": "d03",
+                "parent_id": "n1",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "33554432",
+                  "numerator_bytes": "2097152",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "ui-ssd-small-many-c4",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "no_child_above_threshold",
+              "role": "folder"
+            },
+            {
+              "included_bytes": "2097152",
+              "node": {
+                "allocated_bytes": "2097152",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n6",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "2097152",
+                "logical_bytes": "524288",
+                "name": "d04",
+                "parent_id": "n1",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "33554432",
+                  "numerator_bytes": "2097152",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "ui-ssd-small-many-c4",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "no_child_above_threshold",
+              "role": "folder"
+            },
+            {
+              "included_bytes": "2097152",
+              "node": {
+                "allocated_bytes": "2097152",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n7",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "2097152",
+                "logical_bytes": "524288",
+                "name": "d05",
+                "parent_id": "n1",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "33554432",
+                  "numerator_bytes": "2097152",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "ui-ssd-small-many-c4",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "no_child_above_threshold",
+              "role": "folder"
+            },
+            {
+              "included_bytes": "2097152",
+              "node": {
+                "allocated_bytes": "2097152",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n8",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "2097152",
+                "logical_bytes": "524288",
+                "name": "d06",
+                "parent_id": "n1",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "33554432",
+                  "numerator_bytes": "2097152",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "ui-ssd-small-many-c4",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "no_child_above_threshold",
+              "role": "folder"
+            },
+            {
+              "included_bytes": "2097152",
+              "node": {
+                "allocated_bytes": "2097152",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n9",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "2097152",
+                "logical_bytes": "524288",
+                "name": "d07",
+                "parent_id": "n1",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "33554432",
+                  "numerator_bytes": "2097152",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "ui-ssd-small-many-c4",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "no_child_above_threshold",
+              "role": "folder"
+            },
+            {
+              "included_bytes": "2097152",
+              "node": {
+                "allocated_bytes": "2097152",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n10",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "2097152",
+                "logical_bytes": "524288",
+                "name": "d08",
+                "parent_id": "n1",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "33554432",
+                  "numerator_bytes": "2097152",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "ui-ssd-small-many-c4",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "no_child_above_threshold",
+              "role": "folder"
+            },
+            {
+              "included_bytes": "2097152",
+              "node": {
+                "allocated_bytes": "2097152",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n11",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "2097152",
+                "logical_bytes": "524288",
+                "name": "d09",
+                "parent_id": "n1",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "33554432",
+                  "numerator_bytes": "2097152",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "ui-ssd-small-many-c4",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "no_child_above_threshold",
+              "role": "folder"
+            },
+            {
+              "included_bytes": "2097152",
+              "node": {
+                "allocated_bytes": "2097152",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n12",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "2097152",
+                "logical_bytes": "524288",
+                "name": "d10",
+                "parent_id": "n1",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "33554432",
+                  "numerator_bytes": "2097152",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "ui-ssd-small-many-c4",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "no_child_above_threshold",
+              "role": "folder"
+            },
+            {
+              "included_bytes": "2097152",
+              "node": {
+                "allocated_bytes": "2097152",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n13",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "2097152",
+                "logical_bytes": "524288",
+                "name": "d11",
+                "parent_id": "n1",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "33554432",
+                  "numerator_bytes": "2097152",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "ui-ssd-small-many-c4",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "no_child_above_threshold",
+              "role": "folder"
+            },
+            {
+              "included_bytes": "2097152",
+              "node": {
+                "allocated_bytes": "2097152",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n14",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "2097152",
+                "logical_bytes": "524288",
+                "name": "d12",
+                "parent_id": "n1",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "33554432",
+                  "numerator_bytes": "2097152",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "ui-ssd-small-many-c4",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "no_child_above_threshold",
+              "role": "folder"
+            },
+            {
+              "included_bytes": "2097152",
+              "node": {
+                "allocated_bytes": "2097152",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n15",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "2097152",
+                "logical_bytes": "524288",
+                "name": "d13",
+                "parent_id": "n1",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "33554432",
+                  "numerator_bytes": "2097152",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "ui-ssd-small-many-c4",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "no_child_above_threshold",
+              "role": "folder"
+            },
+            {
+              "included_bytes": "2097152",
+              "node": {
+                "allocated_bytes": "2097152",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n16",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "2097152",
+                "logical_bytes": "524288",
+                "name": "d14",
+                "parent_id": "n1",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "33554432",
+                  "numerator_bytes": "2097152",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "ui-ssd-small-many-c4",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "no_child_above_threshold",
+              "role": "folder"
+            },
+            {
+              "included_bytes": "2097152",
+              "node": {
+                "allocated_bytes": "2097152",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n17",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "2097152",
+                "logical_bytes": "524288",
+                "name": "d15",
+                "parent_id": "n1",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "33554432",
+                  "numerator_bytes": "2097152",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "ui-ssd-small-many-c4",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "no_child_above_threshold",
+              "role": "folder"
+            }
+          ],
+          "next_cursor": null,
+          "revision": 1,
+          "snapshot_id": "ui-ssd-small-many-c4",
+          "total_count": 16
+        },
+        "metrics": {
+          "cancellation": null,
+          "case": "small_many",
+          "children_page_us": 4395,
+          "cold_cache_controlled": false,
+          "concurrency": 4,
+          "dispatches": 17,
+          "elapsed_us": 524522,
+          "expected_directories": 17,
+          "expected_files": 8192,
+          "expected_logical_bytes": "8388608",
+          "first_file_observation_us": 27771,
+          "first_progress_us": 21476,
+          "index_bytes": 5373952,
+          "memory_scope": "fresh native libtest worker, runtime and SQLite; fixture preparation, Gateway and Electron excluded",
+          "process_peak_with_queries_bytes": 26050560,
+          "process_peak_working_set_bytes": 26050560,
+          "process_working_set_begin_bytes": 14172160,
+          "scan_finished_unix_us": 1795659498007404,
+          "threshold_comparisons": [
+            {
+              "elapsed_us": 6251,
+              "has_next_page": false,
+              "included_bytes": [
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152"
+              ],
+              "name": "default",
+              "returned_rows": 16,
+              "thresholds": {
+                "absolute_bytes": "1073741824",
+                "parent_percent": 20,
+                "relative_min_bytes": "268435456"
+              },
+              "total_count": 16
+            },
+            {
+              "elapsed_us": 6111,
+              "has_next_page": false,
+              "included_bytes": [
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152"
+              ],
+              "name": "more_rows",
+              "returned_rows": 16,
+              "thresholds": {
+                "absolute_bytes": "134217728",
+                "parent_percent": 5,
+                "relative_min_bytes": "33554432"
+              },
+              "total_count": 16
+            },
+            {
+              "elapsed_us": 6241,
+              "has_next_page": false,
+              "included_bytes": [
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152",
+                "2097152"
+              ],
+              "name": "fewer_rows",
+              "returned_rows": 16,
+              "thresholds": {
+                "absolute_bytes": "2147483648",
+                "parent_percent": 25,
+                "relative_min_bytes": "536870912"
+              },
+              "total_count": 16
+            }
+          ]
+        },
+        "root_node": {
+          "allocated_bytes": "33554432",
+          "allocation_owner_id": null,
+          "classification": [],
+          "id": "n1",
+          "issues": [],
+          "kind": "directory",
+          "known_allocated_bytes": "33554432",
+          "logical_bytes": "8388608",
+          "name": "fixture",
+          "parent_id": null,
+          "protection": [],
+          "ratio": {
+            "denominator_bytes": null,
+            "numerator_bytes": "33554432",
+            "provisional": false,
+            "reason": "root"
+          },
+          "revision": 1,
+          "snapshot_id": "ui-ssd-small-many-c4",
+          "state": "complete"
+        },
+        "snapshot": {
+          "directories_scanned": 17,
+          "files_scanned": 8192,
+          "finished_at": "2026-11-26T02:18:18.005168100+00:00",
+          "id": "ui-ssd-small-many-c4",
+          "issues": [],
+          "revision": 1,
+          "root_node_id": "n1",
+          "schema_version": 1,
+          "started_at": "2026-11-26T02:18:17.498894500+00:00",
+          "state": "complete",
+          "volume_id": "fixture-volume"
+        }
+      },
+      "run_id": "ui-ssd-small-many-c4",
+      "received_monotonic_ms": 7182.586,
+      "received_unix_us": 1795659498031000
+    }
+  ],
+  "native_exit_code": 0,
+  "renderer_clock": {
+    "time_origin_ms": 1795659491230.9,
+    "unix_ms": 1795659493781
+  },
+  "click": {
+    "monotonic_ms": 6221.5,
+    "unix_us": 1795659497452400
+  },
+  "first_status": {
+    "text": "대기다른 창도 같은 분석을 봅니다. 패널을 닫아도 분석은 계속되며, 취소하면 모든 창에 적용됩니다.",
+    "unix_us": 1795659497506800,
+    "click_to_dom_ms": 54.39999997615814,
+    "click_to_next_frame_ms": 1001,
+    "next_frame_unix_us": 1795659498453400
+  },
+  "first_native_progress_status": {
+    "text": "분석 중 · 확인한 파일 1개 · 폴더 1개다른 창도 같은 분석을 봅니다. 패널을 닫아도 분석은 계속되며, 취소하면 모든 창에 적용됩니다.",
+    "unix_us": 1795659497521800,
+    "click_to_dom_ms": 69.39999997615814,
+    "click_to_next_frame_ms": 1001,
+    "next_frame_unix_us": 1795659498453400,
+    "displayed_files_scanned": 1,
+    "displayed_directories_scanned": 1,
+    "zero_file_progress": false,
+    "matching_native_progress_unix_us": [
+      1795659497510677
+    ]
+  },
+  "targets": {
+    "first_status_dom_under_1s": true,
+    "visible_paint_under_1s": null,
+    "sufficient_native_input_samples": true
+  },
+  "sample_counts": {
+    "baseline": 5,
+    "native_attempted": 9,
+    "native_input_overlap": 8,
+    "native_second_frame_overlap": 0
+  },
+  "baseline": {
+    "automation_to_dom_ms": {
+      "count": 5,
+      "min": 3.9488000000001193,
+      "median": 4.23259999999982,
+      "p95": 6.807299999999941,
+      "max": 6.807299999999941
+    },
+    "input_to_dom_microtask_ms": {
+      "count": 5,
+      "min": 0,
+      "median": 0,
+      "p95": 0,
+      "max": 0
+    },
+    "input_to_next_frame_ms": {
+      "count": 5,
+      "min": 411.89999997615814,
+      "median": 532.3999999761581,
+      "p95": 654.5,
+      "max": 654.5
+    },
+    "input_to_second_frame_ms": {
+      "count": 5,
+      "min": 1412.1000000238419,
+      "median": 1532.6000000238419,
+      "p95": 1654.7000000476837,
+      "max": 1654.7000000476837
+    }
+  },
+  "native_input_overlap": {
+    "automation_to_dom_ms": {
+      "count": 8,
+      "min": 4.534500000000662,
+      "median": 5.0330000000003565,
+      "p95": 6.890900000000329,
+      "max": 6.890900000000329
+    },
+    "input_to_dom_microtask_ms": {
+      "count": 8,
+      "min": 0,
+      "median": 0,
+      "p95": 0.10000002384185791,
+      "max": 0.10000002384185791
+    },
+    "input_to_next_frame_ms": {
+      "count": 8,
+      "min": 497.90000009536743,
+      "median": 710.7000000476837,
+      "p95": 928.1000000238419,
+      "max": 928.1000000238419
+    },
+    "input_to_second_frame_ms": {
+      "count": 8,
+      "min": 1497.7000000476837,
+      "median": 1710.5,
+      "p95": 1927.8999999761581,
+      "max": 1927.8999999761581
+    }
+  },
+  "samples": [
+    {
+      "id": "baseline-0",
+      "phase": "baseline",
+      "input_unix_us": 1795659493790000,
+      "visibility": "visible",
+      "trusted_event": true,
+      "dom_value_matches": true,
+      "input_to_dom_microtask_ms": 0,
+      "input_to_next_frame_ms": 654.5,
+      "input_to_second_frame_ms": 1654.7000000476837,
+      "next_frame_unix_us": 1795659494444500,
+      "second_frame_unix_us": 1795659495444700,
+      "text_length": 25,
+      "automation_start_unix_us": 1795659493784000,
+      "automation_end_unix_us": 1795659493791000,
+      "automation_to_dom_ms": 6.807299999999941,
+      "input_during_native_scan": false,
+      "next_frame_during_native_scan": false,
+      "second_frame_during_native_scan": false
+    },
+    {
+      "id": "baseline-1",
+      "phase": "baseline",
+      "input_unix_us": 1795659493851200,
+      "visibility": "visible",
+      "trusted_event": true,
+      "dom_value_matches": true,
+      "input_to_dom_microtask_ms": 0,
+      "input_to_next_frame_ms": 593.2999999523163,
+      "input_to_second_frame_ms": 1593.5,
+      "next_frame_unix_us": 1795659494444500,
+      "second_frame_unix_us": 1795659495444700,
+      "text_length": 25,
+      "automation_start_unix_us": 1795659493847000,
+      "automation_end_unix_us": 1795659493852000,
+      "automation_to_dom_ms": 4.508499999999913,
+      "input_during_native_scan": false,
+      "next_frame_during_native_scan": false,
+      "second_frame_during_native_scan": false
+    },
+    {
+      "id": "baseline-2",
+      "phase": "baseline",
+      "input_unix_us": 1795659493912100,
+      "visibility": "visible",
+      "trusted_event": true,
+      "dom_value_matches": true,
+      "input_to_dom_microtask_ms": 0,
+      "input_to_next_frame_ms": 532.3999999761581,
+      "input_to_second_frame_ms": 1532.6000000238419,
+      "next_frame_unix_us": 1795659494444500,
+      "second_frame_unix_us": 1795659495444700,
+      "text_length": 25,
+      "automation_start_unix_us": 1795659493909000,
+      "automation_end_unix_us": 1795659493913000,
+      "automation_to_dom_ms": 4.121200000000044,
+      "input_during_native_scan": false,
+      "next_frame_during_native_scan": false,
+      "second_frame_during_native_scan": false
+    },
+    {
+      "id": "baseline-3",
+      "phase": "baseline",
+      "input_unix_us": 1795659493971900,
+      "visibility": "visible",
+      "trusted_event": true,
+      "dom_value_matches": true,
+      "input_to_dom_microtask_ms": 0,
+      "input_to_next_frame_ms": 472.59999990463257,
+      "input_to_second_frame_ms": 1472.7999999523163,
+      "next_frame_unix_us": 1795659494444500,
+      "second_frame_unix_us": 1795659495444700,
+      "text_length": 25,
+      "automation_start_unix_us": 1795659493969000,
+      "automation_end_unix_us": 1795659493973000,
+      "automation_to_dom_ms": 3.9488000000001193,
+      "input_during_native_scan": false,
+      "next_frame_during_native_scan": false,
+      "second_frame_during_native_scan": false
+    },
+    {
+      "id": "baseline-4",
+      "phase": "baseline",
+      "input_unix_us": 1795659494032600,
+      "visibility": "visible",
+      "trusted_event": true,
+      "dom_value_matches": true,
+      "input_to_dom_microtask_ms": 0,
+      "input_to_next_frame_ms": 411.89999997615814,
+      "input_to_second_frame_ms": 1412.1000000238419,
+      "next_frame_unix_us": 1795659494444500,
+      "second_frame_unix_us": 1795659495444700,
+      "text_length": 25,
+      "automation_start_unix_us": 1795659494029000,
+      "automation_end_unix_us": 1795659494033000,
+      "automation_to_dom_ms": 4.23259999999982,
+      "input_during_native_scan": false,
+      "next_frame_during_native_scan": false,
+      "second_frame_during_native_scan": false
+    },
+    {
+      "id": "native-0",
+      "phase": "native",
+      "input_unix_us": 1795659497525300,
+      "visibility": "visible",
+      "trusted_event": true,
+      "dom_value_matches": true,
+      "input_to_dom_microtask_ms": 0.10000002384185791,
+      "input_to_next_frame_ms": 928.1000000238419,
+      "input_to_second_frame_ms": 1927.8999999761581,
+      "next_frame_unix_us": 1795659498453400,
+      "second_frame_unix_us": 1795659499453200,
+      "text_length": 23,
+      "automation_start_unix_us": 1795659497519000,
+      "automation_end_unix_us": 1795659497526000,
+      "automation_to_dom_ms": 6.890900000000329,
+      "input_during_native_scan": true,
+      "next_frame_during_native_scan": false,
+      "second_frame_during_native_scan": false
+    },
+    {
+      "id": "native-1",
+      "phase": "native",
+      "input_unix_us": 1795659497590200,
+      "visibility": "visible",
+      "trusted_event": true,
+      "dom_value_matches": true,
+      "input_to_dom_microtask_ms": 0,
+      "input_to_next_frame_ms": 863.2000000476837,
+      "input_to_second_frame_ms": 1863,
+      "next_frame_unix_us": 1795659498453400,
+      "second_frame_unix_us": 1795659499453200,
+      "text_length": 23,
+      "automation_start_unix_us": 1795659497586000,
+      "automation_end_unix_us": 1795659497591000,
+      "automation_to_dom_ms": 4.963300000000345,
+      "input_during_native_scan": true,
+      "next_frame_during_native_scan": false,
+      "second_frame_during_native_scan": false
+    },
+    {
+      "id": "native-2",
+      "phase": "native",
+      "input_unix_us": 1795659497650700,
+      "visibility": "visible",
+      "trusted_event": true,
+      "dom_value_matches": true,
+      "input_to_dom_microtask_ms": 0,
+      "input_to_next_frame_ms": 802.7000000476837,
+      "input_to_second_frame_ms": 1802.5,
+      "next_frame_unix_us": 1795659498453400,
+      "second_frame_unix_us": 1795659499453200,
+      "text_length": 23,
+      "automation_start_unix_us": 1795659497647000,
+      "automation_end_unix_us": 1795659497652000,
+      "automation_to_dom_ms": 5.003200000000106,
+      "input_during_native_scan": true,
+      "next_frame_during_native_scan": false,
+      "second_frame_during_native_scan": false
+    },
+    {
+      "id": "native-3",
+      "phase": "native",
+      "input_unix_us": 1795659497711900,
+      "visibility": "visible",
+      "trusted_event": true,
+      "dom_value_matches": true,
+      "input_to_dom_microtask_ms": 0,
+      "input_to_next_frame_ms": 741.5,
+      "input_to_second_frame_ms": 1741.2999999523163,
+      "next_frame_unix_us": 1795659498453400,
+      "second_frame_unix_us": 1795659499453200,
+      "text_length": 23,
+      "automation_start_unix_us": 1795659497707000,
+      "automation_end_unix_us": 1795659497713000,
+      "automation_to_dom_ms": 5.577199999999721,
+      "input_during_native_scan": true,
+      "next_frame_during_native_scan": false,
+      "second_frame_during_native_scan": false
+    },
+    {
+      "id": "native-4",
+      "phase": "native",
+      "input_unix_us": 1795659497773500,
+      "visibility": "visible",
+      "trusted_event": true,
+      "dom_value_matches": true,
+      "input_to_dom_microtask_ms": 0,
+      "input_to_next_frame_ms": 679.9000000953674,
+      "input_to_second_frame_ms": 1679.7000000476837,
+      "next_frame_unix_us": 1795659498453400,
+      "second_frame_unix_us": 1795659499453200,
+      "text_length": 23,
+      "automation_start_unix_us": 1795659497769000,
+      "automation_end_unix_us": 1795659497774000,
+      "automation_to_dom_ms": 5.272599999999329,
+      "input_during_native_scan": true,
+      "next_frame_during_native_scan": false,
+      "second_frame_during_native_scan": false
+    },
+    {
+      "id": "native-5",
+      "phase": "native",
+      "input_unix_us": 1795659497834200,
+      "visibility": "visible",
+      "trusted_event": true,
+      "dom_value_matches": true,
+      "input_to_dom_microtask_ms": 0.10000002384185791,
+      "input_to_next_frame_ms": 619.2000000476837,
+      "input_to_second_frame_ms": 1619,
+      "next_frame_unix_us": 1795659498453400,
+      "second_frame_unix_us": 1795659499453200,
+      "text_length": 23,
+      "automation_start_unix_us": 1795659497830000,
+      "automation_end_unix_us": 1795659497835000,
+      "automation_to_dom_ms": 5.062800000000607,
+      "input_during_native_scan": true,
+      "next_frame_during_native_scan": false,
+      "second_frame_during_native_scan": false
+    },
+    {
+      "id": "native-6",
+      "phase": "native",
+      "input_unix_us": 1795659497895200,
+      "visibility": "visible",
+      "trusted_event": true,
+      "dom_value_matches": true,
+      "input_to_dom_microtask_ms": 0,
+      "input_to_next_frame_ms": 558.2000000476837,
+      "input_to_second_frame_ms": 1558,
+      "next_frame_unix_us": 1795659498453400,
+      "second_frame_unix_us": 1795659499453200,
+      "text_length": 23,
+      "automation_start_unix_us": 1795659497891000,
+      "automation_end_unix_us": 1795659497896000,
+      "automation_to_dom_ms": 4.8659999999999854,
+      "input_during_native_scan": true,
+      "next_frame_during_native_scan": false,
+      "second_frame_during_native_scan": false
+    },
+    {
+      "id": "native-7",
+      "phase": "native",
+      "input_unix_us": 1795659497955500,
+      "visibility": "visible",
+      "trusted_event": true,
+      "dom_value_matches": true,
+      "input_to_dom_microtask_ms": 0,
+      "input_to_next_frame_ms": 497.90000009536743,
+      "input_to_second_frame_ms": 1497.7000000476837,
+      "next_frame_unix_us": 1795659498453400,
+      "second_frame_unix_us": 1795659499453200,
+      "text_length": 23,
+      "automation_start_unix_us": 1795659497952000,
+      "automation_end_unix_us": 1795659497956000,
+      "automation_to_dom_ms": 4.534500000000662,
+      "input_during_native_scan": true,
+      "next_frame_during_native_scan": false,
+      "second_frame_during_native_scan": false
+    },
+    {
+      "id": "native-8",
+      "phase": "native",
+      "input_unix_us": 1795659498011400,
+      "visibility": "visible",
+      "trusted_event": true,
+      "dom_value_matches": true,
+      "input_to_dom_microtask_ms": 0,
+      "input_to_next_frame_ms": 442,
+      "input_to_second_frame_ms": 1441.7999999523163,
+      "next_frame_unix_us": 1795659498453400,
+      "second_frame_unix_us": 1795659499453200,
+      "text_length": 23,
+      "automation_start_unix_us": 1795659498007000,
+      "automation_end_unix_us": 1795659498012000,
+      "automation_to_dom_ms": 4.490099999999984,
+      "input_during_native_scan": false,
+      "next_frame_during_native_scan": false,
+      "second_frame_during_native_scan": false
+    }
+  ],
+  "status_timeline": [
+    {
+      "text": "대기다른 창도 같은 분석을 봅니다. 패널을 닫아도 분석은 계속되며, 취소하면 모든 창에 적용됩니다.",
+      "unix_us": 1795659497506800,
+      "click_to_dom_ms": 54.39999997615814,
+      "click_to_next_frame_ms": 1001,
+      "next_frame_unix_us": 1795659498453400
+    },
+    {
+      "text": "분석 중 · 확인한 파일 1개 · 폴더 1개다른 창도 같은 분석을 봅니다. 패널을 닫아도 분석은 계속되며, 취소하면 모든 창에 적용됩니다.",
+      "unix_us": 1795659497521800,
+      "click_to_dom_ms": 69.39999997615814,
+      "click_to_next_frame_ms": 1001,
+      "next_frame_unix_us": 1795659498453400
+    },
+    {
+      "text": "분석 중 · 확인한 파일 4460개 · 폴더 9개다른 창도 같은 분석을 봅니다. 패널을 닫아도 분석은 계속되며, 취소하면 모든 창에 적용됩니다.",
+      "unix_us": 1795659497713100,
+      "click_to_dom_ms": 260.6999999284744,
+      "click_to_next_frame_ms": 1001,
+      "next_frame_unix_us": 1795659498453400
+    },
+    {
+      "text": "분석 중 · 확인한 파일 8046개 · 폴더 13개다른 창도 같은 분석을 봅니다. 패널을 닫아도 분석은 계속되며, 취소하면 모든 창에 적용됩니다.",
+      "unix_us": 1795659497912300,
+      "click_to_dom_ms": 459.89999997615814,
+      "click_to_next_frame_ms": 1001,
+      "next_frame_unix_us": 1795659498453400
+    },
+    {
+      "text": "분석 중 · 확인한 파일 8192개 · 폴더 17개다른 창도 같은 분석을 봅니다. 패널을 닫아도 분석은 계속되며, 취소하면 모든 창에 적용됩니다.",
+      "unix_us": 1795659498008400,
+      "click_to_dom_ms": 556,
+      "click_to_next_frame_ms": 1001,
+      "next_frame_unix_us": 1795659498453400
+    },
+    {
+      "text": "분석 완료 · 확인한 파일 8192개 · 폴더 17개",
+      "unix_us": 1795659498033900,
+      "click_to_dom_ms": 581.5,
+      "click_to_next_frame_ms": 1001,
+      "next_frame_unix_us": 1795659498453400
+    },
+    {
+      "text": "분석 완료 · 확인 완료 · 파일 8,192개 · 폴더 17개",
+      "unix_us": 1795659498042300,
+      "click_to_dom_ms": 589.8999999761581,
+      "click_to_next_frame_ms": 1001,
+      "next_frame_unix_us": 1795659498453400
+    }
+  ],
+  "memory_samples": [
+    {
+      "stage": "baseline",
+      "unix_us": 1795659493784000,
+      "sampling_roundtrip_ms": 2.908400000000256,
+      "window": {
+        "visible": false,
+        "minimized": false,
+        "focused": false
+      },
+      "processes": [
+        {
+          "pid": 30476,
+          "role": "main",
+          "working_set_kb": 110808,
+          "peak_working_set_kb": 129700,
+          "private_kb": 73880
+        },
+        {
+          "pid": 69404,
+          "role": "renderer",
+          "working_set_kb": 109732,
+          "peak_working_set_kb": 109732,
+          "private_kb": 50796
+        }
+      ]
+    },
+    {
+      "stage": "before_scan",
+      "unix_us": 1795659495446000,
+      "sampling_roundtrip_ms": 1.2253000000000611,
+      "window": {
+        "visible": false,
+        "minimized": false,
+        "focused": false
+      },
+      "processes": [
+        {
+          "pid": 30476,
+          "role": "main",
+          "working_set_kb": 111068,
+          "peak_working_set_kb": 129700,
+          "private_kb": 74028
+        },
+        {
+          "pid": 69404,
+          "role": "renderer",
+          "working_set_kb": 112440,
+          "peak_working_set_kb": 112444,
+          "private_kb": 52268
+        }
+      ]
+    },
+    {
+      "stage": "native_worker",
+      "unix_us": 1795659497463000,
+      "sampling_roundtrip_ms": 0.9873999999999796,
+      "window": {
+        "visible": false,
+        "minimized": false,
+        "focused": false
+      },
+      "processes": [
+        {
+          "pid": 30476,
+          "role": "main",
+          "working_set_kb": 111092,
+          "peak_working_set_kb": 129700,
+          "private_kb": 74044
+        },
+        {
+          "pid": 69404,
+          "role": "renderer",
+          "working_set_kb": 112824,
+          "peak_working_set_kb": 112824,
+          "private_kb": 52996
+        }
+      ]
+    },
+    {
+      "stage": "native_worker",
+      "unix_us": 1795659497713000,
+      "sampling_roundtrip_ms": 0.800199999999677,
+      "window": {
+        "visible": false,
+        "minimized": false,
+        "focused": false
+      },
+      "processes": [
+        {
+          "pid": 30476,
+          "role": "main",
+          "working_set_kb": 111132,
+          "peak_working_set_kb": 129700,
+          "private_kb": 74056
+        },
+        {
+          "pid": 69404,
+          "role": "renderer",
+          "working_set_kb": 118168,
+          "peak_working_set_kb": 118168,
+          "private_kb": 57852
+        }
+      ]
+    },
+    {
+      "stage": "native_worker",
+      "unix_us": 1795659497967000,
+      "sampling_roundtrip_ms": 1.1229999999995925,
+      "window": {
+        "visible": false,
+        "minimized": false,
+        "focused": false
+      },
+      "processes": [
+        {
+          "pid": 30476,
+          "role": "main",
+          "working_set_kb": 111144,
+          "peak_working_set_kb": 129700,
+          "private_kb": 74064
+        },
+        {
+          "pid": 69404,
+          "role": "renderer",
+          "working_set_kb": 118896,
+          "peak_working_set_kb": 118896,
+          "private_kb": 58556
+        }
+      ]
+    },
+    {
+      "stage": "after_scan",
+      "unix_us": 1795659499455000,
+      "sampling_roundtrip_ms": 1.4280999999991764,
+      "window": {
+        "visible": false,
+        "minimized": false,
+        "focused": false
+      },
+      "processes": [
+        {
+          "pid": 30476,
+          "role": "main",
+          "working_set_kb": 111192,
+          "peak_working_set_kb": 129700,
+          "private_kb": 74108
+        },
+        {
+          "pid": 69404,
+          "role": "renderer",
+          "working_set_kb": 123392,
+          "peak_working_set_kb": 123392,
+          "private_kb": 61048
+        }
+      ]
+    }
+  ],
+  "memory_errors": [],
+  "memory_method": "Electron MemoryInfo values are KB. main and primary renderer process-lifetime peaks include startup; native worker bytes are reported separately by Rust.",
+  "renderer_errors": [],
+  "test_transport_unavailable_queries": [
+    "live_children",
+    "list_files"
+  ],
+  "sample_limit": 200,
+  "sample_interval_ms": 50,
+  "cleanup_errors": []
+}

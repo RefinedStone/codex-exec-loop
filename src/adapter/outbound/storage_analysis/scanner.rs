@@ -65,7 +65,12 @@ pub(super) fn scan(
         known_allocated_bytes: "0".into(),
         state: StorageState::Running,
     });
-    while !cancelled.load(Ordering::Acquire) {
+    loop {
+        if cancelled.load(Ordering::Acquire) {
+            #[cfg(test)]
+            super::live::record_cancel(scheduling);
+            break;
+        }
         db.conn.execute_batch("BEGIN IMMEDIATE")?;
         let batch = super::live::select_batch(db, scheduling, request.options.concurrency)?;
         if batch.is_empty() {
@@ -76,6 +81,8 @@ pub(super) fn scan(
             let (tx, rx) = sync_channel::<Event>(128);
             for (id, path) in batch {
                 if cancelled.load(Ordering::Acquire) {
+                    #[cfg(test)]
+                    super::live::record_cancel(scheduling);
                     break;
                 }
                 let tx = tx.clone();
@@ -97,6 +104,8 @@ pub(super) fn scan(
                         tx,
                     )
                 });
+                #[cfg(test)]
+                super::live::record_dispatch(scheduling, cancelled.load(Ordering::Acquire));
             }
             drop(tx);
             let mut failure = None;

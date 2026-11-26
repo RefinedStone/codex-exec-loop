@@ -1,0 +1,1517 @@
+{
+  "schema_version": 1,
+  "measured_at": "2026-11-26T02:25:10.807Z",
+  "device_label": "sata_hdd_7200rpm",
+  "device_evidence": {
+    "collected_at": "2026-11-26",
+    "drive": "I:",
+    "disk": {
+      "Number": 2,
+      "FriendlyName": "WDC WD10EALX-009BA0",
+      "BusType": "SATA",
+      "Size": 1000204886016,
+      "OperationalStatus": "Online"
+    },
+    "physical": {
+      "DeviceId": "2",
+      "FriendlyName": "WDC WD10EALX-009BA0",
+      "MediaType": "Unspecified",
+      "BusType": "SATA",
+      "Size": 1000204886016
+    },
+    "msft_physical": {
+      "DeviceId": "2",
+      "FriendlyName": "WDC WD10EALX-009BA0",
+      "MediaType": 0,
+      "SpindleSpeed": 0,
+      "BusType": 11,
+      "Size": 1000204886016
+    },
+    "partition": {
+      "DiskNumber": 2,
+      "PartitionNumber": 3,
+      "DriveLetter": "I",
+      "Size": 325058560000
+    },
+    "volume": {
+      "DriveLetter": "I",
+      "DriveType": "Fixed",
+      "FileSystemType": "NTFS",
+      "Size": 325058555904,
+      "SizeRemaining": 139048222720
+    },
+    "seek_evidence": {
+      "drive": "I:",
+      "code": 0,
+      "text": "LogicalBytesPerSector:                                 512\r\nPhysicalBytesPerSectorForAtomicity:                    512\r\nPhysicalBytesPerSectorForPerformance:                  512\r\nFileSystemEffectivePhysicalBytesPerSectorForAtomicity: 512\r\n장치 맞춤:                                      정렬됨(0x000)\r\n장치 파티션 맞춤:                         정렬됨(0x000)\r\n일반 검색 수행\r\n자르기 지원 안 됨\r\nDAX 지원 안 함\r\n씬 프로비저닝되지 않음 \r\n",
+      "physicalDisk": 2,
+      "model": "WDC WD10EALX-009BA0",
+      "collection": "fsutil fsinfo sectorinfo I:"
+    },
+    "classification": {
+      "type": "HDD",
+      "basis": "OS model and normal-seek response plus manufacturer WD10EALX specification (7200 RPM); GetPhysicalDisk itself reports Unspecified",
+      "manufacturer_datasheet_mirror": "https://cdn.centralpoint.be/objects/pdf/5/596/2206533_1_interne-harde-schijven-western-digital-caviar-blue-1tb-wd10ealx-rfb.pdf",
+      "seek_flag_reference": "https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fscc/3e75d97f-1d0b-4e47-b435-73c513837a57"
+    }
+  },
+  "environment": {
+    "platform": "win32",
+    "os_release": "10.0.26200",
+    "architecture": "x64",
+    "node_version": "v24.13.0",
+    "logical_cpus": 24,
+    "cpu_model": "AMD Ryzen 9 7900X3D 12-Core Processor          ",
+    "total_memory_bytes": 67767197696
+  },
+  "provenance": {
+    "base_commit": "39ac5b9c1f5d8a0d65ad50f367d461c25d9d2ece",
+    "modified_native_source_sha256": {
+      "src/adapter/outbound/storage_analysis/benchmark.rs": "1bc467223ead8c7dfa887a4909530f62fea4b1e5f4653ff5aed3763c019b1ba5",
+      "src/adapter/outbound/storage_analysis/benchmark/performance.rs": "93b19f8e8c6560d957fd5e94f4a7d87beea0081af18399dfd5875f8abaeb682d",
+      "src/adapter/outbound/storage_analysis/benchmark/thresholds.rs": "9b3ea6ea8c2f709993cec4ae315c4dff3121db5e836c793bc5895b0874993516",
+      "src/adapter/outbound/storage_analysis/live.rs": "85361b0f733f2160feac910ccaba597fe9e8fe323ec0ae11ebb5cad1bc7d3d22",
+      "src/adapter/outbound/storage_analysis/scanner.rs": "81795052b8b91dacaf1861e7249a37f75590ff15c2cb148a7922b2fa35e88373"
+    },
+    "orchestrator_sha256": "1f37b20e2e463ca703c5666d70d628c199542f4bb51237f282918b4a07e9c82d",
+    "executable_name": "codex_exec_loop_native-138a415bbcec7578.exe",
+    "executable_sha256": "db6dad193905cbafd18323178174067b3882b398eccc8cf5d617513670054ba7",
+    "worker_test": "adapter::outbound::storage_analysis::benchmark::storage_analysis_threshold_performance_worker",
+    "build_profile": "Cargo test dev profile; all features; explicit x86_64-pc-windows-msvc target"
+  },
+  "fixture": {
+    "location": "I:\\",
+    "directory_name": "akra-storage-performance-20261126-hdd",
+    "reused_existing_fixture": true,
+    "cold_cache_controlled": false,
+    "cache_note": "Files were just created or reused; OS cache was neither flushed nor evicted. First means first observed scan in this session, not cold cache.",
+    "index_placement": "Separate per-run index directory on the same physical volume as the fixture."
+  },
+  "method": {
+    "rounds": 3,
+    "rotated_concurrency_orders": [
+      [
+        1
+      ]
+    ],
+    "dataset_mode": "nested native hardlink fixture for threshold comparison",
+    "timer_scope": "immediately before begin JSON through adapter.scan return, including progress JSON instrumentation; excludes process startup, fixture creation and completed-result queries",
+    "first_state_scope": "native progress callback; renderer state is measured by the separate Desktop probe",
+    "memory_scope": "not measured by the separate threshold worker",
+    "cancellation_scope": "not measured in threshold mode"
+  },
+  "preparation": {
+    "process_wall_ms": 28.7971,
+    "events": [
+      {
+        "case": "threshold_tree",
+        "cold_cache_controlled": false,
+        "directories": 5,
+        "event": "prepared",
+        "event_unix_us": 1795659911144259,
+        "files": 12,
+        "kind": "storage_performance",
+        "logical_bytes": 402653184,
+        "physical_storage_shared_with": "large_few",
+        "preparation": "hardlinks to the worker-owned large_few fixture; each file has one observed path in the separate nested scan root; no body rewrite",
+        "run_id": "v3-20261126022510807-prepare"
+      }
+    ]
+  },
+  "runs": [
+    {
+      "execution_index": 1,
+      "round": 1,
+      "first_scan_of_case_in_session": true,
+      "request": {
+        "mode": "run",
+        "fixture_root": "<fixture_root>",
+        "case": "threshold_tree",
+        "concurrency": 1,
+        "run_id": "v3-20261126022510807-1",
+        "cancel_after_first_file": false
+      },
+      "process_wall_ms": 2703.8239000000003,
+      "events": [
+        {
+          "cancel_after_first_file": false,
+          "case": "threshold_tree",
+          "concurrency": 1,
+          "elapsed_us": 0,
+          "event": "begin",
+          "event_unix_us": 1795659911289629,
+          "kind": "storage_performance",
+          "run_id": "v3-20261126022510807-1",
+          "volume_id": "fixture-volume"
+        },
+        {
+          "elapsed_us": 926355,
+          "event": "progress",
+          "event_unix_us": 1795659912216008,
+          "kind": "storage_performance",
+          "progress": {
+            "directories_scanned": 0,
+            "files_scanned": 0,
+            "known_allocated_bytes": "0",
+            "snapshot_id": "v3-20261126022510807-1",
+            "state": "running",
+            "volume_id": "fixture-volume"
+          },
+          "run_id": "v3-20261126022510807-1"
+        },
+        {
+          "elapsed_us": 1054304,
+          "event": "progress",
+          "event_unix_us": 1795659912343937,
+          "kind": "storage_performance",
+          "progress": {
+            "directories_scanned": 1,
+            "files_scanned": 1,
+            "known_allocated_bytes": "33554432",
+            "snapshot_id": "v3-20261126022510807-1",
+            "state": "running",
+            "volume_id": "fixture-volume"
+          },
+          "run_id": "v3-20261126022510807-1"
+        },
+        {
+          "elapsed_us": 1321195,
+          "event": "progress",
+          "event_unix_us": 1795659912610829,
+          "kind": "storage_performance",
+          "progress": {
+            "directories_scanned": 3,
+            "files_scanned": 4,
+            "known_allocated_bytes": "134217728",
+            "snapshot_id": "v3-20261126022510807-1",
+            "state": "running",
+            "volume_id": "fixture-volume"
+          },
+          "run_id": "v3-20261126022510807-1"
+        },
+        {
+          "elapsed_us": 2550979,
+          "event": "progress",
+          "event_unix_us": 1795659913840619,
+          "kind": "storage_performance",
+          "progress": {
+            "directories_scanned": 5,
+            "files_scanned": 12,
+            "known_allocated_bytes": "402653184",
+            "snapshot_id": "v3-20261126022510807-1",
+            "state": "complete",
+            "volume_id": "fixture-volume"
+          },
+          "run_id": "v3-20261126022510807-1"
+        }
+      ],
+      "result": {
+        "children": {
+          "items": [
+            {
+              "allocated_bytes": "335544320",
+              "allocation_owner_id": null,
+              "classification": [],
+              "id": "n2",
+              "issues": [],
+              "kind": "directory",
+              "known_allocated_bytes": "335544320",
+              "logical_bytes": "335544320",
+              "name": "giant",
+              "parent_id": "n1",
+              "protection": [],
+              "ratio": {
+                "denominator_bytes": "402653184",
+                "numerator_bytes": "335544320",
+                "provisional": false,
+                "reason": null
+              },
+              "revision": 1,
+              "snapshot_id": "v3-20261126022510807-1",
+              "state": "complete"
+            },
+            {
+              "allocated_bytes": "67108864",
+              "allocation_owner_id": null,
+              "classification": [],
+              "id": "n3",
+              "issues": [],
+              "kind": "directory",
+              "known_allocated_bytes": "67108864",
+              "logical_bytes": "67108864",
+              "name": "moderate",
+              "parent_id": "n1",
+              "protection": [],
+              "ratio": {
+                "denominator_bytes": "402653184",
+                "numerator_bytes": "67108864",
+                "provisional": false,
+                "reason": null
+              },
+              "revision": 1,
+              "snapshot_id": "v3-20261126022510807-1",
+              "state": "complete"
+            }
+          ],
+          "next_cursor": null,
+          "revision": 1,
+          "snapshot_id": "v3-20261126022510807-1",
+          "total_count": 2
+        },
+        "hotspots": {
+          "items": [
+            {
+              "included_bytes": "268435456",
+              "node": {
+                "allocated_bytes": "268435456",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n4",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "268435456",
+                "logical_bytes": "268435456",
+                "name": "child_big",
+                "parent_id": "n2",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "335544320",
+                  "numerator_bytes": "268435456",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "v3-20261126022510807-1",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "no_child_above_threshold",
+              "role": "folder"
+            },
+            {
+              "included_bytes": "67108864",
+              "node": {
+                "allocated_bytes": "335544320",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n2",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "335544320",
+                "logical_bytes": "335544320",
+                "name": "giant",
+                "parent_id": "n1",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "402653184",
+                  "numerator_bytes": "335544320",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "v3-20261126022510807-1",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "direct_shared_and_unexpanded_children",
+              "role": "remainder"
+            },
+            {
+              "included_bytes": "67108864",
+              "node": {
+                "allocated_bytes": "67108864",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n3",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "67108864",
+                "logical_bytes": "67108864",
+                "name": "moderate",
+                "parent_id": "n1",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "402653184",
+                  "numerator_bytes": "67108864",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "v3-20261126022510807-1",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "no_child_above_threshold",
+              "role": "folder"
+            }
+          ],
+          "next_cursor": null,
+          "revision": 1,
+          "snapshot_id": "v3-20261126022510807-1",
+          "total_count": 3
+        },
+        "metrics": {
+          "cancellation": null,
+          "case": "threshold_tree",
+          "children_page_us": 899,
+          "cold_cache_controlled": false,
+          "concurrency": 1,
+          "elapsed_us": 2551377,
+          "first_file_observation_us": 1054303,
+          "first_progress_us": 926354,
+          "memory_scope": "not measured by this separate threshold worker",
+          "process_peak_working_set_bytes": null,
+          "scan_finished_unix_us": 1795659913840996,
+          "threshold_comparisons": [
+            {
+              "elapsed_us": 1359,
+              "has_next_page": false,
+              "included_bytes": [
+                "268435456",
+                "67108864",
+                "67108864"
+              ],
+              "name": "default",
+              "returned_rows": 3,
+              "rows": [
+                {
+                  "included_bytes": "268435456",
+                  "name": "child_big",
+                  "role": "folder"
+                },
+                {
+                  "included_bytes": "67108864",
+                  "name": "giant",
+                  "role": "remainder"
+                },
+                {
+                  "included_bytes": "67108864",
+                  "name": "moderate",
+                  "role": "folder"
+                }
+              ],
+              "thresholds": {
+                "absolute_bytes": "1073741824",
+                "parent_percent": 20,
+                "relative_min_bytes": "268435456"
+              },
+              "total_count": 3
+            },
+            {
+              "elapsed_us": 1451,
+              "has_next_page": false,
+              "included_bytes": [
+                "268435456",
+                "67108864",
+                "33554432",
+                "33554432"
+              ],
+              "name": "more_rows",
+              "returned_rows": 4,
+              "rows": [
+                {
+                  "included_bytes": "268435456",
+                  "name": "child_big",
+                  "role": "folder"
+                },
+                {
+                  "included_bytes": "67108864",
+                  "name": "moderate",
+                  "role": "folder"
+                },
+                {
+                  "included_bytes": "33554432",
+                  "name": "giant",
+                  "role": "remainder"
+                },
+                {
+                  "included_bytes": "33554432",
+                  "name": "child_small",
+                  "role": "folder"
+                }
+              ],
+              "thresholds": {
+                "absolute_bytes": "134217728",
+                "parent_percent": 5,
+                "relative_min_bytes": "33554432"
+              },
+              "total_count": 4
+            },
+            {
+              "elapsed_us": 1028,
+              "has_next_page": false,
+              "included_bytes": [
+                "335544320",
+                "67108864"
+              ],
+              "name": "fewer_rows",
+              "returned_rows": 2,
+              "rows": [
+                {
+                  "included_bytes": "335544320",
+                  "name": "giant",
+                  "role": "folder"
+                },
+                {
+                  "included_bytes": "67108864",
+                  "name": "moderate",
+                  "role": "folder"
+                }
+              ],
+              "thresholds": {
+                "absolute_bytes": "2147483648",
+                "parent_percent": 25,
+                "relative_min_bytes": "536870912"
+              },
+              "total_count": 2
+            }
+          ]
+        },
+        "root_node": {
+          "allocated_bytes": "402653184",
+          "allocation_owner_id": null,
+          "classification": [],
+          "id": "n1",
+          "issues": [],
+          "kind": "directory",
+          "known_allocated_bytes": "402653184",
+          "logical_bytes": "402653184",
+          "name": "fixture",
+          "parent_id": null,
+          "protection": [],
+          "ratio": {
+            "denominator_bytes": null,
+            "numerator_bytes": "402653184",
+            "provisional": false,
+            "reason": "root"
+          },
+          "revision": 1,
+          "snapshot_id": "v3-20261126022510807-1",
+          "state": "complete"
+        },
+        "snapshot": {
+          "directories_scanned": 5,
+          "files_scanned": 12,
+          "finished_at": "2026-11-26T02:25:13.768109200+00:00",
+          "id": "v3-20261126022510807-1",
+          "issues": [],
+          "revision": 1,
+          "root_node_id": "n1",
+          "schema_version": 1,
+          "started_at": "2026-11-26T02:25:11.926373400+00:00",
+          "state": "complete",
+          "volume_id": "fixture-volume"
+        }
+      },
+      "quality": {
+        "state": "complete",
+        "files_scanned": 12,
+        "directories_scanned": 5,
+        "snapshot_issues": [],
+        "logical_bytes": "402653184",
+        "allocated_bytes": "402653184",
+        "known_allocated_bytes": "402653184",
+        "root_issues": [],
+        "children_total_count": 2,
+        "children": [
+          {
+            "name": "giant",
+            "logical_bytes": "335544320",
+            "allocated_bytes": "335544320",
+            "known_allocated_bytes": "335544320",
+            "state": "complete",
+            "issues": []
+          },
+          {
+            "name": "moderate",
+            "logical_bytes": "67108864",
+            "allocated_bytes": "67108864",
+            "known_allocated_bytes": "67108864",
+            "state": "complete",
+            "issues": []
+          }
+        ],
+        "hotspot_rows": [
+          {
+            "name": "default",
+            "returned_rows": 3,
+            "total_count": 3,
+            "included_bytes": [
+              "268435456",
+              "67108864",
+              "67108864"
+            ],
+            "has_next_page": false
+          },
+          {
+            "name": "more_rows",
+            "returned_rows": 4,
+            "total_count": 4,
+            "included_bytes": [
+              "268435456",
+              "33554432",
+              "33554432",
+              "67108864"
+            ],
+            "has_next_page": false
+          },
+          {
+            "name": "fewer_rows",
+            "returned_rows": 2,
+            "total_count": 2,
+            "included_bytes": [
+              "335544320",
+              "67108864"
+            ],
+            "has_next_page": false
+          }
+        ]
+      }
+    },
+    {
+      "execution_index": 2,
+      "round": 2,
+      "first_scan_of_case_in_session": false,
+      "request": {
+        "mode": "run",
+        "fixture_root": "<fixture_root>",
+        "case": "threshold_tree",
+        "concurrency": 1,
+        "run_id": "v3-20261126022510807-2",
+        "cancel_after_first_file": false
+      },
+      "process_wall_ms": 2570.5309,
+      "events": [
+        {
+          "cancel_after_first_file": false,
+          "case": "threshold_tree",
+          "concurrency": 1,
+          "elapsed_us": 0,
+          "event": "begin",
+          "event_unix_us": 1795659913880123,
+          "kind": "storage_performance",
+          "run_id": "v3-20261126022510807-2",
+          "volume_id": "fixture-volume"
+        },
+        {
+          "elapsed_us": 1070676,
+          "event": "progress",
+          "event_unix_us": 1795659914950817,
+          "kind": "storage_performance",
+          "progress": {
+            "directories_scanned": 0,
+            "files_scanned": 0,
+            "known_allocated_bytes": "0",
+            "snapshot_id": "v3-20261126022510807-2",
+            "state": "running",
+            "volume_id": "fixture-volume"
+          },
+          "run_id": "v3-20261126022510807-2"
+        },
+        {
+          "elapsed_us": 1175728,
+          "event": "progress",
+          "event_unix_us": 1795659915055858,
+          "kind": "storage_performance",
+          "progress": {
+            "directories_scanned": 1,
+            "files_scanned": 1,
+            "known_allocated_bytes": "33554432",
+            "snapshot_id": "v3-20261126022510807-2",
+            "state": "running",
+            "volume_id": "fixture-volume"
+          },
+          "run_id": "v3-20261126022510807-2"
+        },
+        {
+          "elapsed_us": 1404926,
+          "event": "progress",
+          "event_unix_us": 1795659915285057,
+          "kind": "storage_performance",
+          "progress": {
+            "directories_scanned": 3,
+            "files_scanned": 4,
+            "known_allocated_bytes": "134217728",
+            "snapshot_id": "v3-20261126022510807-2",
+            "state": "running",
+            "volume_id": "fixture-volume"
+          },
+          "run_id": "v3-20261126022510807-2"
+        },
+        {
+          "elapsed_us": 2537005,
+          "event": "progress",
+          "event_unix_us": 1795659916417137,
+          "kind": "storage_performance",
+          "progress": {
+            "directories_scanned": 5,
+            "files_scanned": 12,
+            "known_allocated_bytes": "402653184",
+            "snapshot_id": "v3-20261126022510807-2",
+            "state": "complete",
+            "volume_id": "fixture-volume"
+          },
+          "run_id": "v3-20261126022510807-2"
+        }
+      ],
+      "result": {
+        "children": {
+          "items": [
+            {
+              "allocated_bytes": "335544320",
+              "allocation_owner_id": null,
+              "classification": [],
+              "id": "n2",
+              "issues": [],
+              "kind": "directory",
+              "known_allocated_bytes": "335544320",
+              "logical_bytes": "335544320",
+              "name": "giant",
+              "parent_id": "n1",
+              "protection": [],
+              "ratio": {
+                "denominator_bytes": "402653184",
+                "numerator_bytes": "335544320",
+                "provisional": false,
+                "reason": null
+              },
+              "revision": 1,
+              "snapshot_id": "v3-20261126022510807-2",
+              "state": "complete"
+            },
+            {
+              "allocated_bytes": "67108864",
+              "allocation_owner_id": null,
+              "classification": [],
+              "id": "n3",
+              "issues": [],
+              "kind": "directory",
+              "known_allocated_bytes": "67108864",
+              "logical_bytes": "67108864",
+              "name": "moderate",
+              "parent_id": "n1",
+              "protection": [],
+              "ratio": {
+                "denominator_bytes": "402653184",
+                "numerator_bytes": "67108864",
+                "provisional": false,
+                "reason": null
+              },
+              "revision": 1,
+              "snapshot_id": "v3-20261126022510807-2",
+              "state": "complete"
+            }
+          ],
+          "next_cursor": null,
+          "revision": 1,
+          "snapshot_id": "v3-20261126022510807-2",
+          "total_count": 2
+        },
+        "hotspots": {
+          "items": [
+            {
+              "included_bytes": "268435456",
+              "node": {
+                "allocated_bytes": "268435456",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n4",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "268435456",
+                "logical_bytes": "268435456",
+                "name": "child_big",
+                "parent_id": "n2",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "335544320",
+                  "numerator_bytes": "268435456",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "v3-20261126022510807-2",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "no_child_above_threshold",
+              "role": "folder"
+            },
+            {
+              "included_bytes": "67108864",
+              "node": {
+                "allocated_bytes": "335544320",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n2",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "335544320",
+                "logical_bytes": "335544320",
+                "name": "giant",
+                "parent_id": "n1",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "402653184",
+                  "numerator_bytes": "335544320",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "v3-20261126022510807-2",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "direct_shared_and_unexpanded_children",
+              "role": "remainder"
+            },
+            {
+              "included_bytes": "67108864",
+              "node": {
+                "allocated_bytes": "67108864",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n3",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "67108864",
+                "logical_bytes": "67108864",
+                "name": "moderate",
+                "parent_id": "n1",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "402653184",
+                  "numerator_bytes": "67108864",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "v3-20261126022510807-2",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "no_child_above_threshold",
+              "role": "folder"
+            }
+          ],
+          "next_cursor": null,
+          "revision": 1,
+          "snapshot_id": "v3-20261126022510807-2",
+          "total_count": 3
+        },
+        "metrics": {
+          "cancellation": null,
+          "case": "threshold_tree",
+          "children_page_us": 929,
+          "cold_cache_controlled": false,
+          "concurrency": 1,
+          "elapsed_us": 2537332,
+          "first_file_observation_us": 1175727,
+          "first_progress_us": 1070675,
+          "memory_scope": "not measured by this separate threshold worker",
+          "process_peak_working_set_bytes": null,
+          "scan_finished_unix_us": 1795659916417445,
+          "threshold_comparisons": [
+            {
+              "elapsed_us": 1338,
+              "has_next_page": false,
+              "included_bytes": [
+                "268435456",
+                "67108864",
+                "67108864"
+              ],
+              "name": "default",
+              "returned_rows": 3,
+              "rows": [
+                {
+                  "included_bytes": "268435456",
+                  "name": "child_big",
+                  "role": "folder"
+                },
+                {
+                  "included_bytes": "67108864",
+                  "name": "giant",
+                  "role": "remainder"
+                },
+                {
+                  "included_bytes": "67108864",
+                  "name": "moderate",
+                  "role": "folder"
+                }
+              ],
+              "thresholds": {
+                "absolute_bytes": "1073741824",
+                "parent_percent": 20,
+                "relative_min_bytes": "268435456"
+              },
+              "total_count": 3
+            },
+            {
+              "elapsed_us": 1586,
+              "has_next_page": false,
+              "included_bytes": [
+                "268435456",
+                "67108864",
+                "33554432",
+                "33554432"
+              ],
+              "name": "more_rows",
+              "returned_rows": 4,
+              "rows": [
+                {
+                  "included_bytes": "268435456",
+                  "name": "child_big",
+                  "role": "folder"
+                },
+                {
+                  "included_bytes": "67108864",
+                  "name": "moderate",
+                  "role": "folder"
+                },
+                {
+                  "included_bytes": "33554432",
+                  "name": "giant",
+                  "role": "remainder"
+                },
+                {
+                  "included_bytes": "33554432",
+                  "name": "child_small",
+                  "role": "folder"
+                }
+              ],
+              "thresholds": {
+                "absolute_bytes": "134217728",
+                "parent_percent": 5,
+                "relative_min_bytes": "33554432"
+              },
+              "total_count": 4
+            },
+            {
+              "elapsed_us": 1088,
+              "has_next_page": false,
+              "included_bytes": [
+                "335544320",
+                "67108864"
+              ],
+              "name": "fewer_rows",
+              "returned_rows": 2,
+              "rows": [
+                {
+                  "included_bytes": "335544320",
+                  "name": "giant",
+                  "role": "folder"
+                },
+                {
+                  "included_bytes": "67108864",
+                  "name": "moderate",
+                  "role": "folder"
+                }
+              ],
+              "thresholds": {
+                "absolute_bytes": "2147483648",
+                "parent_percent": 25,
+                "relative_min_bytes": "536870912"
+              },
+              "total_count": 2
+            }
+          ]
+        },
+        "root_node": {
+          "allocated_bytes": "402653184",
+          "allocation_owner_id": null,
+          "classification": [],
+          "id": "n1",
+          "issues": [],
+          "kind": "directory",
+          "known_allocated_bytes": "402653184",
+          "logical_bytes": "402653184",
+          "name": "fixture",
+          "parent_id": null,
+          "protection": [],
+          "ratio": {
+            "denominator_bytes": null,
+            "numerator_bytes": "402653184",
+            "provisional": false,
+            "reason": "root"
+          },
+          "revision": 1,
+          "snapshot_id": "v3-20261126022510807-2",
+          "state": "complete"
+        },
+        "snapshot": {
+          "directories_scanned": 5,
+          "files_scanned": 12,
+          "finished_at": "2026-11-26T02:25:16.351210500+00:00",
+          "id": "v3-20261126022510807-2",
+          "issues": [],
+          "revision": 1,
+          "root_node_id": "n1",
+          "schema_version": 1,
+          "started_at": "2026-11-26T02:25:14.659150200+00:00",
+          "state": "complete",
+          "volume_id": "fixture-volume"
+        }
+      },
+      "quality": {
+        "state": "complete",
+        "files_scanned": 12,
+        "directories_scanned": 5,
+        "snapshot_issues": [],
+        "logical_bytes": "402653184",
+        "allocated_bytes": "402653184",
+        "known_allocated_bytes": "402653184",
+        "root_issues": [],
+        "children_total_count": 2,
+        "children": [
+          {
+            "name": "giant",
+            "logical_bytes": "335544320",
+            "allocated_bytes": "335544320",
+            "known_allocated_bytes": "335544320",
+            "state": "complete",
+            "issues": []
+          },
+          {
+            "name": "moderate",
+            "logical_bytes": "67108864",
+            "allocated_bytes": "67108864",
+            "known_allocated_bytes": "67108864",
+            "state": "complete",
+            "issues": []
+          }
+        ],
+        "hotspot_rows": [
+          {
+            "name": "default",
+            "returned_rows": 3,
+            "total_count": 3,
+            "included_bytes": [
+              "268435456",
+              "67108864",
+              "67108864"
+            ],
+            "has_next_page": false
+          },
+          {
+            "name": "more_rows",
+            "returned_rows": 4,
+            "total_count": 4,
+            "included_bytes": [
+              "268435456",
+              "33554432",
+              "33554432",
+              "67108864"
+            ],
+            "has_next_page": false
+          },
+          {
+            "name": "fewer_rows",
+            "returned_rows": 2,
+            "total_count": 2,
+            "included_bytes": [
+              "335544320",
+              "67108864"
+            ],
+            "has_next_page": false
+          }
+        ]
+      }
+    },
+    {
+      "execution_index": 3,
+      "round": 3,
+      "first_scan_of_case_in_session": false,
+      "request": {
+        "mode": "run",
+        "fixture_root": "<fixture_root>",
+        "case": "threshold_tree",
+        "concurrency": 1,
+        "run_id": "v3-20261126022510807-3",
+        "cancel_after_first_file": false
+      },
+      "process_wall_ms": 2602.2108,
+      "events": [
+        {
+          "cancel_after_first_file": false,
+          "case": "threshold_tree",
+          "concurrency": 1,
+          "elapsed_us": 0,
+          "event": "begin",
+          "event_unix_us": 1795659916452245,
+          "kind": "storage_performance",
+          "run_id": "v3-20261126022510807-3",
+          "volume_id": "fixture-volume"
+        },
+        {
+          "elapsed_us": 943483,
+          "event": "progress",
+          "event_unix_us": 1795659917395751,
+          "kind": "storage_performance",
+          "progress": {
+            "directories_scanned": 0,
+            "files_scanned": 0,
+            "known_allocated_bytes": "0",
+            "snapshot_id": "v3-20261126022510807-3",
+            "state": "running",
+            "volume_id": "fixture-volume"
+          },
+          "run_id": "v3-20261126022510807-3"
+        },
+        {
+          "elapsed_us": 1028630,
+          "event": "progress",
+          "event_unix_us": 1795659917480879,
+          "kind": "storage_performance",
+          "progress": {
+            "directories_scanned": 1,
+            "files_scanned": 1,
+            "known_allocated_bytes": "33554432",
+            "snapshot_id": "v3-20261126022510807-3",
+            "state": "running",
+            "volume_id": "fixture-volume"
+          },
+          "run_id": "v3-20261126022510807-3"
+        },
+        {
+          "elapsed_us": 1256976,
+          "event": "progress",
+          "event_unix_us": 1795659917709248,
+          "kind": "storage_performance",
+          "progress": {
+            "directories_scanned": 3,
+            "files_scanned": 4,
+            "known_allocated_bytes": "134217728",
+            "snapshot_id": "v3-20261126022510807-3",
+            "state": "running",
+            "volume_id": "fixture-volume"
+          },
+          "run_id": "v3-20261126022510807-3"
+        },
+        {
+          "elapsed_us": 2568860,
+          "event": "progress",
+          "event_unix_us": 1795659919021115,
+          "kind": "storage_performance",
+          "progress": {
+            "directories_scanned": 5,
+            "files_scanned": 12,
+            "known_allocated_bytes": "402653184",
+            "snapshot_id": "v3-20261126022510807-3",
+            "state": "complete",
+            "volume_id": "fixture-volume"
+          },
+          "run_id": "v3-20261126022510807-3"
+        }
+      ],
+      "result": {
+        "children": {
+          "items": [
+            {
+              "allocated_bytes": "335544320",
+              "allocation_owner_id": null,
+              "classification": [],
+              "id": "n2",
+              "issues": [],
+              "kind": "directory",
+              "known_allocated_bytes": "335544320",
+              "logical_bytes": "335544320",
+              "name": "giant",
+              "parent_id": "n1",
+              "protection": [],
+              "ratio": {
+                "denominator_bytes": "402653184",
+                "numerator_bytes": "335544320",
+                "provisional": false,
+                "reason": null
+              },
+              "revision": 1,
+              "snapshot_id": "v3-20261126022510807-3",
+              "state": "complete"
+            },
+            {
+              "allocated_bytes": "67108864",
+              "allocation_owner_id": null,
+              "classification": [],
+              "id": "n3",
+              "issues": [],
+              "kind": "directory",
+              "known_allocated_bytes": "67108864",
+              "logical_bytes": "67108864",
+              "name": "moderate",
+              "parent_id": "n1",
+              "protection": [],
+              "ratio": {
+                "denominator_bytes": "402653184",
+                "numerator_bytes": "67108864",
+                "provisional": false,
+                "reason": null
+              },
+              "revision": 1,
+              "snapshot_id": "v3-20261126022510807-3",
+              "state": "complete"
+            }
+          ],
+          "next_cursor": null,
+          "revision": 1,
+          "snapshot_id": "v3-20261126022510807-3",
+          "total_count": 2
+        },
+        "hotspots": {
+          "items": [
+            {
+              "included_bytes": "268435456",
+              "node": {
+                "allocated_bytes": "268435456",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n4",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "268435456",
+                "logical_bytes": "268435456",
+                "name": "child_big",
+                "parent_id": "n2",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "335544320",
+                  "numerator_bytes": "268435456",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "v3-20261126022510807-3",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "no_child_above_threshold",
+              "role": "folder"
+            },
+            {
+              "included_bytes": "67108864",
+              "node": {
+                "allocated_bytes": "335544320",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n2",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "335544320",
+                "logical_bytes": "335544320",
+                "name": "giant",
+                "parent_id": "n1",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "402653184",
+                  "numerator_bytes": "335544320",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "v3-20261126022510807-3",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "direct_shared_and_unexpanded_children",
+              "role": "remainder"
+            },
+            {
+              "included_bytes": "67108864",
+              "node": {
+                "allocated_bytes": "67108864",
+                "allocation_owner_id": null,
+                "classification": [],
+                "id": "n3",
+                "issues": [],
+                "kind": "directory",
+                "known_allocated_bytes": "67108864",
+                "logical_bytes": "67108864",
+                "name": "moderate",
+                "parent_id": "n1",
+                "protection": [],
+                "ratio": {
+                  "denominator_bytes": "402653184",
+                  "numerator_bytes": "67108864",
+                  "provisional": false,
+                  "reason": null
+                },
+                "revision": 1,
+                "snapshot_id": "v3-20261126022510807-3",
+                "state": "complete"
+              },
+              "provisional": false,
+              "reason": "no_child_above_threshold",
+              "role": "folder"
+            }
+          ],
+          "next_cursor": null,
+          "revision": 1,
+          "snapshot_id": "v3-20261126022510807-3",
+          "total_count": 3
+        },
+        "metrics": {
+          "cancellation": null,
+          "case": "threshold_tree",
+          "children_page_us": 847,
+          "cold_cache_controlled": false,
+          "concurrency": 1,
+          "elapsed_us": 2569231,
+          "first_file_observation_us": 1028629,
+          "first_progress_us": 943482,
+          "memory_scope": "not measured by this separate threshold worker",
+          "process_peak_working_set_bytes": null,
+          "scan_finished_unix_us": 1795659919021465,
+          "threshold_comparisons": [
+            {
+              "elapsed_us": 1407,
+              "has_next_page": false,
+              "included_bytes": [
+                "268435456",
+                "67108864",
+                "67108864"
+              ],
+              "name": "default",
+              "returned_rows": 3,
+              "rows": [
+                {
+                  "included_bytes": "268435456",
+                  "name": "child_big",
+                  "role": "folder"
+                },
+                {
+                  "included_bytes": "67108864",
+                  "name": "giant",
+                  "role": "remainder"
+                },
+                {
+                  "included_bytes": "67108864",
+                  "name": "moderate",
+                  "role": "folder"
+                }
+              ],
+              "thresholds": {
+                "absolute_bytes": "1073741824",
+                "parent_percent": 20,
+                "relative_min_bytes": "268435456"
+              },
+              "total_count": 3
+            },
+            {
+              "elapsed_us": 1377,
+              "has_next_page": false,
+              "included_bytes": [
+                "268435456",
+                "67108864",
+                "33554432",
+                "33554432"
+              ],
+              "name": "more_rows",
+              "returned_rows": 4,
+              "rows": [
+                {
+                  "included_bytes": "268435456",
+                  "name": "child_big",
+                  "role": "folder"
+                },
+                {
+                  "included_bytes": "67108864",
+                  "name": "moderate",
+                  "role": "folder"
+                },
+                {
+                  "included_bytes": "33554432",
+                  "name": "giant",
+                  "role": "remainder"
+                },
+                {
+                  "included_bytes": "33554432",
+                  "name": "child_small",
+                  "role": "folder"
+                }
+              ],
+              "thresholds": {
+                "absolute_bytes": "134217728",
+                "parent_percent": 5,
+                "relative_min_bytes": "33554432"
+              },
+              "total_count": 4
+            },
+            {
+              "elapsed_us": 970,
+              "has_next_page": false,
+              "included_bytes": [
+                "335544320",
+                "67108864"
+              ],
+              "name": "fewer_rows",
+              "returned_rows": 2,
+              "rows": [
+                {
+                  "included_bytes": "335544320",
+                  "name": "giant",
+                  "role": "folder"
+                },
+                {
+                  "included_bytes": "67108864",
+                  "name": "moderate",
+                  "role": "folder"
+                }
+              ],
+              "thresholds": {
+                "absolute_bytes": "2147483648",
+                "parent_percent": 25,
+                "relative_min_bytes": "536870912"
+              },
+              "total_count": 2
+            }
+          ]
+        },
+        "root_node": {
+          "allocated_bytes": "402653184",
+          "allocation_owner_id": null,
+          "classification": [],
+          "id": "n1",
+          "issues": [],
+          "kind": "directory",
+          "known_allocated_bytes": "402653184",
+          "logical_bytes": "402653184",
+          "name": "fixture",
+          "parent_id": null,
+          "protection": [],
+          "ratio": {
+            "denominator_bytes": null,
+            "numerator_bytes": "402653184",
+            "provisional": false,
+            "reason": "root"
+          },
+          "revision": 1,
+          "snapshot_id": "v3-20261126022510807-3",
+          "state": "complete"
+        },
+        "snapshot": {
+          "directories_scanned": 5,
+          "files_scanned": 12,
+          "finished_at": "2026-11-26T02:25:18.959814700+00:00",
+          "id": "v3-20261126022510807-3",
+          "issues": [],
+          "revision": 1,
+          "root_node_id": "n1",
+          "schema_version": 1,
+          "started_at": "2026-11-26T02:25:17.142343500+00:00",
+          "state": "complete",
+          "volume_id": "fixture-volume"
+        }
+      },
+      "quality": {
+        "state": "complete",
+        "files_scanned": 12,
+        "directories_scanned": 5,
+        "snapshot_issues": [],
+        "logical_bytes": "402653184",
+        "allocated_bytes": "402653184",
+        "known_allocated_bytes": "402653184",
+        "root_issues": [],
+        "children_total_count": 2,
+        "children": [
+          {
+            "name": "giant",
+            "logical_bytes": "335544320",
+            "allocated_bytes": "335544320",
+            "known_allocated_bytes": "335544320",
+            "state": "complete",
+            "issues": []
+          },
+          {
+            "name": "moderate",
+            "logical_bytes": "67108864",
+            "allocated_bytes": "67108864",
+            "known_allocated_bytes": "67108864",
+            "state": "complete",
+            "issues": []
+          }
+        ],
+        "hotspot_rows": [
+          {
+            "name": "default",
+            "returned_rows": 3,
+            "total_count": 3,
+            "included_bytes": [
+              "268435456",
+              "67108864",
+              "67108864"
+            ],
+            "has_next_page": false
+          },
+          {
+            "name": "more_rows",
+            "returned_rows": 4,
+            "total_count": 4,
+            "included_bytes": [
+              "268435456",
+              "33554432",
+              "33554432",
+              "67108864"
+            ],
+            "has_next_page": false
+          },
+          {
+            "name": "fewer_rows",
+            "returned_rows": 2,
+            "total_count": 2,
+            "included_bytes": [
+              "335544320",
+              "67108864"
+            ],
+            "has_next_page": false
+          }
+        ]
+      }
+    }
+  ],
+  "summaries": [
+    {
+      "case": "threshold_tree",
+      "concurrency": 1,
+      "samples": 3,
+      "run_indices": [
+        1,
+        2,
+        3
+      ],
+      "total_us": {
+        "min": 2537332,
+        "median": 2551377,
+        "max": 2569231
+      },
+      "first_progress_us": {
+        "min": 926354,
+        "median": 943482,
+        "max": 1070675
+      },
+      "first_file_observation_us": {
+        "min": 1028629,
+        "median": 1054303,
+        "max": 1175727
+      },
+      "first_attempt_total_us": 2551377,
+      "repeat_attempt_total_us": {
+        "min": 2537332,
+        "median": 2553281.5,
+        "max": 2569231
+      },
+      "native_peak_working_set_bytes": null,
+      "children_page_us": {
+        "min": 847,
+        "median": 899,
+        "max": 929
+      },
+      "default_hotspot_query_us": {
+        "min": 1338,
+        "median": 1359,
+        "max": 1407
+      }
+    }
+  ],
+  "result": "complete",
+  "finished_at": "2026-11-26T02:25:19.031Z",
+  "quality_equal_across_all_completed_runs": true
+}

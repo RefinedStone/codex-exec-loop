@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-11-26T02:43:07.111Z",
+  "base_commit": "39ac5b9c1f5d8a0d65ad50f367d461c25d9d2ece",
+  "source_sha256": {
+    "desktop/test/storage-performance-ui.mjs": "87b123dcaa340ad2a04ec3cfd7951efbdbec88fb01e200d7e7b50c144ec739d7",
+    "desktop/test/storage-performance/native-worker.mjs": "a77fa7ac40c1ce3c9dd13abe069a96fa9cfeb2ad16b63a75bb88dc209a1621cd",
+    "scripts/storage-analysis-performance.mjs": "1f37b20e2e463ca703c5666d70d628c199542f4bb51237f282918b4a07e9c82d",
+    "src/adapter/outbound/storage_analysis/benchmark.rs": "1bc467223ead8c7dfa887a4909530f62fea4b1e5f4653ff5aed3763c019b1ba5",
+    "src/adapter/outbound/storage_analysis/benchmark/performance.rs": "93b19f8e8c6560d957fd5e94f4a7d87beea0081af18399dfd5875f8abaeb682d",
+    "src/adapter/outbound/storage_analysis/benchmark/thresholds.rs": "9b3ea6ea8c2f709993cec4ae315c4dff3121db5e836c793bc5895b0874993516",
+    "src/adapter/outbound/storage_analysis/live.rs": "85361b0f733f2160feac910ccaba597fe9e8fe323ec0ae11ebb5cad1bc7d3d22",
+    "src/adapter/outbound/storage_analysis/scanner.rs": "81795052b8b91dacaf1861e7249a37f75590ff15c2cb148a7922b2fa35e88373"
+  },
+  "toolchain": "Rust 1.95.0 x86_64-pc-windows-msvc",
+  "native_builds": {
+    "matrix": 0,
+    "separate_threshold": 0,
+    "profile": "all-features libtest, explicit Windows target"
+  },
+  "focused_regression": {
+    "filter": "storage_analysis",
+    "passed": 41,
+    "failed": 0,
+    "ignored": 3,
+    "duration_seconds": 6.67,
+    "scope": "matrix worker source before the separate threshold ignored test was added",
+    "log_sha256": "99dbb7a14f15ae35a1e91d27ac9ce1fdd3f9993c36b5b6904d080d385ba24b3f"
+  },
+  "measurements": {
+    "completed_matrix_scans": 36,
+    "cancelled_matrix_scans": 12,
+    "separate_threshold_scans": 6,
+    "native_overlap_desktop_runs": 4,
+    "quality_assertions": "passed; see linked raw datasets"
+  },
+  "initial_full_gate": {
+    "command": "powershell -File scripts/check_native_pr.ps1 -Mode Full",
+    "exit_code": 1,
+    "log_sha256": "3b5252ff54a79c5109dba837d30f40ff3197097d46c41ae186dd06f708bfed80",
+    "stopped_at": "desktop tests",
+    "desktop": {
+      "files_passed": 77,
+      "files_failed": 4,
+      "files_skipped": 1,
+      "tests_passed": 1200,
+      "tests_failed": 6,
+      "tests_skipped": 7
+    },
+    "failures": [
+      {
+        "file": "desktop/test/gitBranch.test.ts",
+        "test": "lists the commits after the default branch and marks the pushed ones",
+        "message": "Test timed out in 5000ms."
+      },
+      {
+        "file": "desktop/test/gitBranch.test.ts",
+        "test": "asks gh for the PR of the remote branch and compares against the PR base",
+        "message": "expected [] to deeply equal the expected injected gh-runner invocation array"
+      },
+      {
+        "file": "desktop/test/gitHunks.test.ts",
+        "test": "preserves other hunks and pre-staged changes when stage runs",
+        "message": "Test timed out in 5000ms.; cleanup also reported EPERM, Permission denied"
+      },
+      {
+        "file": "desktop/test/gitPublish.test.ts",
+        "test": "pushes the current branch to the branch of the same name and sets the upstream",
+        "message": "Test timed out in 5000ms."
+      },
+      {
+        "file": "desktop/test/gitStatus.test.ts",
+        "test": "stages, unstages and discards one file and leaves the other files alone",
+        "message": "Test timed out in 5000ms."
+      },
+      {
+        "file": "desktop/test/gitStatus.test.ts",
+        "test": "discards a staged new file and a staged rename",
+        "message": "Test timed out in 5000ms."
+      }
+    ],
+    "cause": "not established; these existing Git fixture sources were not modified by this change"
+  },
+  "failed_file_rerun": {
+    "command": "node node_modules/vitest/vitest.mjs run test/gitBranch.test.ts test/gitHunks.test.ts test/gitPublish.test.ts test/gitStatus.test.ts --maxWorkers=1",
+    "cwd": "desktop",
+    "exit_code": 0,
+    "files_passed": 4,
+    "tests_passed": 73,
+    "tests_failed": 0,
+    "tests_skipped": 1,
+    "duration_seconds": 113.78,
+    "timeout_changed": false,
+    "test_source_changed": false,
+    "host_overlap": "partly overlapped another lane Desktop test run; not an unloaded isolated measurement",
+    "log_sha256": "f90483e30d10dc8d1474e91d571d7a9139a155a1bccafd8e5f0cafe527aa6c12"
+  },
+  "unreached_steps_continuation": {
+    "exit_code": 0,
+    "original_gate_script": "scripts/check_native_pr.ps1",
+    "original_gate_sha256": "ea47661bb37ab798b452a3b796cb50aa4921cb4527333184b98086c1f07f0536",
+    "resume_script_sha256": "9c3d5946415e7911831dd0a7b0de6b461a82868606ab66932364f09b4c1be22a",
+    "log_sha256": "07b7ffb6a038abef47e43196b855bed06bfed5de229eb26efa925e4ee528ee87",
+    "method": "Load the unchanged original function bodies, then execute only the stages not reached by the initial Full run.",
+    "desktop_build": "passed",
+    "admin_offline_asset_policy": "passed",
+    "windows_native_target_check": "passed",
+    "windows_contract_filters": 104,
+    "windows_contract_result": "all selected filters completed successfully",
+    "clippy": {
+      "command": "cargo clippy --locked --all-targets --all-features -- -D warnings",
+      "result": "passed"
+    }
+  },
+  "overall_interpretation": "The initial Full invocation failed. A targeted rerun passed and all originally unreached stages passed. This is not a single successful Full invocation.",
+  "fixture_cleanup": {
+    "cleaned_at": "2026-11-26T02:27:56.953Z",
+    "scope": "only these two session-owned synthetic fixtures and their index jobs; source, node_modules, Cargo targets and measurements retained",
+    "records": [
+      {
+        "device": "ssd",
+        "directory_name": "akra-storage-performance-20261126-ssd",
+        "verified_original_files": 8204,
+        "verified_nested_hardlinks": 12,
+        "verified_index_jobs": 29,
+        "manifest_verified": true,
+        "unexpected_entries": 0,
+        "removed": true
+      },
+      {
+        "device": "hdd",
+        "directory_name": "akra-storage-performance-20261126-hdd",
+        "verified_original_files": 8204,
+        "verified_nested_hardlinks": 12,
+        "verified_index_jobs": 29,
+        "manifest_verified": true,
+        "unexpected_entries": 0,
+        "removed": true
+      }
+    ]
+  },
+  "remote_ci": {
+    "queried": false,
+    "waited": false
+  },
+  "real_model_turns": 0
+}
