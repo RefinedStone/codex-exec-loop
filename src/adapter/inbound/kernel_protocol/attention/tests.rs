@@ -79,7 +79,7 @@ fn a_pending_approval_is_a_thread_item_keyed_by_its_approval() {
             "subject": {"kind": "thread", "id": "thread-1"},
             "revision": "approval-9",
             "summary": "Run cargo test",
-            "next": [{"step": "ask_user"}, {"step": "command", "name": "decide_approval"}],
+            "next": [{"step": "query", "name": "thread_activity"}, {"step": "ask_user"}, {"step": "command", "name": "decide_approval"}],
         }])
     );
 }

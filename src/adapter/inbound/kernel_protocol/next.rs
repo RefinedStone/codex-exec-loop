@@ -162,8 +162,10 @@ pub(super) fn attention_next(cause: super::attention::AttentionCause) -> Vec<Nex
     use super::attention::AttentionCause;
     use NextStep as Step;
     match cause {
+        // 결정 명령에는 `server_request_id` 와 상세가 필요하다. 이 항목에는 없으므로 먼저 읽는다.
         AttentionCause::ApprovalPending => {
             vec![
+                Step::query(KernelQueryKind::ThreadActivity),
                 Step::AskUser,
                 Step::command(KernelCommandKind::DecideApproval),
             ]
