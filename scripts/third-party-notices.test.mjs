@@ -28,12 +28,21 @@ test("identical license texts are written once with every user listed", () => {
   const packages = [
     { name: "zeta", version: "1.0.0", license: "MIT" },
     { name: "alpha", version: "2.0.0", license: "MIT" },
-    { name: "nofile", version: "0.1.0", license: "Unlicense" },
   ];
-  const texts = { zeta: ["MIT text\n"], alpha: ["MIT text\n"], nofile: [] };
+  const texts = { zeta: ["MIT text\n"], alpha: ["MIT text\n"] };
   const output = renderNotices(packages, (pkg) => texts[pkg.name]);
 
   assert.equal(output.match(/MIT text/g).length, 1);
   assert.match(output, /Used by:\n {2}alpha 2\.0\.0 \(MIT\)\n {2}zeta 1\.0\.0 \(MIT\)/);
-  assert.match(output, /without a license file[\s\S]*nofile 0\.1\.0 \(Unlicense\)/);
+});
+
+test("a shipped crate without a license text fails the generation", () => {
+  const packages = [
+    { name: "alpha", version: "2.0.0", license: "MIT" },
+    { name: "ratatui", version: "0.30.0", license: "MIT" },
+  ];
+  assert.throws(
+    () => renderNotices(packages, (pkg) => (pkg.name === "alpha" ? ["MIT text\n"] : [])),
+    /no license text for:\n {2}ratatui 0\.30\.0 \(MIT\)/,
+  );
 });

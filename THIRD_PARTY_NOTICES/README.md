@@ -19,3 +19,7 @@ node scripts/third-party-notices.mjs
 ```
 
 `node scripts/third-party-notices.mjs --check` fails when the committed file is out of date.
+Both fail when a shipped crate has no license text in its package. For such a crate, add the
+upstream license file at the crate's published commit to
+[`../scripts/rust-license-fallbacks/`](../scripts/rust-license-fallbacks/index.json), keyed by
+crate name and version.

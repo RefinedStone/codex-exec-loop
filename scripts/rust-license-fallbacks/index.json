@@ -1,0 +1,50 @@
+{
+  "jsonschema-regex 0.61.2": {
+    "file": "jsonschema-LICENSE",
+    "source": "https://github.com/Stranger6667/jsonschema/blob/0e82636fde8b2afb5e712ede6c261166ea10fc17/LICENSE"
+  },
+  "jsonschema-value 0.61.2": {
+    "file": "jsonschema-LICENSE",
+    "source": "https://github.com/Stranger6667/jsonschema/blob/0e82636fde8b2afb5e712ede6c261166ea10fc17/LICENSE"
+  },
+  "ratatui 0.30.0": {
+    "file": "ratatui-LICENSE",
+    "source": "https://github.com/ratatui/ratatui/blob/0a2a7c0363a4806b0cf05c1915bf7cdd438f756c/LICENSE"
+  },
+  "ratatui-core 0.1.0": {
+    "file": "ratatui-LICENSE",
+    "source": "https://github.com/ratatui/ratatui/blob/0a2a7c0363a4806b0cf05c1915bf7cdd438f756c/LICENSE"
+  },
+  "ratatui-crossterm 0.1.0": {
+    "file": "ratatui-LICENSE",
+    "source": "https://github.com/ratatui/ratatui/blob/0a2a7c0363a4806b0cf05c1915bf7cdd438f756c/LICENSE"
+  },
+  "ratatui-termion 0.1.0": {
+    "file": "ratatui-LICENSE",
+    "source": "https://github.com/ratatui/ratatui/blob/0a2a7c0363a4806b0cf05c1915bf7cdd438f756c/LICENSE"
+  },
+  "ratatui-termwiz 0.1.0": {
+    "file": "ratatui-LICENSE",
+    "source": "https://github.com/ratatui/ratatui/blob/0a2a7c0363a4806b0cf05c1915bf7cdd438f756c/LICENSE"
+  },
+  "ratatui-widgets 0.3.0": {
+    "file": "ratatui-LICENSE",
+    "source": "https://github.com/ratatui/ratatui/blob/0a2a7c0363a4806b0cf05c1915bf7cdd438f756c/LICENSE"
+  },
+  "uuid-simd 0.8.0": {
+    "file": "nugine-simd-LICENSE",
+    "source": "https://github.com/Nugine/simd/blob/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE"
+  },
+  "vsimd 0.8.0": {
+    "file": "nugine-simd-LICENSE",
+    "source": "https://github.com/Nugine/simd/blob/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE"
+  },
+  "vtparse 0.6.2": {
+    "file": "wezterm-LICENSE.md",
+    "source": "https://github.com/wezterm/wezterm/blob/edeae72b5fc55c7fa4aa1d08bbefd08c5493f757/LICENSE.md"
+  },
+  "wezterm-input-types 0.1.0": {
+    "file": "wezterm-LICENSE.md",
+    "source": "https://github.com/wezterm/wezterm/blob/d5ca5509b95edc31291ba29bd1fcbf3f0b12c92d/LICENSE.md"
+  }
+}
