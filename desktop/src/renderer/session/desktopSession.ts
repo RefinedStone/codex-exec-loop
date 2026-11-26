@@ -1235,8 +1235,7 @@ export class DesktopSession {
 
 const FILE_SEARCH_LIMIT = 20;
 
-/** 메시지 버스와 세션을 잇는다. 반환한 함수로 연결을 끊는다. */
-/** 글과 첨부 이미지(#2838)를 턴 입력으로 만든다. 이미지는 글 뒤에 붙는다. 원본은 로그에 남기지 않는다. */
+/** 글과 첨부 이미지(#2838)를 턴 입력으로 만든다. 이미지는 글 뒤에 붙는다. 원본은 로그에 남기지 않는다(Gateway 녹화도 가린다). */
 export function userInput(text: string, images: readonly string[] = []): UserInput[] {
   return [
     ...(text ? [{ type: "text" as const, text, text_elements: [] }] : []),
@@ -1244,6 +1243,7 @@ export function userInput(text: string, images: readonly string[] = []): UserInp
   ];
 }
 
+/** 메시지 버스와 세션을 잇는다. 반환한 함수로 연결을 끊는다. */
 export function startDesktopSession(bridge: AkraBridge, store: SessionStore, clientVersion: string): () => void {
   const session = new DesktopSession(bridge, store, clientVersion);
   session.start();

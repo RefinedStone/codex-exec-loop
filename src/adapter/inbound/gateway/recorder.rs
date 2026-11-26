@@ -2,6 +2,7 @@
 //! 녹화 파일은 실제 대화를 담으므로 `$AKRA_HOME/recordings/` 의 사용자 전용 디렉터리에만 쓰고, 저장소에
 //! 커밋하지 않는다. 턴 없이 클라이언트를 시험할 때 재생 자료로 쓴다 (D-13).
 
+use std::borrow::Cow;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -9,11 +10,12 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
-use serde_json::json;
+use serde_json::{Value, json};
 
 pub(super) const RECORD_ENV_VAR: &str = "AKRA_GATEWAY_RECORD";
 const RECORDINGS_DIRECTORY_NAME: &str = "recordings";
 const MAX_NAME_ATTEMPTS: u32 = 100;
+const UNPARSED_DATA_URL_MESSAGE: &str = "<redacted: non-JSON message with a data URL>";
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum RecordDirection {
@@ -110,7 +112,7 @@ impl SessionRecording {
         let line = json!({
             "at": chrono::Utc::now().to_rfc3339(),
             "direction": direction.label(),
-            "text": text,
+            "text": redact_data_urls(text),
         });
         let mut file = self
             .file
@@ -122,11 +124,112 @@ impl SessionRecording {
     }
 }
 
+/// 첨부 이미지 원본(`data:` URL)은 녹화에 남기지 않는다 (#2838). 형식과 길이만 남긴다. 보내는 글은 바꾸지 않는다.
+fn redact_data_urls(text: &str) -> Cow<'_, str> {
+    if !text.contains("data:") {
+        return Cow::Borrowed(text);
+    }
+    let Ok(mut value) = serde_json::from_str::<Value>(text) else {
+        return Cow::Borrowed(UNPARSED_DATA_URL_MESSAGE);
+    };
+    if redact_data_url_values(&mut value) {
+        Cow::Owned(value.to_string())
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
+/// 가린 값이 있으면 true 이다. 없으면 녹화는 원래 글을 그대로 쓴다.
+fn redact_data_url_values(value: &mut Value) -> bool {
+    match value {
+        Value::String(text) if text.starts_with("data:") => {
+            let header = text.split_once(',').map_or("data:", |(header, _)| header);
+            *text = format!("{header},<redacted {} bytes>", text.len());
+            true
+        }
+        // 모든 자식을 돈다. `any` 는 첫 이미지 뒤에서 멈춰 나머지를 가리지 않는다.
+        Value::Array(items) => {
+            let mut redacted = false;
+            for item in items {
+                redacted |= redact_data_url_values(item);
+            }
+            redacted
+        }
+        Value::Object(fields) => {
+            let mut redacted = false;
+            for field in fields.values_mut() {
+                redacted |= redact_data_url_values(field);
+            }
+            redacted
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::Value;
 
     use super::{GatewayRecorder, RecordDirection};
+
+    #[test]
+    fn recordings_keep_the_message_but_not_the_image_data_url() {
+        let directory = crate::test_utils::platform_safe_temp_dir().join(format!(
+            "akra-gateway-recorder-image-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let recorder = GatewayRecorder::create(&directory).unwrap();
+        let session = recorder.open_session().unwrap();
+        let image = "data:image/png;base64,iVBORw0KGgoSECRETPIXELS";
+        let request = serde_json::json!({
+            "id": 7,
+            "method": "turn/start",
+            "params": {"input": [{"type": "text", "text": "see the metadata: below"}, {"type": "image", "url": image}, {"type": "image", "url": image}]},
+        })
+        .to_string();
+        session.record(RecordDirection::Client, &request);
+        session.record(
+            RecordDirection::Client,
+            "not json data:image/png;base64,SECRET",
+        );
+        let untouched = r#"{"method":"x","params":{"note":"metadata: kept"}}"#;
+        session.record(RecordDirection::Client, untouched);
+
+        let file = std::fs::read_dir(&directory)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let contents = std::fs::read_to_string(file).unwrap();
+        assert!(
+            !contents.contains("SECRET"),
+            "image bytes must not be recorded"
+        );
+        let lines: Vec<Value> = contents
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let recorded: Value = serde_json::from_str(lines[0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(recorded["method"], "turn/start");
+        assert_eq!(
+            recorded["params"]["input"][0]["text"],
+            "see the metadata: below"
+        );
+        assert_eq!(
+            recorded["params"]["input"][1]["url"],
+            format!("data:image/png;base64,<redacted {} bytes>", image.len())
+        );
+        assert_eq!(
+            lines[2]["text"], untouched,
+            "messages without a data URL stay verbatim"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
 
     #[test]
     fn each_session_writes_its_own_jsonl_file_with_directions() {
