@@ -385,7 +385,7 @@ mod tests {
     /// process for the same repository moves nothing, and an alias path does not move a folder twice.
     #[test]
     fn workspace_layout_moves_once_per_worktree_under_the_repository_lock() {
-        let (root, checkout, worktree) = repository_with_linked_worktree("layout");
+        let (_root, checkout, worktree) = repository_with_linked_worktree("layout");
         let legacy_file = ".codex-exec-loop/planning/result-output.md";
         let moved_file = ".akra/planning/result-output.md";
         for folder in [&checkout, &worktree] {
@@ -411,7 +411,7 @@ mod tests {
 
         #[cfg(unix)]
         {
-            let alias = root.0.join("worktree-alias");
+            let alias = _root.0.join("worktree-alias");
             std::os::unix::fs::symlink(&worktree, &alias).expect("alias link");
             let alias_lock = acquire(alias.to_str().unwrap()).expect("alias lock");
             assert_eq!(read(&worktree, moved_file).unwrap(), worktree);
