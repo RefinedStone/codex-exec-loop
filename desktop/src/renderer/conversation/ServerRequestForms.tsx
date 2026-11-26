@@ -2,9 +2,21 @@
 // 응답은 그 요청의 응답 형식으로 만들어 `onRespond` 로 보낸다.
 import { type FormEvent, useState } from "react";
 
+import type { FileSystemPath } from "../../shared/protocol/generated/v2/FileSystemPath";
 import type { RequestPermissionProfile } from "../../shared/protocol/generated/v2/RequestPermissionProfile";
 import type { ToolRequestUserInputQuestion } from "../../shared/protocol/generated/v2/ToolRequestUserInputQuestion";
 import { type ElicitationField, type ElicitationRequest, elicitationResponse, userInputResponse } from "./approvals";
+import { initialElicitationValue, validateElicitation } from "./elicitation";
+
+function permissionPath(path: FileSystemPath): string {
+  if (path.type === "path") return path.path;
+  if (path.type === "glob_pattern") return "glob: " + path.pattern;
+  const special = path.value;
+  const scope = special.kind === "unknown" ? special.kind + ": " + special.path : special.kind;
+  return scope + ("subpath" in special && special.subpath !== null ? " / " + special.subpath : "");
+}
+
+const ACCESS_LABEL = { read: "읽기", write: "쓰기", deny: "거부" } as const;
 
 export function PermissionsDetail({ permissions }: { permissions: RequestPermissionProfile }) {
   const read = permissions.fileSystem?.read ?? [];
@@ -14,7 +26,12 @@ export function PermissionsDetail({ permissions }: { permissions: RequestPermiss
       {permissions.network?.enabled && <li>네트워크 사용</li>}
       {read.map((path) => <li key={`r:${path}`}>읽기: <code>{path}</code></li>)}
       {write.map((path) => <li key={`w:${path}`}>쓰기: <code>{path}</code></li>)}
-      {(permissions.fileSystem?.entries?.length ?? 0) > 0 && <li>파일 시스템 항목 {permissions.fileSystem!.entries!.length}개</li>}
+      {permissions.fileSystem?.entries?.map((entry, index) => (
+        <li key={index} data-testid="permission-entry">{ACCESS_LABEL[entry.access]} ({entry.access}): <code>{permissionPath(entry.path)}</code></li>
+      ))}
+      {permissions.fileSystem?.globScanMaxDepth !== undefined && (
+        <li>glob 검색 최대 깊이: {permissions.fileSystem.globScanMaxDepth}</li>
+      )}
     </ul>
   );
 }
@@ -78,22 +95,17 @@ export function UserInputForm({ questions, onRespond }: {
   );
 }
 
-function initialValue(field: ElicitationField): unknown {
-  if (field.defaultValue !== null) return field.defaultValue;
-  if (field.input === "boolean") return false;
-  if (field.input === "multiSelect") return [];
-  return "";
-}
-
 function FieldInput({ field, value, onChange }: { field: ElicitationField; value: unknown; onChange(value: unknown): void }) {
   if (field.input === "boolean") {
     return <input type="checkbox" checked={value === true} onChange={(event) => onChange(event.target.checked)} />;
   }
   if (field.input === "select") {
+    const selected = value === undefined ? -1 : field.options.findIndex((option) => option.value === value);
     return (
-      <select value={String(value ?? "")} required={field.required} onChange={(event) => onChange(event.target.value)}>
-        <option value="" disabled>선택</option>
-        {field.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+      <select value={selected < 0 ? "" : String(selected)} aria-required={field.required}
+        onChange={(event) => onChange(event.target.value === "" ? undefined : field.options[Number(event.target.value)]!.value)}>
+        <option value="">선택</option>
+        {field.options.map((option, index) => <option key={option.value} value={String(index)}>{option.label || "(빈 문자열)"}</option>)}
       </select>
     );
   }
@@ -105,53 +117,76 @@ function FieldInput({ field, value, onChange }: { field: ElicitationField; value
           <label key={option.value}>
             <input type="checkbox" checked={selected.includes(option.value)}
               onChange={(event) => onChange(event.target.checked ? [...selected, option.value] : selected.filter((item) => item !== option.value))} />
-            {option.label}
+            {option.label || "(빈 문자열)"}
           </label>
         ))}
       </span>
     );
   }
   const numeric = field.input === "number" || field.input === "integer";
+  const type = numeric ? "number" : field.format === "email" ? "email" : field.format === "uri" ? "url" : "text";
   return (
-    <input type={numeric ? "number" : "text"} step={field.input === "integer" ? 1 : "any"} required={field.required}
+    <input type={type} step={field.input === "integer" ? 1 : "any"} aria-required={field.required}
+      min={field.minimum} max={field.maximum}
       value={String(value ?? "")} onChange={(event) => onChange(event.target.value)} />
   );
 }
 
-/** 양식 값을 스키마 타입으로 바꾼다. 비운 선택 칸은 넣지 않는다. */
-function elicitationContent(fields: ElicitationField[], values: Record<string, unknown>): Record<string, unknown> {
-  const content: Record<string, unknown> = {};
-  for (const field of fields) {
-    const value = values[field.name];
-    if (value === "" || value === undefined) continue;
-    content[field.name] = field.input === "number" || field.input === "integer" ? Number(value) : value;
-  }
-  return content;
+function fieldHint(field: ElicitationField): string {
+  return [
+    field.minimum !== undefined ? "최소 " + field.minimum : null,
+    field.maximum !== undefined ? "최대 " + field.maximum : null,
+    field.minLength !== undefined ? "최소 " + field.minLength + "자" : null,
+    field.maxLength !== undefined ? "최대 " + field.maxLength + "자" : null,
+    field.minItems !== undefined ? "최소 " + field.minItems + "개" : null,
+    field.maxItems !== undefined ? "최대 " + field.maxItems + "개" : null,
+    field.format,
+  ].filter(Boolean).join(" · ");
 }
 
 export function ElicitationForm({ request, onRespond }: { request: ElicitationRequest; onRespond(result: unknown): void }) {
   const fields = request.fields;
   const [values, setValues] = useState<Record<string, unknown>>(() =>
-    Object.fromEntries((fields ?? []).map((field) => [field.name, initialValue(field)])));
+    Object.fromEntries((fields ?? []).map((field) => [field.name, initialElicitationValue(field)])));
+  const [error, setError] = useState<string | null>(null);
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    onRespond(elicitationResponse("accept", fields ? elicitationContent(fields, values) : null));
+    if (fields) {
+      const result = validateElicitation(fields, values);
+      if (result.error !== null) { setError(result.error); return; }
+      onRespond(elicitationResponse("accept", result.content));
+    } else if (request.url !== null) {
+      onRespond(elicitationResponse("accept"));
+    }
   };
   const canAccept = request.url !== null || fields !== null;
   return (
-    <form className="approval-form" onSubmit={submit} data-testid="elicitation-form">
+    <form className="approval-form" noValidate onSubmit={submit} data-testid="elicitation-form">
       <p className="approval-server">MCP 서버 <code>{request.serverName}</code></p>
       <p>{request.message}</p>
       {request.url && (
         <p>이 주소에서 진행한 뒤 완료를 누르세요: <code className="approval-url" data-testid="elicitation-url">{request.url}</code></p>
       )}
-      {fields?.map((field) => (
-        <label key={field.name} className="approval-field">
-          <span>{field.label}{field.required ? " *" : ""}</span>
-          <FieldInput field={field} value={values[field.name]} onChange={(value) => setValues((current) => ({ ...current, [field.name]: value }))} />
+      {fields?.map((field) => {
+        const input = <FieldInput field={field} value={values[field.name]} onChange={(value) => {
+          setValues((current) => ({ ...current, [field.name]: value }));
+          setError(null);
+        }} />;
+        const detail = <>
           {field.description && <span className="muted">{field.description}</span>}
-        </label>
-      ))}
+          {fieldHint(field) && <span className="muted">{fieldHint(field)}</span>}
+        </>;
+        return field.input === "multiSelect" ? (
+          <fieldset key={field.name} className="approval-question approval-field">
+            <legend>{field.label}{field.required ? " *" : ""}</legend>{input}{detail}
+          </fieldset>
+        ) : (
+          <label key={field.name} className="approval-field">
+            <span>{field.label}{field.required ? " *" : ""}</span>{input}{detail}
+          </label>
+        );
+      })}
+      {error && <p role="alert" data-testid="elicitation-error">{error}</p>}
       {!canAccept && <p data-testid="elicitation-unsupported">이 양식은 Akra Desktop 이 그릴 수 없습니다. 거절하거나 취소하세요.</p>}
       <div className="approval-buttons">
         {canAccept && <button type="submit" className="button primary" data-testid="elicitation-accept">{request.url ? "완료" : "보내기"}</button>}
