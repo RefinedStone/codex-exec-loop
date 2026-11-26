@@ -856,6 +856,11 @@ export function App() {
   };
 
   const composerActions: ComposerActions = {
+    // `@` 파일 언급은 열린 대화의 폴더, 새 스레드 화면이면 고른 폴더에서 찾는다 (#2837).
+    searchFiles: async (query) => {
+      const cwd = view === "home" ? useUiStore.getState().homeCwd : openCwd;
+      return cwd && session.current ? session.current.searchFiles(cwd, query) : [];
+    },
     modelSettings: session.current?.nextTurnSettings,
     queue: session.current?.nextTurnQueue,
     queueMessage: (text) => session.current?.queueMessage(text),

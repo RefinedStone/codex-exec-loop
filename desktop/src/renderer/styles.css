@@ -2420,6 +2420,23 @@ button.issues-title:hover {
   overflow-y: auto;
   margin: 0;
   padding: 4px;
+}
+
+/* 입력창의 `@` 파일 후보 (#2837). */
+.composer {
+  position: relative;
+}
+
+.mention-list {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  z-index: 30;
+  width: min(520px, 100%);
+  max-height: 240px;
+  margin: 0 0 4px;
+  padding: 4px;
+  overflow-y: auto;
   list-style: none;
   border: 1px solid var(--line);
   border-radius: var(--radius-m);
@@ -2433,6 +2450,11 @@ button.issues-title:hover {
 .conversation-menu button {
   width: 100%;
   padding: 6px 10px;
+}
+
+.mention-list button {
+  width: 100%;
+  padding: 4px 8px;
   border: 0;
   background: none;
   color: inherit;
@@ -2463,5 +2485,12 @@ button.issues-title:hover {
 }
 .conversation-menu button:hover,
 .conversation-menu button:focus-visible {
+}
+
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-s);
+}
+
+.mention-list button.selected {
   background: var(--bg-hover, rgb(127 127 127 / 0.12));
 }

@@ -8,6 +8,7 @@ import { Icon } from "../design/icons";
 import { useDesktopStore } from "../session/desktopStore";
 import { HOME_DRAFT, setDraft as setDraftFor, useUiStore } from "../session/uiStore";
 import { isSendKey, recallCursor } from "./composerKeys";
+import { type ActiveMention, activeMention, applyMention } from "./fileMention";
 import { isSentComposerDraft, runComposerAction, useComposerRequests } from "./composerAction";
 import { PlanList } from "./ConversationView";
 import { loadPrompts, rememberPrompt } from "./promptHistory";
@@ -18,6 +19,8 @@ import type { NextTurnSettingsController } from "../session/nextTurnSettings";
 import { NextTurnSettings } from "./NextTurnSettings";
 
 export interface ComposerActions {
+  /** 대화 폴더의 파일을 찾는다 (#2837). 없으면 `@` 후보를 보이지 않는다. */
+  searchFiles?(query: string): Promise<string[]>;
   modelSettings?: NextTurnSettingsController;
   queue?: NextTurnQueue;
   queueMessage?(text: string): void;
@@ -29,6 +32,8 @@ export interface ComposerActions {
 }
 
 const MAX_INPUT_HEIGHT_PX = 220;
+/** 글쇠를 누를 때마다 찾지 않게 잠깐 기다린다. */
+const MENTION_SEARCH_DELAY_MS = 120;
 /** 이 안에서 누른 글자 키는 그 칸의 것이다. 입력창으로 옮기지 않는다. */
 const TYPING_TARGETS = "input, textarea, select, button, a[href], [contenteditable], .terminal-body, .right-panel, .overlay, dialog";
 
@@ -150,7 +155,60 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
     return true;
   };
 
+  // `@` 파일 언급이다 (#2837). 입력이 바뀔 때마다 번호를 올려서 늦게 온 결과(이전 글, 다른 대화)를 버린다.
+  // 입력창은 스레드마다 새로 만들므로, 떠난 스레드의 결과는 이 번호로 막힌다.
+  const [mention, setMention] = useState<{ at: ActiveMention; files: string[]; cursor: number } | null>(null);
+  const mentionSeq = useRef(0);
+  useEffect(() => () => {
+    mentionSeq.current += 1;
+  }, []);
+  const updateMention = (text: string, caret: number) => {
+    const seq = ++mentionSeq.current;
+    const at = actions.searchFiles ? activeMention(text, caret) : null;
+    if (!at || !actions.searchFiles) {
+      setMention(null);
+      return;
+    }
+    const search = actions.searchFiles;
+    window.setTimeout(() => {
+      if (mentionSeq.current !== seq) return;
+      search(at.query).then(
+        (files) => { if (mentionSeq.current === seq) setMention(files.length > 0 ? { at, files, cursor: 0 } : null); },
+        () => { if (mentionSeq.current === seq) setMention(null); },
+      );
+    }, MENTION_SEARCH_DELAY_MS);
+  };
+  const chooseMention = (path: string) => {
+    if (!mention) return;
+    const caret = input.current?.selectionStart ?? draft.length;
+    const next = applyMention(draft, mention.at, caret, path);
+    mentionSeq.current += 1;
+    setMention(null);
+    setDraft(next.text);
+    requestAnimationFrame(() => input.current?.setSelectionRange(next.caret, next.caret));
+  };
+
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mention && !event.nativeEvent.isComposing) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        setMention({ ...mention, cursor: (mention.cursor + step + mention.files.length) % mention.files.length });
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        chooseMention(mention.files[mention.cursor]!);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        mentionSeq.current += 1;
+        setMention(null);
+        return;
+      }
+    }
     if (isSendKey(event)) {
       event.preventDefault();
       send();
@@ -182,11 +240,24 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
         {!home && transcript && actions.modelSettings && <NextTurnSettings key={transcript.threadId}
           controller={actions.modelSettings} threadId={transcript.threadId} disabled={!connected || writerElsewhere} />}
         <div className="composer">
+          {mention && (
+            <ul className="mention-list" role="listbox" aria-label="파일 언급" data-testid="mention-list">
+              {mention.files.map((path, index) => (
+                <li key={path} role="option" aria-selected={index === mention.cursor}>
+                  <button type="button" className={index === mention.cursor ? "selected" : undefined}
+                    onMouseDown={(event) => event.preventDefault()} onClick={() => chooseMention(path)}>{path}</button>
+                </li>
+              ))}
+            </ul>
+          )}
           <textarea
             ref={input}
             value={draft}
             rows={1}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              updateMention(event.target.value, event.target.selectionStart);
+            }}
             onKeyDown={onKeyDown}
             placeholder={writerElsewhere ? "다른 Codex 앱이 이 스레드를 쓰는 동안 보낼 수 없습니다" : inProgress ? "진행 중인 턴에 추가 지시 (steer)" : "무엇을 할까요?"}
             disabled={disabled}
