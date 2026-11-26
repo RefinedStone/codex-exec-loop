@@ -7,6 +7,24 @@ use std::time::{Duration, Instant};
 use super::*;
 use crate::application::port::outbound::issue_code_validator_runner_port::IssueCodeValidatorRunRequest;
 
+// These native checks never cancel; they shadow the glob-imported runners with an idle cancellation.
+fn run(request: &IssueCodeValidatorRunRequest) -> Outcome {
+    super::run(request, &IssueCodeValidatorCancellation::new())
+}
+
+fn execute(
+    identity: &security::Identity,
+    content: &[u8],
+    request: &IssueCodeValidatorRunRequest,
+) -> std::io::Result<Outcome> {
+    super::execute(
+        identity,
+        content,
+        request,
+        &IssueCodeValidatorCancellation::new(),
+    )
+}
+
 pub(super) struct Fixture {
     root: PathBuf,
     image: PathBuf,
@@ -188,6 +206,31 @@ fn native_windows_validator_bounds_runtime_output_and_reports_rejection_or_crash
     };
     assert!(message.len() <= 4096);
     assert!(message.chars().all(|value| value == '\u{fffd}'));
+}
+
+#[test]
+fn native_windows_validator_user_cancel_ends_the_owned_job_and_cleans_up() {
+    let fixture = Fixture::create();
+    let mut request = fixture.request("timeout");
+    request.timeout = Duration::from_secs(30);
+    let approved = storage::approved_content(&request).unwrap();
+    let identity = security::Identity::create().unwrap();
+    let local = crate::private_fs::windows_local_app_data_path().unwrap();
+    let workspace_path = local.join("Temp").join(&identity.name);
+    let profile_path = local.join("Packages").join(&identity.name);
+    let cancellation = IssueCodeValidatorCancellation::new();
+    let started = Instant::now();
+    let outcome = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            std::thread::sleep(Duration::from_millis(300));
+            assert!(cancellation.cancel());
+        });
+        super::execute(&identity, &approved, &request, &cancellation).unwrap()
+    });
+    assert_eq!(outcome, Outcome::NotRun(NotRun::Cancelled));
+    assert!(started.elapsed() < Duration::from_secs(10));
+    assert!(!workspace_path.exists(), "owned stage removed after cancel");
+    assert!(!profile_path.exists(), "owned profile removed after cancel");
 }
 
 #[test]

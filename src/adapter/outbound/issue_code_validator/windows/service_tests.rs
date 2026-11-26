@@ -1,7 +1,8 @@
 use super::tests::Fixture;
 use crate::adapter::outbound::issue_code_validator::SandboxedIssueCodeValidatorRunnerAdapter;
 use crate::application::port::outbound::issue_code_validator_runner_port::{
-    IssueCodeValidatorNotRun as NotRun, IssueCodeValidatorRunOutcome as Outcome,
+    IssueCodeValidatorCancellation, IssueCodeValidatorNotRun as NotRun,
+    IssueCodeValidatorRunOutcome as Outcome,
 };
 use crate::application::service::issue_code_validator::{
     IssueCodeValidatorResult, gate_issue_publish_with_code_validators,
@@ -44,6 +45,7 @@ fn native_windows_required_validator_service_gate_uses_real_sandbox_outcomes() {
         Some(&requirements),
         &policy,
         &runner,
+        &IssueCodeValidatorCancellation::new(),
     )
     .expect("actual native validator passes");
     assert_eq!(passed.shared_copy(), &copy("pass"));
@@ -62,6 +64,7 @@ fn native_windows_required_validator_service_gate_uses_real_sandbox_outcomes() {
             Some(&requirements),
             &policy,
             &runner,
+            &IssueCodeValidatorCancellation::new(),
         )
         .unwrap_err();
         assert_eq!(
@@ -81,6 +84,7 @@ fn native_windows_required_validator_service_gate_uses_real_sandbox_outcomes() {
                 Some(&requirements),
                 policy,
                 &runner,
+                &IssueCodeValidatorCancellation::new(),
             )
             .unwrap_err(),
             IssuePublishBlocked::CodeValidator(vec![IssueCodeValidatorResult {

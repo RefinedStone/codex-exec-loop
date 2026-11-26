@@ -141,7 +141,8 @@ pub struct IssueDraftValidationError {
     pub field: &'static str,
     /// 템플릿 필드나 섹션의 제목 또는 코드 검증기의 ID 이다. 제목 칸이면 `None` 이다.
     pub label: Option<String>,
-    /// `missing`, `empty`, `invalid_format`, `failed`(필수 코드 검증기가 통과하지 않았다) 중 하나이다.
+    /// `missing`, `empty`, `invalid_format`, `failed`(필수 코드 검증기가 통과하지 않았다),
+    /// `cancelled`(사용자가 코드 검증을 취소했다) 중 하나이다.
     pub kind: &'static str,
 }
 
@@ -284,6 +285,9 @@ pub struct IssueDraftPublishRequest {
     /// 사용자가 복원 연결 없이 공유본만 게시한다고 확인했으면 `true` 이다.
     #[serde(default)]
     pub shared_copy_only: bool,
+    /// 클라이언트가 정한 검증 ID 이다. 주면 실행 중인 코드 검증을 `cancel_validation` 으로 취소할 수 있다.
+    #[serde(default)]
+    pub validation_id: Option<String>,
 }
 
 /// 게시 요청의 결과이다.
@@ -363,6 +367,9 @@ pub struct IssueCreationPublishRequest {
     pub approval: IssueCreationApproval,
     #[serde(default)]
     pub shared_copy_only: bool,
+    /// 클라이언트가 정한 검증 ID 이다. 주면 실행 중인 코드 검증을 `cancel_validation` 으로 취소할 수 있다.
+    #[serde(default)]
+    pub validation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -468,4 +475,9 @@ pub trait IssueDraftPort: Send + Sync {
 
     /// 사용자가 결과 확인을 그만둔다.
     fn abandon(&self, cwd: &str, intent_id: &str) -> Result<IssueDraftIntent>;
+
+    /// 실행 중인 게시 검증을 취소한다. 받으면 `true`, 이미 끝났거나 모르는 ID 이면 `false` 이다.
+    fn cancel_validation(&self, _validation_id: &str) -> Result<bool> {
+        anyhow::bail!("issue validation cancel is unavailable")
+    }
 }

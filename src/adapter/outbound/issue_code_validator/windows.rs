@@ -2,8 +2,8 @@
 //! Unsupported creation/token/access/Job/mitigation capabilities fail before ResumeThread.
 //! Each run owns a fresh disposable profile; no existing profile or host ACL is repaired.
 use crate::application::port::outbound::issue_code_validator_runner_port::{
-    IssueCodeValidatorNotRun as NotRun, IssueCodeValidatorRunOutcome as Outcome,
-    IssueCodeValidatorRunRequest,
+    IssueCodeValidatorCancellation, IssueCodeValidatorNotRun as NotRun,
+    IssueCodeValidatorRunOutcome as Outcome, IssueCodeValidatorRunRequest,
 };
 
 #[path = "windows/handles.rs"]
@@ -23,7 +23,10 @@ mod storage;
 #[path = "windows/tests.rs"]
 mod tests;
 
-pub(super) fn run(request: &IssueCodeValidatorRunRequest) -> Outcome {
+pub(super) fn run(
+    request: &IssueCodeValidatorRunRequest,
+    cancellation: &IssueCodeValidatorCancellation,
+) -> Outcome {
     if !cfg!(target_arch = "x86_64") {
         return Outcome::NotRun(NotRun::IsolationUnavailable);
     }
@@ -39,7 +42,7 @@ pub(super) fn run(request: &IssueCodeValidatorRunRequest) -> Outcome {
     };
     let outcome = (|| {
         let identity = security::Identity::create()?;
-        execute(&identity, &content, request)
+        execute(&identity, &content, request, cancellation)
     })();
     match outcome {
         Ok(outcome) => outcome,
@@ -58,11 +61,12 @@ fn execute(
     identity: &security::Identity,
     content: &[u8],
     request: &IssueCodeValidatorRunRequest,
+    cancellation: &IssueCodeValidatorCancellation,
 ) -> std::io::Result<Outcome> {
     let mut profile = profile::Profile::create(identity)?;
     let execution = (|| {
         let mut workspace = storage::Workspace::create(identity, content, &request.input_json)?;
-        let result = process::run(identity, &workspace, request.timeout);
+        let result = process::run(identity, &workspace, request.timeout, cancellation);
         workspace.cleanup()?;
         result
     })();

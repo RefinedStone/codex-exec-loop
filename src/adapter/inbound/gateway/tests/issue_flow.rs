@@ -34,7 +34,8 @@ use crate::application::port::inbound::issue_handoff_port::{
 use crate::application::port::outbound::evidence_vault_port::VaultRestoreResponse;
 use crate::application::port::outbound::issue_automation_policy_source_port::IssueAutomationPolicySourcePort;
 use crate::application::port::outbound::issue_code_validator_runner_port::{
-    IssueCodeValidatorRunOutcome, IssueCodeValidatorRunRequest, IssueCodeValidatorRunnerPort,
+    IssueCodeValidatorCancellation, IssueCodeValidatorRunOutcome, IssueCodeValidatorRunRequest,
+    IssueCodeValidatorRunnerPort,
 };
 use crate::application::port::outbound::issue_policy_source_port::IssuePolicySourcePort;
 use crate::application::port::outbound::issue_publish_intent_journal_port::IssuePublishIntentJournalPort;
@@ -263,7 +264,11 @@ impl IssueAutomationPolicySourcePort for AutomationFiles {
 struct NoCodeValidators;
 
 impl IssueCodeValidatorRunnerPort for NoCodeValidators {
-    fn run(&self, _: IssueCodeValidatorRunRequest) -> IssueCodeValidatorRunOutcome {
+    fn run(
+        &self,
+        _: IssueCodeValidatorRunRequest,
+        _: &IssueCodeValidatorCancellation,
+    ) -> IssueCodeValidatorRunOutcome {
         unreachable!("the policy selects no code validator")
     }
 }

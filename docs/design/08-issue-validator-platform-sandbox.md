@@ -33,7 +33,7 @@ cargo test --locked --lib adapter::outbound::issue_code_validator::linux::tests:
 cargo test --locked --lib adapter::outbound::issue_code_validator::linux::tests::native_profile_executes_only_inside_the_declared_boundaries -- --ignored --exact
 ```
 
-Ubuntu 22.04 + 고정 upstream bubblewrap 0.13.1에서 network namespace, root 밖 파일/쓰기 차단, timeout 및 detach 자식 제거와 실제 필수 검증기 service 게시 차단까지 통과했다. 다른 배포판별 경로/호스트 정책과 cgroup 집계 quota는 별도 검증 대상이다. Windows의 실제 AppContainer 실행/격리·네트워크·Job·해시 검증과 게시 관문 연결은 아래 구현을 따른다. 실행 중 사용자 취소 전파는 기존 경로에 없어 남은 작업이다.
+Ubuntu 22.04 + 고정 upstream bubblewrap 0.13.1에서 network namespace, root 밖 파일/쓰기 차단, timeout 및 detach 자식 제거와 실제 필수 검증기 service 게시 차단까지 통과했다. 다른 배포판별 경로/호스트 정책과 cgroup 집계 quota는 별도 검증 대상이다. Windows의 실제 AppContainer 실행/격리·네트워크·Job·해시 검증과 게시 관문 연결은 아래 구현을 따른다. 실행 중 사용자 취소는 모든 runner의 제한 시간 정리 경로를 공유한다([사용자 취소](../reference/issue-validator-windows.md#사용자-취소)).
 
 참고: [bubblewrap upstream man page](https://github.com/containers/bubblewrap/blob/main/bwrap.xml), [Debian bwrap(1)](https://manpages.debian.org/trixie/bubblewrap/bwrap.1.en.html).
 
@@ -45,4 +45,4 @@ Ubuntu 22.04 + 고정 upstream bubblewrap 0.13.1에서 network namespace, root �
 
 고유 disposable profile의 LPAC, capability 0, creation-time Job, stdio handle allowlist, child/Win32k mitigation을 검증한 뒤에만 headless AMD64 PE32+ Windows-subsystem 이미지를 Resume한다. 승인 바이트 복사와 드라이브 루트·최종 파일 검사 및 형식 제한, 제한 환경, 시간/출력/메모리 제한, Job-empty 및 profile/stage 정리 후 결과 반환을 적용한다. 실패 시 직접 실행하지 않는다.
 
-실제 Windows 10.0.26200.0 x64에서 정상 Passed, 외부 synthetic 파일 차단, loopback host 제어군과 격리 WSAStartup=10107·연결 0, child 생성 거절, timeout/output flood, 사용자 payload 정리와 외부 canary 보존을 확인했다. console subsystem이나 일반 interpreter 지원으로 확대하지 않는다. 동기 게시 경로의 실행 중 사용자 취소 API는 추가하지 않았으므로 #2723 전체 완료 표시는 보류한다. 세부 계약·근거·제한은 [Windows 검증기 실행 계약](../reference/issue-validator-windows.md)에 기록한다.
+실제 Windows 10.0.26200.0 x64에서 정상 Passed, 외부 synthetic 파일 차단, loopback host 제어군과 격리 WSAStartup=10107·연결 0, child 생성 거절, timeout/output flood, 사용자 payload 정리와 외부 canary 보존을 확인했다. console subsystem이나 일반 interpreter 지원으로 확대하지 않는다. 실행 중 사용자 취소는 `akra/issue/validation/cancel`로 owned Job을 끝내고 게시를 막는다. 세부 계약·근거·제한은 [Windows 검증기 실행 계약](../reference/issue-validator-windows.md)에 기록한다.
