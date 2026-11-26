@@ -1,4 +1,5 @@
 use super::super::*;
+use super::{Phase, Progress};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicUsize;
 
@@ -100,6 +101,7 @@ impl IssueCollectionOriginPort for Origin {
     }
 }
 pub(super) struct Source {
+    progress: Arc<Progress>,
     pub(super) observation: IssueSourceObservation,
     pub(super) discoveries: AtomicUsize,
     pub(super) resyncs: AtomicUsize,
@@ -114,10 +116,12 @@ impl IssueSourcePort for Source {
     ) -> Result<IssueDiscoveryPage, IssueSourceFailure> {
         request.validate()?;
         self.discoveries.fetch_add(1, Ordering::SeqCst);
+        self.progress.hit(Phase::DiscoveryStarted);
         let mut observation = self.observation.clone();
         if let IssueSourceContent::Shared(snapshot) = &mut observation.content {
             snapshot.policy_version = request.disclosure.policy_version;
         }
+        self.progress.hit(Phase::DiscoveryReturned);
         Ok(IssueDiscoveryPage {
             jira_connection: None,
             jira_binding: None,
@@ -131,6 +135,7 @@ impl IssueSourcePort for Source {
     fn resync(&self, request: IssueResyncRequest) -> IssueSourceRead {
         assert_eq!(request.issue, self.observation.issue);
         self.resyncs.fetch_add(1, Ordering::SeqCst);
+        self.progress.hit(Phase::ResyncStarted);
         let mut observation = self.observation.clone();
         if let IssueSourceContent::Shared(snapshot) = &mut observation.content {
             snapshot.policy_version = request.disclosure.policy_version;
@@ -148,7 +153,7 @@ pub(super) struct ExecutionState {
     commands: BTreeMap<String, (IssueWorkControlAction, IssueWorkControl)>,
 }
 #[derive(Default)]
-pub(super) struct Execution(pub(super) Mutex<ExecutionState>);
+pub(super) struct Execution(pub(super) Mutex<ExecutionState>, Arc<Progress>);
 impl IssueWorkExecutionPort for Execution {
     fn execution_limit(&self, _: &str, _: &str, _: u32) -> Result<()> {
         Ok(())
@@ -199,6 +204,8 @@ impl IssueWorkExecutionPort for Execution {
             state.order = Some(order.clone());
             state.submissions += 1;
         }
+        drop(state);
+        self.1.hit(Phase::WorkSubmitted);
         Ok(vec!["restart-task".into()])
     }
     fn grant(&self, _: &str, request: &IssueWorkPermitRequest) -> Result<()> {
@@ -207,6 +214,8 @@ impl IssueWorkExecutionPort for Execution {
         if !state.grants.contains(request) {
             state.grants.push(request.clone());
         }
+        drop(state);
+        self.1.hit(Phase::PermitGranted);
         Ok(())
     }
     fn revoke(&self, _: &str, _: &str) -> Result<()> {
@@ -215,6 +224,7 @@ impl IssueWorkExecutionPort for Execution {
 }
 
 pub(super) struct Fixture {
+    pub(super) progress: Arc<Progress>,
     pub(super) root: PathBuf,
     pub(super) workspace: String,
     runtime: PathBuf,
@@ -265,7 +275,10 @@ impl Fixture {
         let workspace = candidate.workspace_root.clone();
         let runtime = PathBuf::from(location.runtime_dir);
         let stored_runtime = runtime.clone();
+        let progress = Arc::new(Progress::default());
+        let storage_progress = progress.clone();
         let store = Arc::new(SqliteIssueAutomationStoreAdapter::new(move |_| {
+            storage_progress.hit(Phase::StoreOpen);
             Ok(stored_runtime.clone())
         }));
         let registry = Arc::new(SqliteIssueAutomationRestartRegistryAdapter::with_runtime(
@@ -334,11 +347,16 @@ impl Fixture {
             cleanup,
             policy: Arc::new(Policy(Mutex::new(GATED_POLICY.into()))),
             source: Arc::new(Source {
+                progress: progress.clone(),
                 observation,
                 discoveries: AtomicUsize::new(0),
                 resyncs: AtomicUsize::new(0),
             }),
-            execution: Arc::new(Execution::default()),
+            execution: Arc::new(Execution(
+                Mutex::new(ExecutionState::default()),
+                progress.clone(),
+            )),
+            progress,
             builds: Arc::new(AtomicUsize::new(0)),
             turns: Arc::new(Mutex::new(Vec::new())),
         }
@@ -461,9 +479,11 @@ impl Fixture {
     ) -> RepositoryKernelRegistry {
         let turns = self.turns.clone();
         let builds = self.builds.clone();
+        let progress = self.progress.clone();
         RepositoryKernelRegistry {
             restart_runtime: Some(Arc::new(move |_workspace, issues, admission| {
                 builds.fetch_add(1, Ordering::SeqCst);
+                progress.hit(Phase::RuntimeStarting);
                 let (mut runtime, recorded) = recording_runtime_for_test();
                 turns.lock().unwrap().push(recorded);
                 hook(&mut runtime, &admission)?;
@@ -474,6 +494,7 @@ impl Fixture {
                     admission,
                 )?;
 
+                progress.hit(Phase::RuntimeReady);
                 Ok(runtime)
             })),
             ..RepositoryKernelRegistry::default()

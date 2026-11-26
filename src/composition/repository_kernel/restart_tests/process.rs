@@ -167,6 +167,7 @@ fn killed_pending_selection_restarts_without_clients_and_creates_one_durable_wor
             .pending
             .is_some()
     );
+    let pause = reopened.progress.pause(Phase::DiscoveryStarted);
     let kernels = reopened.kernels();
     assert_eq!(
         kernels
@@ -178,12 +179,14 @@ fn killed_pending_selection_restarts_without_clients_and_creates_one_durable_wor
             .unwrap(),
         RepositoryRestartOutcome::Started,
     );
-    wait_until(|| {
-        reopened.work().is_some_and(|work| {
-            work.task_ids == ["restart-task"]
-                && work.blocked_reason == Some(IssueWorkBlockReason::ExecutionDisabled)
-                && work.permit_source == Some("a".repeat(40))
-        })
+    reopened.wait_pause(&pause);
+    assert!(reopened.work().is_none());
+    assert_eq!(reopened.execution.0.lock().unwrap().submissions, 0);
+    pause.release();
+    reopened.wait_restart_work("recovered durable work", |work| {
+        work.task_ids == ["restart-task"]
+            && work.blocked_reason == Some(IssueWorkBlockReason::ExecutionDisabled)
+            && work.permit_source == Some("a".repeat(40))
     });
     let selection = reopened
         .store
@@ -210,19 +213,7 @@ fn killed_pending_selection_restarts_without_clients_and_creates_one_durable_wor
     assert_eq!(works[0].order, work.order);
     assert_eq!(reopened.execution.0.lock().unwrap().submissions, 1);
     assert_eq!(reopened.execution.0.lock().unwrap().grants.len(), 1);
-    assert!(
-        !kernels
-            .entry(&reopened.candidate.repository_key)
-            .unwrap()
-            .lock()
-            .as_ref()
-            .unwrap()
-            .host
-            .observe(Duration::from_secs(5))
-            .unwrap()
-            .parallel
-            .enabled
-    );
+    assert!(!reopened.observe_host(&kernels).parallel.enabled);
     // The first client arrives only after recovery, discovery, and coordination finished.
     let (client, _, _) = kernels
         .attach_with_workspace_root(&reopened.workspace, false)
