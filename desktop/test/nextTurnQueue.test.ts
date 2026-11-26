@@ -61,6 +61,37 @@ describe("window next-turn queue", () => {
     queue.dispose();
   });
 
+  it.each(["completed", "failed", "interrupted"] as const)("resumes explicitly after %s even while the transcript still reports that turn active", async (status) => {
+    const { queue, pending } = harness();
+    queue.enqueue("t1", "after terminal", "active");
+    queue.pause("t1", "paused for review");
+    queue.terminal("t1", "active", status);
+    expect(pending).toHaveLength(0);
+    queue.resume("t1", "active");
+    expect(pending).toHaveLength(1);
+    expect(queue.snapshot("t1").paused).toBeNull();
+    pending[0]!.resolve("next");
+    await settle();
+    queue.terminal("t1", "active", status);
+    expect(pending).toHaveLength(1);
+    expect(queue.snapshot("t1").waitingTurnId).toBe("next");
+    queue.dispose();
+  });
+
+  it("keeps waiting when explicit resume names a turn that has not terminated", async () => {
+    const { queue, pending } = harness();
+    queue.enqueue("t1", "after active", "active");
+    queue.pause("t1", "paused for review");
+    queue.resume("t1", "active");
+    expect(pending).toHaveLength(0);
+    expect(queue.snapshot("t1").waitingTurnId).toBe("active");
+    queue.terminal("t1", "active", "completed");
+    expect(pending).toHaveLength(1);
+    pending[0]!.resolve("next");
+    await settle();
+    queue.dispose();
+  });
+
   it("keeps reservations on their original thread and holds them across navigation", async () => {
     const { queue, pending, select } = harness();
     queue.enqueue("t1", "belongs to first", "active");

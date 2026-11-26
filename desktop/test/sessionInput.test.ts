@@ -16,7 +16,7 @@ interface Sent {
   result?: unknown;
 }
 
-function harness(readOnly = false) {
+function harness(readOnly = false, scheduler: (callback: () => void) => void = (callback) => callback()) {
   const sent: Sent[] = [];
   const requestListeners = new Set<(message: Sent) => void>();
   let readyCalls = 0;
@@ -157,7 +157,7 @@ function harness(readOnly = false) {
     applyDotLive: (live) => Object.assign(state, { lastDotLive: live }),
     getKernel: () => state.kernel ?? EMPTY_KERNEL_VIEW,
   };
-  const session = new DesktopSession(bridge, store, "test", (callback) => callback(), readOnly);
+  const session = new DesktopSession(bridge, store, "test", scheduler, readOnly);
   session.start();
   const receive = (message: object) => messageListeners.forEach((listener) => listener(JSON.stringify(message)));
   /** 마지막으로 보낸 요청에 결과로 답한다. */
@@ -195,6 +195,30 @@ const transcript = (status: "inProgress" | "completed"): Transcript => ({
 });
 
 describe("queued session input", () => {
+  it("resumes a paused reservation between the terminal notification and its transcript frame", async () => {
+    const frames: Array<() => void> = [];
+    const h = harness(false, (callback) => frames.push(callback));
+    h.emitState("connected");
+    h.openWith(transcript("inProgress"));
+    h.session.queueMessage("after completed turn");
+    h.session.nextTurnQueue.pause("t1", "paused for review");
+    const completed = { method: "turn/completed", params: { threadId: "t1", turn: { id: "turn-1", status: "completed", items: [], error: null } } };
+    h.receive(completed);
+    expect(h.state.transcript?.turns.at(-1)?.status).toBe("inProgress");
+    const starts = () => h.sent.filter((message) => message.method === "turn/start");
+    expect(starts()).toHaveLength(0);
+    h.session.resumeQueuedMessages();
+    expect(starts()).toHaveLength(1);
+    expect(starts()[0]?.params).toMatchObject({ threadId: "t1", input: [{ type: "text", text: "after completed turn" }] });
+    h.replyTo("turn/start", { turn: { id: "next-turn" } });
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    for (const frame of frames.splice(0)) frame();
+    h.receive(completed);
+    expect(starts()).toHaveLength(1);
+    expect(h.session.nextTurnQueue.snapshot("t1").waitingTurnId).toBe("next-turn");
+    h.session.stop();
+  });
+
   it("keeps an acknowledged manual turn ahead of paused reservations before the start notification", async () => {
     const { session, sent, receive, replyTo, openWith, emitState } = harness();
     emitState("connected");

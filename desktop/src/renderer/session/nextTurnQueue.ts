@@ -91,7 +91,9 @@ export class NextTurnQueue {
       throw new Error("결과 불명인 입력은 대화 기록을 확인하고 목록에서 지운 뒤 계속하세요. 자동으로 다시 보내지 않습니다.");
     }
     if (!this.canDispatch(threadId)) throw new Error("현재 대화가 연결되고 쓰기 가능할 때 예약을 계속할 수 있습니다.");
-    this.set(threadId, { ...state, paused: null, waitingTurnId: activeTurnId });
+    // Explicit continuation may precede the frame that removes a terminal turn.
+    const terminal = activeTurnId !== null && this.terminals.has(this.key(threadId, activeTurnId));
+    this.set(threadId, { ...state, paused: null, waitingTurnId: terminal ? null : activeTurnId });
     void this.drain(threadId);
   }
 
