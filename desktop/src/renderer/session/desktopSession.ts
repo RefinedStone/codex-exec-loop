@@ -12,6 +12,8 @@ import type { InitializeParams } from "../../shared/protocol/generated/Initializ
 import type { SkillsListParams } from "../../shared/protocol/generated/v2/SkillsListParams";
 import type { SkillsListResponse } from "../../shared/protocol/generated/v2/SkillsListResponse";
 import type { Thread } from "../../shared/protocol/generated/v2/Thread";
+import type { ThreadForkParams } from "../../shared/protocol/generated/v2/ThreadForkParams";
+import type { ThreadForkResponse } from "../../shared/protocol/generated/v2/ThreadForkResponse";
 import type { ThreadListResponse } from "../../shared/protocol/generated/v2/ThreadListResponse";
 import type { ThreadReadResponse } from "../../shared/protocol/generated/v2/ThreadReadResponse";
 import type { ThreadResumeResponse } from "../../shared/protocol/generated/v2/ThreadResumeResponse";
@@ -28,6 +30,7 @@ import {
   notificationThreadId,
   prependOlderTurns,
   transcriptFromThread,
+  type Transcript,
 } from "../conversation/transcript";
 import { KernelConnection, type IssueDecisionAttention, type KernelInterest } from "../kernel/kernelConnection";
 import { TaskAuthoringController } from "../kernel/taskAuthoring";
@@ -49,6 +52,11 @@ const NO_ROLLOUT_ERROR = /no rollout found/i;
  */
 const WRITER_ELSEWHERE_ERROR = /already has an active writer/i;
 const WRITER_ELSEWHERE_SEND_ERROR = "다른 Codex 앱이 이 스레드를 쓰고 있어서 보낼 수 없습니다. 다시 연결한 뒤에 보내세요.";
+/** 대화 분기의 경계를 고를 때 읽는 가장 새 턴 수이다. 가장 새 턴이 진행 중이면 그 앞 턴이 경계이다. */
+const FORK_BOUNDARY_PAGE_SIZE = 2;
+const BROWSER_MCP_SERVER = "akra_browser";
+const FORK_NO_FINISHED_TURN = "끝난 턴이 없는 대화는 분기할 수 없습니다.";
+const FORK_UNKNOWN = "분기 결과를 확인하지 못했습니다. 사이드바에서 '분기' 표시가 있는 대화를 먼저 확인하세요. 다시 분기하면 대화가 하나 더 생길 수 있습니다.";
 /** shortcut: 최대 50 페이지(5,000 스레드)까지만 읽는다. 더 많으면 사이드바를 필요할 때 더 읽는 방식으로 바꾼다. */
 const THREAD_LIST_MAX_PAGES = 50;
 
@@ -86,8 +94,33 @@ function workspaceThread(thread: Thread, title: string): WorkspaceThread {
     updatedAt: thread.updatedAt,
     branch: thread.gitInfo?.branch ?? null,
     failed: thread.status?.type === "systemError",
+    ...(thread.forkedFromId ? { forkedFromId: thread.forkedFromId } : {}),
     ...(isAgentThreadSource(thread.threadSource) ? { agentThread: true } : {}),
   };
+}
+
+/**
+ * 대화 분기의 결과이다 (#2625). `refused` 는 서버에 대화를 만들지 않았다. `unknown` 은 접속이 끊겨서 서버가 만들었는지
+ * 모른다: 자동으로 다시 보내지 않는다. `created` 는 사용자가 다른 화면으로 가서 목록에만 넣었다.
+ */
+export type ForkThreadOutcome =
+  | { kind: "opened"; threadId: string }
+  | { kind: "created"; threadId: string }
+  | { kind: "refused"; reason: string }
+  | { kind: "unknown"; reason: string };
+
+/**
+ * 1차 범위(일반 로컬 사용자 대화)가 아닌 원본이면 이유를 돌려준다. 브라우저 대화는 읽은 턴에 브라우저 도구 호출이
+ * 있는지로 판정한다. shortcut: 읽지 않은 이전 턴은 보지 않는다. 그래도 일반 fork 는 thread/start 의 MCP 설정을
+ * 옮기지 않으므로(codex 0.172.0 `load_for_cwd`) 브라우저 세션 파일을 나눠 쓰지 않는다.
+ */
+export function forkBlockReason(thread: Pick<Thread, "id" | "ephemeral" | "parentThreadId" | "threadSource">, transcript: Transcript | null): string | null {
+  if (thread.ephemeral || thread.parentThreadId || isAgentThreadSource(thread.threadSource)) {
+    return "임시 대화, 하위 에이전트 대화, dot 작업 대화는 분기하지 않습니다.";
+  }
+  const browser = transcript?.threadId === thread.id
+    && transcript.turns.some((turn) => turn.items.some((item) => item.type === "mcpToolCall" && item.server === BROWSER_MCP_SERVER));
+  return browser ? "브라우저 대화는 아직 분기하지 않습니다. 브라우저 연결은 대화마다 따로 등록해야 합니다." : null;
 }
 
 export function groupThreadsByCwd(threads: readonly Thread[]): WorkspaceFolder[] {
@@ -189,6 +222,10 @@ export class DesktopSession {
   private renamedThreads = new Map<string, string>();
   /** 이 접속에서 생기거나 보관을 푼 스레드이다. 그 전에 읽기 시작한 목록에는 없을 수 있다. */
   private addedThreads = new Map<string, Thread>();
+  /** 원본 id → 진행 중인 분기이다. 같은 원본의 두 번째 요청은 같은 결과를 기다린다. */
+  private readonly forksInFlight = new Map<string, Promise<ForkThreadOutcome>>();
+  /** 분기 결과를 모르는 원본이다. 다시 분기하기 전에 사용자에게 묻는다. */
+  private readonly unknownForkSources = new Set<string>();
   /** 사용자의 답을 기다리는 승인 요청의 응답 함수이다. 키는 요청 id 이다. */
   private readonly approvalAnswers = new Map<string, (answer: unknown) => void>();
   /** 커널 패널의 연결이다 (plan 18 K3-6). 같은 Gateway 접속을 쓴다. */
@@ -455,7 +492,7 @@ export class DesktopSession {
         const status: ListMcpServerStatusResponse = await this.client.request("mcpServerStatus/list", {
           threadId, detail: "toolsAndAuthOnly", ...(cursor ? { cursor } : {}),
         } satisfies ListMcpServerStatusParams);
-        const browser = status.data.find((server) => server.name === "akra_browser");
+        const browser = status.data.find((server) => server.name === BROWSER_MCP_SERVER);
         if (browser) {
           verified = browser.runtimeStatus === "connected" && !browser.toolsError
             && BROWSER_TOOL_NAMES.every((name) => browser.tools[name] !== undefined);
@@ -476,6 +513,75 @@ export class DesktopSession {
       await agent.setActiveThread(this.store.getOpenThreadId());
       throw error;
     }
+  }
+
+  /** 이 원본의 지난 분기 결과를 모른다. 다시 분기하면 대화가 하나 더 생길 수 있다. */
+  forkOutcomeUnknown(sourceThreadId: string): boolean {
+    return this.unknownForkSources.has(sourceThreadId);
+  }
+
+  /**
+   * 로컬 스레드를 공식 `thread/fork` 로 한 번 분기한다 (#2625). 원본에는 resume, 턴, unsubscribe 를 보내지 않는다.
+   * 경계는 지금 읽은 가장 새 끝난 턴(completed, interrupted, failed)이고 `lastTurnId` 로 고정한다. 그 뒤에 다른 앱이
+   * 시작한 턴은 새 대화에 들어가지 않는다. 응답이 왔을 때 원본이 아직 열려 있으면 `claimSelection` 을 부른다. 그것이
+   * 화면을 새 대화로 옮기고 true 를 돌려주면 새 대화를 연다. 아니면 목록에만 넣고 fork 가 건 구독을 끝낸다.
+   */
+  forkThread(sourceThreadId: string, claimSelection: (threadId: string) => boolean): Promise<ForkThreadOutcome> {
+    const inFlight = this.forksInFlight.get(sourceThreadId);
+    if (inFlight) return inFlight;
+    const fork = this.runFork(sourceThreadId, claimSelection).finally(() => this.forksInFlight.delete(sourceThreadId));
+    this.forksInFlight.set(sourceThreadId, fork);
+    return fork;
+  }
+
+  private async runFork(sourceThreadId: string, claimSelection: (threadId: string) => boolean): Promise<ForkThreadOutcome> {
+    if (this.readOnly) return { kind: "refused", reason: "원격 호스트의 대화는 분기하지 않습니다." };
+    if (!this.connected) return { kind: "refused", reason: "Gateway 에 연결되어 있지 않습니다." };
+    let lastTurnId: string;
+    try {
+      const blocked = forkBlockReason(await this.readThread(sourceThreadId), this.store.getTranscript());
+      if (blocked) return { kind: "refused", reason: blocked };
+      const page = await this.client.request<ThreadTurnsListResponse>("thread/turns/list", {
+        threadId: sourceThreadId, limit: FORK_BOUNDARY_PAGE_SIZE, sortDirection: "desc", itemsView: "notLoaded",
+      });
+      const boundary = page.data.find((turn) => turn.status !== "inProgress");
+      if (!boundary) return { kind: "refused", reason: FORK_NO_FINISHED_TURN };
+      lastTurnId = boundary.id;
+    } catch (error) {
+      if (error instanceof JsonRpcError && NO_ROLLOUT_ERROR.test(error.message)) return { kind: "refused", reason: FORK_NO_FINISHED_TURN };
+      return { kind: "refused", reason: `분기하지 않았습니다: ${errorMessage(error)}` };
+    }
+    // 여기부터 서버가 대화를 만들 수 있다. 결과를 모르면 다시 보내지 않는다.
+    this.unknownForkSources.delete(sourceThreadId);
+    let forked: Thread;
+    try {
+      const params: ThreadForkParams = { threadId: sourceThreadId, lastTurnId, excludeTurns: true, ephemeral: false };
+      forked = (await this.client.request<ThreadForkResponse>("thread/fork", params))?.thread;
+      if (typeof forked?.id !== "string" || forked.id.length === 0 || forked.id === sourceThreadId) {
+        throw new Error("thread/fork 응답에 새 대화 id 가 없습니다.");
+      }
+    } catch (error) {
+      if (error instanceof JsonRpcError) {
+        return { kind: "refused", reason: error.code === -32601 ? "이 Codex app-server 는 대화 분기(thread/fork)를 지원하지 않습니다." : `분기하지 못했습니다: ${error.message}` };
+      }
+      this.unknownForkSources.add(sourceThreadId);
+      return { kind: "unknown", reason: FORK_UNKNOWN };
+    }
+    // `thread/started` 알림이 먼저 왔어도 목록에는 한 번만 들어간다.
+    this.addedThreads.set(forked.id, forked);
+    this.store.mergeFolders(groupThreadsByCwd([forked]));
+    if (this.store.getOpenThreadId() === sourceThreadId && claimSelection(forked.id)) {
+      this.leaveOpenThread(forked.id);
+      this.batcher.clear();
+      this.store.setOpenThread(forked.id);
+      // fork 가 이미 구독했다. 다시 resume 하지 않고 기록만 읽는다.
+      await this.resumeOpenThread({ thread: forked, writerElsewhere: false });
+      return { kind: "opened", threadId: forked.id };
+    }
+    if (this.store.getOpenThreadId() !== forked.id) {
+      void this.client.request("thread/unsubscribe", { threadId: forked.id }).catch(() => undefined);
+    }
+    return { kind: "created", threadId: forked.id };
   }
 
   /** 승인 요청에 답한다. 다른 창이 먼저 답했으면 이미 닫혀 있으므로 아무것도 하지 않는다. */
@@ -550,15 +656,20 @@ export class DesktopSession {
 
   /** 스레드를 연다. 이전 스레드는 진행 중인 턴이 없으면 구독을 끝낸다. */
   async openThread(threadId: string): Promise<void> {
-    const previousId = this.store.getOpenThreadId();
-    const previousSubscribed = previousId !== this.writerElsewhereThreadId;
-    if (this.canSend() && previousId && previousSubscribed && previousId !== threadId && !isTurnInProgress(this.store.getTranscript())) {
-      void this.client.request("thread/unsubscribe", { threadId: previousId }).catch(() => undefined);
-    }
+    this.leaveOpenThread(threadId);
     this.invalidateConversation();
     this.batcher.clear();
     this.store.setOpenThread(threadId);
     await this.resumeOpenThread();
+  }
+
+  /** 다른 스레드로 옮기기 전에 이전 스레드의 구독을 끝낸다. 진행 중인 턴이 있거나 읽기만 한 스레드는 그대로 둔다. */
+  private leaveOpenThread(nextThreadId: string): void {
+    const previousId = this.store.getOpenThreadId();
+    const previousSubscribed = previousId !== this.writerElsewhereThreadId;
+    if (this.canSend() && previousId && previousSubscribed && previousId !== nextThreadId && !isTurnInProgress(this.store.getTranscript())) {
+      void this.client.request("thread/unsubscribe", { threadId: previousId }).catch(() => undefined);
+    }
   }
 
   private async initialize(): Promise<void> {
@@ -673,7 +784,8 @@ export class DesktopSession {
     return ++this.conversationGeneration;
   }
 
-  private async resumeOpenThread(): Promise<void> {
+  /** `alreadyOpened` 는 이미 구독한 스레드(예: 방금 분기한 대화)이다. 그때는 resume 하지 않고 턴만 읽는다. */
+  private async resumeOpenThread(alreadyOpened?: OpenedThread): Promise<void> {
     const generation = this.invalidateConversation();
     const threadId = this.store.getOpenThreadId();
     if (!threadId || !this.connected) {
@@ -688,7 +800,7 @@ export class DesktopSession {
       // 긴 스레드의 전체 resume 은 수십 MB 가 된다. 턴 없이 구독만 하고 최근 턴부터 페이지로 읽는다.
       // 허락 전 원격 호스트는 구독하지 않고 thread/read 로 한 번만 읽는다. 허락하면 로컬과 같이 thread/resume 으로
       // 구독해 실시간으로 받는다 (plan 25 "세션 한 번 허용").
-      const opened = this.canSend() ? await this.subscribeOrRead(threadId) : { thread: await this.readThread(threadId), writerElsewhere: false };
+      const opened = alreadyOpened ?? (this.canSend() ? await this.subscribeOrRead(threadId) : { thread: await this.readThread(threadId), writerElsewhere: false });
       if (!isCurrent()) {
         return;
       }

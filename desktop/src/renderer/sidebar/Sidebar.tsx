@@ -44,7 +44,10 @@ function ThreadRow({ thread, onOpenThread }: { thread: WorkspaceThread; onOpenTh
       <button type="button" className={selected ? "thread selected" : "thread"} onClick={() => onOpenThread(thread.id)} data-testid="thread-entry">
         <StatusMark mark={mark} />
         <span className="thread-text">
-          <span className={mark === "unread" ? "thread-title unread" : "thread-title"}>{thread.title}</span>
+          <span className={mark === "unread" ? "thread-title unread" : "thread-title"}>
+            {thread.forkedFromId && <span className="badge badge-fork" title="다른 대화에서 분기한 대화입니다" data-testid="fork-badge">분기</span>}
+            {thread.title}
+          </span>
           {thread.branch && (
             <span className="thread-sub">
               <Icon name="branch" size={11} />

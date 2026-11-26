@@ -5,7 +5,7 @@ import { DEFAULT_SETTINGS } from "../src/shared/settings";
 import type { AkraBridge, ConnectionState } from "../src/shared/bridge";
 import { BROWSER_TOOL_NAMES } from "../src/shared/browserAgent";
 import { EMPTY_KERNEL_VIEW } from "../src/renderer/kernel/kernelConnection";
-import { DesktopSession } from "../src/renderer/session/desktopSession";
+import { DesktopSession, forkBlockReason } from "../src/renderer/session/desktopSession";
 import { type DesktopState, mergeWorkspaceFolders, removeWorkspaceThread, renameWorkspaceThread, type SessionStore } from "../src/renderer/session/desktopStore";
 import type { Transcript } from "../src/renderer/conversation/transcript";
 
@@ -696,5 +696,155 @@ describe("threads added while listing threads", () => {
     replyTo("thread/list", { data: [thread("old", 1)], nextCursor: null, backwardsCursor: null });
     await flush();
     expect(state.folders?.flatMap((folder) => folder.threads.map((item) => item.id))).toEqual(["new", "back", "old"]);
+  });
+});
+
+describe("forking a conversation (#2625)", () => {
+  const turn = (id: string, status = "completed") => ({ id, items: [], itemsView: "full", status, error: null, startedAt: null, completedAt: null, durationMs: null });
+  const thread = (id: string, extra: object = {}) => ({ id, name: id, preview: "", cwd: "/w", updatedAt: 1, ephemeral: false, parentThreadId: null, forkedFromId: null, threadSource: null, status: { type: "idle" }, turns: [], ...extra });
+  const lastId = (sent: Sent[], method: string) => [...sent].reverse().find((message) => message.method === method)?.id;
+  const sentFor = (sent: Sent[], threadId: string) => sent.filter((message) => message.params?.threadId === threadId).map((message) => message.method);
+
+  /** 다른 Codex 앱이 쓰기 잠금을 가진 "locked" 를 읽기 전용으로 연다. */
+  async function openLocked() {
+    const h = harness();
+    h.emitState("connected");
+    const opened = h.session.openThread("locked");
+    await flush();
+    h.receive({ jsonrpc: "2.0", id: lastId(h.sent, "thread/resume"), error: { code: -32603, message: "thread locked already has an active writer" } });
+    await flush();
+    h.replyTo("thread/read", { thread: thread("locked") });
+    await flush();
+    h.replyTo("thread/turns/list", { data: [turn("t1")], nextCursor: null, backwardsCursor: null });
+    await opened;
+    h.sent.length = 0;
+    return h;
+  }
+
+  /** 원본 읽기와 경계 읽기에 답한다. 그다음 요청은 thread/fork 이다. */
+  async function answerBoundary(h: Awaited<ReturnType<typeof openLocked>>, turns: object[]) {
+    await flush();
+    h.replyTo("thread/read", { thread: thread("locked") });
+    await flush();
+    h.replyTo("thread/turns/list", { data: turns, nextCursor: null, backwardsCursor: null });
+    await flush();
+  }
+
+  it("forks a locked thread through its newest finished turn and opens the fork without touching the source", async () => {
+    const h = await openLocked();
+    const claim = vi.fn(() => true);
+    const forking = h.session.forkThread("locked", claim);
+    await answerBoundary(h, [turn("t3", "inProgress"), turn("t2")]);
+    expect(h.sent.find((message) => message.method === "thread/turns/list")?.params).toMatchObject({ threadId: "locked", limit: 2, sortDirection: "desc" });
+    // The other app's running turn t3 is excluded: the boundary is pinned to t2.
+    expect(h.sent.at(-1)).toMatchObject({ method: "thread/fork", params: { threadId: "locked", lastTurnId: "t2", excludeTurns: true, ephemeral: false } });
+    h.replyTo("thread/fork", { thread: thread("child", { forkedFromId: "locked" }) });
+    await flush();
+    h.replyTo("thread/turns/list", { data: [turn("t2"), turn("t1")], nextCursor: null, backwardsCursor: null });
+    await expect(forking).resolves.toEqual({ kind: "opened", threadId: "child" });
+
+    expect(claim).toHaveBeenCalledWith("child");
+    expect(h.state.openThreadId).toBe("child");
+    expect(h.state.writerElsewhere).toBe(false);
+    expect(h.state.transcript?.turns.map((item) => item.id)).toEqual(["t1", "t2"]);
+    expect(h.state.folders?.flatMap((folder) => folder.threads).find((item) => item.id === "child")?.forkedFromId).toBe("locked");
+    // The source gets only reads; the fork is already subscribed, so it gets no resume.
+    expect(sentFor(h.sent, "locked")).toEqual(["thread/read", "thread/turns/list", "thread/fork"]);
+    expect(sentFor(h.sent, "child")).toEqual(["thread/turns/list"]);
+
+    // A duplicate thread/started notification does not add the fork twice.
+    h.receive({ jsonrpc: "2.0", method: "thread/started", params: { thread: thread("child", { forkedFromId: "locked" }) } });
+    expect(h.state.folders?.flatMap((folder) => folder.threads).filter((item) => item.id === "child")).toHaveLength(1);
+    const sending = h.session.sendMessage("hello");
+    await flush();
+    expect(h.sent.at(-1)).toMatchObject({ method: "turn/start", params: { threadId: "child" } });
+    h.replyTo("turn/start", {});
+    await sending;
+  });
+
+  it("sends one fork for repeated clicks on the same source", async () => {
+    const h = await openLocked();
+    const first = h.session.forkThread("locked", () => true);
+    const second = h.session.forkThread("locked", () => true);
+    expect(second).toBe(first);
+    await answerBoundary(h, [turn("t1")]);
+    h.replyTo("thread/fork", { thread: thread("child", { forkedFromId: "locked" }) });
+    await flush();
+    h.replyTo("thread/turns/list", { data: [], nextCursor: null, backwardsCursor: null });
+    await first;
+    expect(h.sent.filter((message) => message.method === "thread/fork")).toHaveLength(1);
+    expect(h.sent.filter((message) => message.method === "thread/read")).toHaveLength(1);
+  });
+
+  it("keeps the screen and only lists the fork when the user moved away, and ends the subscription the fork made", async () => {
+    const h = await openLocked();
+    const forking = h.session.forkThread("locked", () => false);
+    await answerBoundary(h, [turn("t1")]);
+    const transcriptBefore = h.state.transcript;
+    h.replyTo("thread/fork", { thread: thread("child", { forkedFromId: "locked" }) });
+    await expect(forking).resolves.toEqual({ kind: "created", threadId: "child" });
+    expect(h.state.openThreadId).toBe("locked");
+    expect(h.state.transcript).toBe(transcriptBefore);
+    expect(h.state.writerElsewhere).toBe(true);
+    expect(h.state.folders?.flatMap((folder) => folder.threads).map((item) => item.id)).toContain("child");
+    expect(sentFor(h.sent, "child")).toEqual(["thread/unsubscribe"]);
+    expect(sentFor(h.sent, "locked")).not.toContain("thread/unsubscribe");
+  });
+
+  it("keeps the fork's subscription when the user already opened the fork", async () => {
+    const h = await openLocked();
+    const claim = vi.fn(() => true);
+    const forking = h.session.forkThread("locked", claim);
+    await answerBoundary(h, [turn("t1")]);
+    const forkRequest = lastId(h.sent, "thread/fork");
+    void h.session.openThread("child");
+    await flush();
+    h.receive({ jsonrpc: "2.0", id: forkRequest, result: { thread: thread("child", { forkedFromId: "locked" }) } });
+    await expect(forking).resolves.toEqual({ kind: "created", threadId: "child" });
+    expect(claim).not.toHaveBeenCalled();
+    expect(sentFor(h.sent, "child")).not.toContain("thread/unsubscribe");
+  });
+
+  it("reports an unknown result after a dropped connection and never retries by itself", async () => {
+    const h = await openLocked();
+    const forking = h.session.forkThread("locked", () => true);
+    await answerBoundary(h, [turn("t1")]);
+    h.emitState("disconnected");
+    const outcome = await forking;
+    expect(outcome.kind).toBe("unknown");
+    expect(h.session.forkOutcomeUnknown("locked")).toBe(true);
+    expect(h.sent.filter((message) => message.method === "thread/fork")).toHaveLength(1);
+    expect(h.state.openThreadId).toBe("locked");
+  });
+
+  it("refuses without creating anything when the server rejects the fork or no turn has finished", async () => {
+    const h = await openLocked();
+    const rejected = h.session.forkThread("locked", () => true);
+    await answerBoundary(h, [turn("t1")]);
+    h.receive({ jsonrpc: "2.0", id: lastId(h.sent, "thread/fork"), error: { code: -32600, message: "turn t1 is in progress" } });
+    expect(await rejected).toMatchObject({ kind: "refused" });
+    expect(h.session.forkOutcomeUnknown("locked")).toBe(false);
+    expect(h.state.openThreadId).toBe("locked");
+
+    h.sent.length = 0;
+    const empty = h.session.forkThread("locked", () => true);
+    await answerBoundary(h, [turn("t9", "inProgress")]);
+    expect(await empty).toEqual({ kind: "refused", reason: "끝난 턴이 없는 대화는 분기할 수 없습니다." });
+    expect(h.sent.some((message) => message.method === "thread/fork")).toBe(false);
+  });
+
+  it("does not fork remote, temporary, sub-agent, dot, or browser conversations", async () => {
+    const remote = harness(true);
+    remote.emitState("connected");
+    expect(await remote.session.forkThread("t1", () => true)).toMatchObject({ kind: "refused" });
+    expect(remote.sent.some((message) => message.method === "thread/fork")).toBe(false);
+
+    const blocked = { id: "t1", ephemeral: false, parentThreadId: null, threadSource: null };
+    expect(forkBlockReason(blocked, null)).toBeNull();
+    expect(forkBlockReason({ ...blocked, ephemeral: true }, null)).not.toBeNull();
+    expect(forkBlockReason({ ...blocked, parentThreadId: "parent" }, null)).not.toBeNull();
+    expect(forkBlockReason({ ...blocked, threadSource: "aeon_child" as never }, null)).not.toBeNull();
+    const browserTurn = { ...transcript("completed"), turns: [{ ...transcript("completed").turns[0]!, items: [{ type: "mcpToolCall", id: "i", server: "akra_browser" } as never] }] };
+    expect(forkBlockReason(blocked, browserTurn)).toContain("브라우저");
   });
 });
