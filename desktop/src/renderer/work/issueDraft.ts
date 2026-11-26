@@ -74,7 +74,7 @@ export interface IssueDraftValidationError {
   field: "title" | "template_field" | "required_section" | "code_validator";
   label: string | null;
   /** `failed` 는 필수 코드 검증기가 통과하지 않은 것이다. 게시할 때만 나온다. */
-  kind: "missing" | "empty" | "invalid_format" | "failed";
+  kind: "missing" | "empty" | "invalid_format" | "failed" | "cancelled";
 }
 
 export type IssueDraftAutonomy = "off" | "observe" | "propose" | "gated" | "auto";
@@ -233,10 +233,15 @@ export function intentStatus(intent: IssueDraftIntent | null): IssuePublishStatu
   return null;
 }
 
-const ERROR_KIND: Record<IssueDraftValidationError["kind"], string> = { missing: "섹션이 없습니다", empty: "값이 비어 있습니다", invalid_format: "값의 형식이 맞지 않습니다", failed: "통과하지 못했습니다" };
+const ERROR_KIND: Record<IssueDraftValidationError["kind"], string> = { missing: "섹션이 없습니다", empty: "값이 비어 있습니다", invalid_format: "값의 형식이 맞지 않습니다", failed: "통과하지 못했습니다", cancelled: "사용자가 검증을 취소했습니다" };
 const ERROR_FIELD: Record<Exclude<IssueDraftValidationError["field"], "title">, string> = { template_field: "템플릿 필드", required_section: "필수 섹션", code_validator: "코드 검증기" };
 
 export function validationErrorText(error: IssueDraftValidationError): string {
   const where = error.field === "title" ? "제목" : `${ERROR_FIELD[error.field]} "${error.label ?? ""}"`;
   return `${where}: ${ERROR_KIND[error.kind]}`;
+}
+
+/** 사용자가 코드 검증을 취소해서 막혔는지이다 (#2858). */
+export function cancelledByUser(errors: readonly IssueDraftValidationError[]): boolean {
+  return errors.some((error) => error.kind === "cancelled");
 }

@@ -75,6 +75,24 @@ function answerIssue(method, params) {
   }
   if (method === "akra/issue/readinessBarrier") return { ok: true };
   if (method === "akra/issue/preview") return readiness.reply(preview(params.text));
+  if (method === "akra/issue/validation/cancel") {
+    // #2858: 실행 중인 검증만 취소된다. 결과가 정해진 뒤의 취소는 거절이다.
+    const held = issue.heldPublish;
+    if (!held || held.finished || held.validationId !== params.validationId) return { cancelled: false };
+    held.resolve("cancelled");
+    return { cancelled: true };
+  }
+  if (method === "akra/issue/publish" && issue.holdValidation) {
+    issue.holdValidation = false;
+    return new Promise((resolve) => {
+      issue.heldPublish = { validationId: params.validationId, finished: issue.validationFinished, resolve: (outcome) => {
+        issue.heldPublish = null;
+        const current = preview(params.text);
+        const errors = [...(current.errors ?? []), { field: "code_validator", label: "lint", kind: outcome }];
+        resolve({ status: "blocked", preview: { ...current, errors, publishable: false } });
+      } };
+    });
+  }
   if (method === "akra/issue/publish") {
     const current = preview(params.text);
     if (current.status !== "ready" || !current.publishable) return { status: "blocked", preview: current };
@@ -210,6 +228,36 @@ try {
   await title.fill("New title");
   check("a content change clears the approval", await until(async () => !(await approve.isChecked()) && (await panel.getByTestId("issue-draft-notice").count()) > 0));
   check("publish is disabled without an approval", await panel.getByTestId("issue-draft-publish").isDisabled());
+
+  // #2858: 게시 중 실행되는 코드 검증기를 취소한다. 원격 쓰기는 없다.
+  await until(async () => (await panel.getByTestId("issue-draft-shared-title").innerText()) === "New title");
+  await approve.check();
+  issue.holdValidation = true;
+  issue.validationFinished = false;
+  await panel.getByTestId("issue-draft-publish").click();
+  await panel.getByTestId("issue-draft-cancel-validation").click();
+  check("cancelling a running validator blocks the publish", await until(async () => ((await panel.getByTestId("issue-draft-notice").textContent()) ?? "").includes("검증을 취소해서 게시하지 않았습니다")));
+  check("the publish request carried its validation id", typeof issue.requests.filter((request) => request.method === "akra/issue/publish").at(-1)?.params.validationId === "string");
+  check("nothing was written after the cancel", issue.remote.title === "Old title");
+  check("the cancel button goes away with the result", (await panel.getByTestId("issue-draft-cancel-validation").count()) === 0);
+
+  // 막힌 미리보기를 새로 받는다: 글을 바꿨다가 되돌린다.
+  await title.fill("New title!");
+  await title.fill("New title");
+  await until(async () => await approve.isEnabled());
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  await approve.check();
+  issue.holdValidation = true;
+  issue.validationFinished = true;
+  await panel.getByTestId("issue-draft-publish").click();
+  await panel.getByTestId("issue-draft-cancel-validation").click();
+  check("a cancel after the result is final is shown as refused", await until(async () => ((await panel.getByTestId("issue-draft-cancel-validation-state").textContent()) ?? "").includes("취소하지 못했습니다")));
+  issue.heldPublish?.resolve("failed");
+  check("the finished validation keeps its own result", await until(async () => ((await panel.getByTestId("issue-draft-notice").textContent()) ?? "").includes("검증을 통과하지 못해서")));
+  await title.fill("New title!");
+  await title.fill("New title");
+  await until(async () => await approve.isEnabled());
+  await new Promise((resolve) => setTimeout(resolve, 600));
 
   await until(async () => (await panel.getByTestId("issue-draft-shared-title").innerText()) === "New title");
   await approve.check();

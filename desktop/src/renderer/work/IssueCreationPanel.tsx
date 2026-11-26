@@ -1,4 +1,6 @@
 // 원문은 이 패널의 메모리 안에만 존재한다. 생성 의도의 재개는 Gateway의 공유본 기록으로 한다.
+import { newValidationId, ValidationCancel } from "./ValidationCancel";
+import { cancelledByUser } from "./issueDraft";
 import { useEffect, useRef, useState } from "react";
 
 import "./IssueDraftPanel.css";
@@ -192,16 +194,20 @@ export function IssueCreationPanel({ request, target, onClose, openExternal }: {
     setSpans(next);
   };
 
+  const [validationId, setValidationId] = useState<string | null>(null);
   const publish = (sharedCopyOnly: boolean) => {
     if (!intent || !approval || (!editable && !(resumable && sharedCopyOnly))) return;
     const text = editable ? { title, body, spans } : { title: intent.sharedCopy?.title ?? "", body: intent.sharedCopy?.body ?? "", spans: [] };
+    const id = newValidationId();
+    setValidationId(id);
     return perform<IssueCreationPublished>(ISSUE_CREATE_METHOD.publish, {
-      target, intentId: intent.intentId, text, approval, sharedCopyOnly,
+      target, intentId: intent.intentId, text, approval, sharedCopyOnly, validationId: id,
     }, (published) => {
       if (published.status === "blocked") {
         setPreview(published.preview);
         setApproval(null);
-        setNotice("검증을 통과하지 못해 생성하지 않았습니다.");
+        const errors = published.preview.preview.status === "ready" ? published.preview.preview.errors : [];
+        setNotice(cancelledByUser(errors) ? "검증을 취소해서 생성하지 않았습니다." : "검증을 통과하지 못해 생성하지 않았습니다.");
       } else if (published.status === "refused") {
         setApproval(null);
         setRefresh((value) => value + 1);
@@ -218,7 +224,7 @@ export function IssueCreationPanel({ request, target, onClose, openExternal }: {
       } else {
         installIntent(published.intent);
       }
-    }, true);
+    }, true)?.finally(() => setValidationId(null));
   };
 
   const recheck = () => intent && perform<IssueCreationIntent>(ISSUE_CREATE_METHOD.recheck, { target, intentId: intent.intentId }, installIntent);
@@ -281,6 +287,7 @@ export function IssueCreationPanel({ request, target, onClose, openExternal }: {
               {resumable ? "복원 연결 없이 기록된 공유본만 새 이슈로 게시하는 것을 승인합니다." : name + "에 위 공유본으로 새 이슈를 생성하는 것을 승인합니다."}
             </label>
             {editable && <button type="button" disabled={!approvedNow || !canApprove} onClick={() => void publish(false)} data-testid="issue-create-publish">{busy ? "처리 중…" : "새 이슈 생성"}</button>}
+            <ValidationCancel validationId={validationId} request={request} testId="issue-create-cancel-validation" />
             {resumable && <button type="button" disabled={!approvedNow || !canApprove} onClick={() => void publish(true)} data-testid="issue-create-shared-only">공유본만 게시</button>}
           </section>}
           <section className="work-section work-form" data-testid="issue-create-status" data-status={unknownRequest ? "needs_confirmation" : creationStatus(intent)}>
