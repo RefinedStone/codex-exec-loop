@@ -5,7 +5,7 @@ import { DEFAULT_SETTINGS } from "../src/shared/settings";
 import type { AkraBridge, ConnectionState } from "../src/shared/bridge";
 import { BROWSER_TOOL_NAMES } from "../src/shared/browserAgent";
 import { EMPTY_KERNEL_VIEW } from "../src/renderer/kernel/kernelConnection";
-import { DesktopSession, forkBlockReason } from "../src/renderer/session/desktopSession";
+import { DesktopSession, FORK_RESPONSE_TIMEOUT_MS, forkBlockReason } from "../src/renderer/session/desktopSession";
 import { type DesktopState, mergeWorkspaceFolders, removeWorkspaceThread, renameWorkspaceThread, type SessionStore } from "../src/renderer/session/desktopStore";
 import type { Transcript } from "../src/renderer/conversation/transcript";
 
@@ -722,12 +722,12 @@ describe("forking a conversation (#2625)", () => {
   }
 
   /** 원본 읽기와 경계 읽기에 답한다. 그다음 요청은 thread/fork 이다. */
-  async function answerBoundary(h: Awaited<ReturnType<typeof openLocked>>, turns: object[]) {
-    await flush();
+  async function answerBoundary(h: Awaited<ReturnType<typeof openLocked>>, turns: object[], settle: () => Promise<unknown> = flush) {
+    await settle();
     h.replyTo("thread/read", { thread: thread("locked") });
-    await flush();
+    await settle();
     h.replyTo("thread/turns/list", { data: turns, nextCursor: null, backwardsCursor: null });
-    await flush();
+    await settle();
   }
 
   it("forks a locked thread through its newest finished turn and opens the fork without touching the source", async () => {
@@ -815,6 +815,48 @@ describe("forking a conversation (#2625)", () => {
     expect(h.session.forkOutcomeUnknown("locked")).toBe(true);
     expect(h.sent.filter((message) => message.method === "thread/fork")).toHaveLength(1);
     expect(h.state.openThreadId).toBe("locked");
+  });
+
+  it("reports an unknown result when the fork response does not come in time, and only lists a late success", async () => {
+    const h = await openLocked();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const settle = () => vi.advanceTimersByTimeAsync(0);
+      const claim = vi.fn(() => true);
+      const forking = h.session.forkThread("locked", claim);
+      await answerBoundary(h, [turn("t1")], settle);
+      const lostRequest = lastId(h.sent, "thread/fork");
+      const transcriptBefore = h.state.transcript;
+      await vi.advanceTimersByTimeAsync(FORK_RESPONSE_TIMEOUT_MS);
+      const outcome = await forking;
+      expect(outcome).toMatchObject({ kind: "unknown" });
+      expect(outcome.kind === "unknown" && outcome.reason).toContain("사이드바");
+      // The screen asks before a second fork of this source.
+      expect(h.session.forkOutcomeUnknown("locked")).toBe(true);
+      expect(h.sent.filter((message) => message.method === "thread/fork")).toHaveLength(1);
+
+      // A late success after the timeout only adds the fork to the sidebar and ends its subscription.
+      h.receive({ jsonrpc: "2.0", id: lostRequest, result: { thread: thread("child", { forkedFromId: "locked" }) } });
+      await settle();
+      expect(claim).not.toHaveBeenCalled();
+      expect(h.state.openThreadId).toBe("locked");
+      expect(h.state.transcript).toBe(transcriptBefore);
+      expect(h.state.writerElsewhere).toBe(true);
+      expect(h.state.folders?.flatMap((folder) => folder.threads).map((item) => item.id)).toContain("child");
+      expect(sentFor(h.sent, "child")).toEqual(["thread/unsubscribe"]);
+      expect(h.sent.filter((message) => message.method === "thread/fork")).toHaveLength(1);
+
+      // After the user confirms, the next fork is a new request, not the lost one.
+      const retry = h.session.forkThread("locked", () => false);
+      expect(retry).not.toBe(forking);
+      await answerBoundary(h, [turn("t1")], settle);
+      expect(h.sent.filter((message) => message.method === "thread/fork")).toHaveLength(2);
+      expect(h.session.forkOutcomeUnknown("locked")).toBe(false);
+      h.replyTo("thread/fork", { thread: thread("child-2", { forkedFromId: "locked" }) });
+      await expect(retry).resolves.toEqual({ kind: "created", threadId: "child-2" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refuses without creating anything when the server rejects the fork or no turn has finished", async () => {

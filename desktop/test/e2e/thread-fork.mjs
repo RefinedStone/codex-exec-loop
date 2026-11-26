@@ -26,6 +26,8 @@ const turn = (id, text) => ({
 });
 const turns = [turn("turn-2", "두 번째 질문"), turn("turn-1", "첫 질문")];
 const requests = [];
+/** true 면 thread/fork 에 새 대화 id 가 없는 답을 준다: 결과 불명이다. */
+let malformedFork = false;
 
 const userData = mkdtempSync(join(tmpdir(), "akra-e2e-fork-"));
 const endpoint = fake.uniqueTestEndpoint();
@@ -37,6 +39,7 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST
     if (method === "thread/resume" && id === SOURCE) return { error: { code: -32603, message: `thread ${SOURCE} already has an active writer` } };
     if (method === "thread/resume" || method === "thread/read") return { result: { thread: id === CHILD ? thread(CHILD, SOURCE) : thread(SOURCE) } };
     if (method === "thread/turns/list") return { result: { data: params.itemsView === "notLoaded" ? turns.map((item) => ({ ...item, items: [] })) : turns, nextCursor: null, backwardsCursor: null } };
+    if (method === "thread/fork" && malformedFork) return { result: {} };
     if (method === "thread/fork") return { result: { thread: thread(CHILD, SOURCE), model: "gpt-6-luna", modelProvider: "openai", serviceTier: null, disabledPluginIds: [], cwd: recordedThread.cwd, instructionSources: [], approvalPolicy: "untrusted", approvalsReviewer: "user", sandbox: { type: "readOnly", networkAccess: false }, reasoningEffort: "low" } };
     if (method === "thread/unsubscribe") return { result: { status: "unsubscribed" } };
     return undefined;
@@ -88,6 +91,22 @@ try {
   await page.getByTestId("forked-from-open").click();
   await page.getByTestId("writer-elsewhere-banner").waitFor({ timeout: 15_000 });
   check("the source opens again from the fork", (await page.getByTestId("forked-from-banner").count()) === 0);
+
+  // 결과 불명 뒤의 두 번째 분기는 먼저 묻는다. 취소하면 아무것도 보내지 않는다.
+  malformedFork = true;
+  const forkCount = () => requests.filter((request) => request.method === "thread/fork").length;
+  await page.waitForFunction(() => !document.querySelector('[data-testid="writer-elsewhere-fork"]')?.hasAttribute("disabled"), null, { timeout: 10_000 });
+  await forkButton.click();
+  await page.getByText("분기 결과를 확인하지 못했습니다").first().waitFor({ timeout: 15_000 });
+  check("an answer without a new thread id is an unknown result", forkCount() === 2 && (await page.getByTestId("forked-from-banner").count()) === 0);
+  await page.waitForFunction(() => !document.querySelector('[data-testid="writer-elsewhere-fork"]')?.hasAttribute("disabled"), null, { timeout: 10_000 });
+  let questionText = "";
+  // confirm 창은 click 을 막는다. 창이 뜨는 즉시 취소한다.
+  page.once("dialog", (question) => { questionText = question.message(); void question.dismiss(); });
+  await forkButton.click();
+  await page.waitForTimeout(500);
+  check("a fork after an unknown result asks first", questionText.includes("지난 분기 결과를 확인하지 못했습니다"), questionText);
+  check("a cancelled fork sends nothing", forkCount() === 2, String(forkCount()));
 } catch (error) {
   check(`flow finished without error (${String(error).split("\n")[0]})`, false);
 } finally {

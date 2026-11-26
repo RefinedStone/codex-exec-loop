@@ -1196,8 +1196,11 @@ The Gateway records the external documents that a thread mentions, without a mod
   The source gets only `thread/read` and `thread/turns/list`: no resume, turn, or unsubscribe. No prompt is sent
   after the fork. The fork opens only when the user is still on the source screen (navigation revision check);
   otherwise it is only added to the sidebar and the subscription that `thread/fork` made is ended. Repeated clicks
-  share one request. When the connection drops during the request, the result is unknown: Desktop does not retry
-  and asks before a new fork. A fork is a conversation copy, not a Git worktree: it uses the same working folder,
+  share one request. When the connection drops during the request, or no response comes within 20 seconds
+  (`FORK_RESPONSE_TIMEOUT_MS`), the result is unknown: Desktop does not retry, tells the user to look for a fork in
+  the sidebar, and asks before a new fork. A success that comes after the 20 seconds only adds the fork to the
+  sidebar; it does not change the screen. Desktop does not look up fork candidates with `thread/list`, because
+  `thread/list` does not return `forkedFromId`. A fork is a conversation copy, not a Git worktree: it uses the same working folder,
   so two conversations that edit files at the same time can conflict. The fork shows this warning and an
   "원본 열기" button. Remote, temporary, sub-agent, dot, and browser conversations (browser tool calls in the loaded
   turns) are refused with a reason. Limits: the sidebar "분기" badge and the warning come from `forkedFromId` in
@@ -1207,7 +1210,7 @@ The Gateway records the external documents that a thread mentions, without a mod
   that was only listed, the source must be opened again before it can share. Model, approval, sandbox, and MCP settings are those that app-server gives a normal fork; Desktop
   sends no overrides.
   Proposed, not implemented: fork from a selected older turn, fork into a separate Git worktree (#2481 A07),
-  lineage after restart, remote/dot/browser forks, and a UI wait timeout with candidate lookup.
+  lineage after restart, remote/dot/browser forks, and fork candidate lookup after an unknown result.
 - Set `AKRA_DESKTOP_DELEGATED_CHAT=1` before starting Desktop to enable its chat driver.
   The Tunnel launcher uses Local Agent runtime schema 23. When upgrading from schema 22,
   finish active work, reinstall the Local Agent in the launcher, then reconnect.
