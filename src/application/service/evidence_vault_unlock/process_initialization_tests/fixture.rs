@@ -1,7 +1,7 @@
 //! 실제 OS credential 저장소 대신 별도 프로세스의 합성 저장소를 사용한다.
 use super::super::{EvidenceVaultUnlockService, VaultSharedCopyReason, record_key};
 use crate::adapter::outbound::vault_key_store::test_support::{
-    CredentialBackend, adapter_with_store,
+    CredentialBackend, adapter_with_store, diagnostics as initialization_diagnostics,
 };
 use crate::application::port::outbound::evidence_vault_port::VaultKey;
 use crate::application::port::outbound::vault_key_store_port::{
@@ -10,13 +10,14 @@ use crate::application::port::outbound::vault_key_store_port::{
 use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::{HashSet, VecDeque};
-use std::ffi::OsString;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
+
+mod child;
+use child::ManagedChild;
 
 const SERVER_TEST: &str = "application::service::evidence_vault_unlock::process_initialization_tests::credential_server_process";
 const WORKER_TEST: &str = "application::service::evidence_vault_unlock::process_initialization_tests::sealing_worker_process";
@@ -62,12 +63,37 @@ pub(super) enum Notice {
     Snapshot(Snapshot),
     Verified(bool),
 }
+impl Notice {
+    pub(super) fn summary(&self) -> String {
+        match self {
+            Self::Ready { .. } => "Ready".into(),
+            Self::LoadWaiting { worker } => format!("LoadWaiting worker={worker}"),
+            Self::BeforeStoreWaiting { worker } => format!("BeforeStoreWaiting worker={worker}"),
+            Self::StoreWaiting { worker, .. } => format!("StoreWaiting worker={worker}"),
+            Self::Finished(result) => format!(
+                "Finished worker={} failure={} has_key={} has_ciphertext={} diagnostics={:?}",
+                result.worker,
+                match result.failure.as_deref() {
+                    None => "none",
+                    Some("KeyStoreUnavailable") => "KeyStoreUnavailable",
+                    Some(_) => "unexpected_failure",
+                },
+                result.key_id.is_some(),
+                result.ciphertext.is_some(),
+                result.diagnostics,
+            ),
+            Self::Snapshot(_) => "Snapshot".into(),
+            Self::Verified(matches) => format!("Verified matches={matches}"),
+        }
+    }
+}
 #[derive(Serialize, Deserialize)]
 pub(super) struct WorkerResult {
     pub worker: u8,
     pub key_id: Option<String>,
     pub ciphertext: Option<Vec<u8>>,
     pub failure: Option<String>,
+    pub diagnostics: Vec<initialization_diagnostics::Diagnostic>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct Snapshot {
@@ -109,55 +135,6 @@ fn configure(stream: &TcpStream) -> io::Result<()> {
     stream.set_nodelay(true)
 }
 
-struct ManagedChild(Child);
-impl ManagedChild {
-    fn spawn(test: &str, environment: &[(&str, OsString)]) -> Self {
-        let mut command = Command::new(std::env::current_exe().expect("test executable"));
-        command
-            .args(["--exact", test, "--nocapture", "--test-threads=1"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        // 부모의 역할이나 시험 설정을 다른 역할의 자식에게 물려주지 않는다.
-        for name in [
-            CONTROL_ENV,
-            CREDENTIAL_ENV,
-            WORKER_ENV,
-            RUNTIME_ENV,
-            MODE_ENV,
-            GATE_ENV,
-        ] {
-            command.env_remove(name);
-        }
-        for (name, value) in environment {
-            command.env(name, value);
-        }
-        Self(command.spawn().expect("synthetic child process"))
-    }
-
-    fn wait_success(&mut self, deadline: Instant) {
-        loop {
-            if let Some(status) = self.0.try_wait().expect("child status") {
-                assert!(status.success(), "synthetic child failed: {status}");
-                return;
-            }
-            assert!(Instant::now() < deadline, "synthetic child deadline");
-            std::thread::sleep(Duration::from_millis(5));
-        }
-    }
-
-    fn kill_and_wait(&mut self) {
-        self.0.kill().expect("kill paused synthetic worker");
-        let status = self.0.wait().expect("reap paused synthetic worker");
-        assert!(!status.success(), "the paused worker must be terminated");
-    }
-}
-impl Drop for ManagedChild {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
 struct TemporaryRuntime(PathBuf);
 impl TemporaryRuntime {
     fn new() -> Self {
@@ -186,14 +163,28 @@ impl Controller {
         write_frame(self.reader.get_mut(), &command).expect("parent control write");
     }
 
-    fn next(&mut self) -> Notice {
+    fn next(&mut self) -> Result<Notice, String> {
         let remaining = self.deadline.saturating_duration_since(Instant::now());
-        assert!(!remaining.is_zero(), "parent control deadline");
+        if remaining.is_zero() {
+            return Err("parent_control_deadline".into());
+        }
         self.reader
             .get_mut()
             .set_read_timeout(Some(remaining))
-            .expect("control timeout");
-        read_frame(&mut self.reader).expect("parent control read")
+            .map_err(|error| {
+                format!(
+                    "control_timeout kind={:?} code={:?}",
+                    error.kind(),
+                    error.raw_os_error()
+                )
+            })?;
+        read_frame(&mut self.reader).map_err(|error| {
+            format!(
+                "control_read kind={:?} code={:?}",
+                error.kind(),
+                error.raw_os_error()
+            )
+        })
     }
 }
 
@@ -244,13 +235,14 @@ pub(super) struct Harness {
     runtime: TemporaryRuntime,
     address: SocketAddr,
     deadline: Instant,
+    last_notice: String,
 }
 impl Harness {
     pub fn new(initial_loads: usize) -> Self {
         let deadline = Instant::now() + LIFETIME;
         let runtime = TemporaryRuntime::new();
         let listener = TcpListener::bind("127.0.0.1:0").expect("parent listener");
-        let server = ManagedChild::spawn(
+        let mut server = ManagedChild::spawn(
             SERVER_TEST,
             &[
                 (
@@ -264,8 +256,11 @@ impl Harness {
             reader: BufReader::new(accept_before(&listener, deadline)),
             deadline,
         };
-        let Notice::Ready { address } = controller.next() else {
-            panic!("expected server readiness")
+        let notice = controller.next().unwrap_or_else(|error| {
+            panic!("server readiness failed: {error}; {}", server.summary())
+        });
+        let Notice::Ready { address } = notice else {
+            panic!("expected server readiness, got {}", notice.summary())
         };
         Self {
             workers: Vec::new(),
@@ -274,6 +269,7 @@ impl Harness {
             runtime,
             address,
             deadline,
+            last_notice: "Ready".into(),
         }
     }
 
@@ -302,22 +298,68 @@ impl Harness {
     }
 
     pub fn release_loads(&mut self, workers: &[u8]) {
+        self.try_release_loads(workers)
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+
+    pub fn try_release_loads(&mut self, workers: &[u8]) -> Result<(), String> {
+        let expected: HashSet<_> = workers.iter().copied().collect();
         let mut waiting = HashSet::new();
         for _ in workers {
-            let Notice::LoadWaiting { worker } = self.next() else {
-                panic!("expected initial absent-key observation")
+            let notice = self.next_result("initial_load_barrier")?;
+            let Notice::LoadWaiting { worker } = notice else {
+                return Err(format!(
+                    "initial_load_barrier expected={expected:?} waiting={waiting:?} unexpected={}; {}",
+                    notice.summary(),
+                    self.diagnostics()
+                ));
             };
-            assert!(
-                waiting.insert(worker),
-                "same worker reached initial barrier twice"
-            );
+            if !expected.contains(&worker) || !waiting.insert(worker) {
+                return Err(format!(
+                    "initial_load_barrier unexpected/duplicate worker={worker} expected={expected:?} waiting={waiting:?}; {}",
+                    self.diagnostics()
+                ));
+            }
         }
-        assert_eq!(waiting, workers.iter().copied().collect());
+        assert_eq!(waiting, expected);
         self.controller.send(Control::ReleaseInitialLoads);
+        Ok(())
+    }
+
+    fn next_result(&mut self, stage: &str) -> Result<Notice, String> {
+        match self.controller.next() {
+            Ok(notice) => {
+                self.last_notice = notice.summary();
+                Ok(notice)
+            }
+            Err(error) => Err(format!("stage={stage} {error}; {}", self.diagnostics())),
+        }
     }
 
     pub fn next(&mut self) -> Notice {
-        self.controller.next()
+        self.next_result("next_notice")
+            .unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    fn diagnostics(&mut self) -> String {
+        let children: Vec<_> = self
+            .workers
+            .iter_mut()
+            .map(|(worker, child)| format!("worker={worker} {}", child.summary()))
+            .collect();
+        format!(
+            "last_notice={} workers={children:?} server={}",
+            self.last_notice,
+            self.server.summary()
+        )
+    }
+
+    pub fn block_runtime_with_file(&self) {
+        std::fs::write(
+            self.runtime.0.join("coordination"),
+            b"synthetic-runtime-blocker",
+        )
+        .expect("owned runtime blocker");
     }
 
     pub fn apply_next_store(&mut self, acknowledge: bool) {
@@ -351,7 +393,11 @@ impl Harness {
             .1
             .kill_and_wait();
         assert!(
-            self.server.0.try_wait().expect("server status").is_none(),
+            self.server
+                .process
+                .try_wait()
+                .expect("server status")
+                .is_none(),
             "credential server survives worker death"
         );
     }
@@ -396,15 +442,25 @@ struct CredentialClient {
 }
 impl CredentialClient {
     fn request(&self, request: CredentialRequest) -> Result<CredentialReply, VaultKeyStoreError> {
-        let exchange = || -> io::Result<CredentialReply> {
-            let mut stream = TcpStream::connect_timeout(&self.address, LIFETIME)?;
-            configure(&stream)?;
-            write_frame(&mut stream, &request)?;
-            read_frame(&mut BufReader::new(stream))
-        };
-        exchange().map_err(|_| {
-            VaultKeyStoreError::Unavailable("synthetic credential RPC failed".to_string())
-        })
+        initialization_diagnostics::step(match &request {
+            CredentialRequest::Load { .. } => "credential_load_rpc",
+            CredentialRequest::Store { .. } => "credential_store_rpc",
+            CredentialRequest::BeforeStore { .. } => "credential_before_store_rpc",
+            CredentialRequest::Finished(_) => "credential_finished_rpc",
+        });
+        let mut stream = TcpStream::connect_timeout(&self.address, LIFETIME)
+            .map_err(|error| Self::rpc_failure("credential_rpc_connect", &error))?;
+        configure(&stream)
+            .map_err(|error| Self::rpc_failure("credential_rpc_configure", &error))?;
+        write_frame(&mut stream, &request)
+            .map_err(|error| Self::rpc_failure("credential_rpc_write", &error))?;
+        read_frame(&mut BufReader::new(stream))
+            .map_err(|error| Self::rpc_failure("credential_rpc_read", &error))
+    }
+
+    fn rpc_failure(stage: &'static str, error: &io::Error) -> VaultKeyStoreError {
+        initialization_diagnostics::failure(stage, error);
+        VaultKeyStoreError::Unavailable("synthetic credential RPC failed".into())
     }
 }
 impl CredentialBackend for CredentialClient {
@@ -472,6 +528,7 @@ pub(super) fn run_worker() {
     let Ok(address) = std::env::var(CREDENTIAL_ENV) else {
         return;
     };
+    initialization_diagnostics::start();
     let mode = std::env::var(MODE_ENV).expect("worker mode");
     let client = Arc::new(CredentialClient {
         address: address.parse().expect("synthetic credential address"),
@@ -489,6 +546,7 @@ pub(super) fn run_worker() {
         key_id: None,
         ciphertext: None,
         failure: None,
+        diagnostics: Vec::new(),
     };
     if mode == "read_only" {
         match adapter.load_key() {
@@ -512,10 +570,7 @@ pub(super) fn run_worker() {
             }
         }
     }
-    println!(
-        "synthetic worker {}: key_id={:?}, failure={:?}",
-        result.worker, result.key_id, result.failure
-    );
+    result.diagnostics = initialization_diagnostics::snapshot();
     assert!(matches!(
         client.request(CredentialRequest::Finished(result)),
         Ok(CredentialReply::Received)

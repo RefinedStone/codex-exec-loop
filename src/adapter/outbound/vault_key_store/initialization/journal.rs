@@ -44,9 +44,13 @@ impl Journal {
         runtime: &std::path::Path,
         scope: String,
     ) -> Result<Self, VaultKeyStoreError> {
+        #[cfg(test)]
+        super::diagnostics::step("journal_open");
         let mut opened = crate::private_sqlite::open_or_create(runtime, FILES, Synchronous::Extra)
-            .map_err(|_| unavailable())?;
+            .map_err(|error| unavailable_at("journal_open", error.as_ref()))?;
         let (connection, guard) = opened.parts();
+        #[cfg(test)]
+        super::diagnostics::step("journal_schema");
         ensure_schema(connection, guard)?;
         Ok(Self { opened, scope })
     }
@@ -59,6 +63,8 @@ impl Journal {
     pub(super) fn snapshot(&mut self) -> Result<Option<State>, VaultKeyStoreError> {
         let (connection, guard) = self.opened.parts();
         verify(guard)?;
+        #[cfg(test)]
+        super::diagnostics::step("journal_snapshot");
         let state = read_state(connection, &self.scope)?;
         verify(guard)?;
         Ok(state)
@@ -69,7 +75,7 @@ impl Journal {
         verify(guard)?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|_| unavailable())?;
+            .map_err(|error| unavailable_at("journal_begin", &error))?;
         Ok(JournalTransaction {
             transaction,
             guard,
@@ -110,7 +116,7 @@ impl JournalTransaction<'_> {
                  phase = excluded.phase, fingerprint = excluded.fingerprint",
                 params![self.scope, generation, fingerprint.as_slice()],
             )
-            .map_err(|_| unavailable())?;
+            .map_err(|error| unavailable_at("journal_transaction", &error))?;
         Ok(State {
             generation,
             phase: Phase::Pending,
@@ -131,7 +137,7 @@ impl JournalTransaction<'_> {
                     expected.fingerprint.as_slice()
                 ],
             )
-            .map_err(|_| unavailable())?;
+            .map_err(|error| unavailable_at("journal_transaction", &error))?;
         if changed != 1 {
             return Err(unavailable());
         }
@@ -140,13 +146,26 @@ impl JournalTransaction<'_> {
 
     pub(super) fn commit(self) -> Result<(), VaultKeyStoreError> {
         verify(self.guard)?;
-        self.transaction.commit().map_err(|_| unavailable())?;
+        self.transaction
+            .commit()
+            .map_err(|error| unavailable_at("journal_transaction", &error))?;
         verify(self.guard)
     }
 }
 
+fn unavailable_at(
+    _stage: &'static str,
+    _error: &(dyn std::error::Error + 'static),
+) -> VaultKeyStoreError {
+    #[cfg(test)]
+    super::diagnostics::failure(_stage, _error);
+    unavailable()
+}
+
 fn verify(guard: &PrivateStoreGuard) -> Result<(), VaultKeyStoreError> {
-    guard.verify_identity().map_err(|_| unavailable())
+    guard
+        .verify_identity()
+        .map_err(|error| unavailable_at("journal_identity", error.as_ref()))
 }
 
 fn ensure_schema(
@@ -156,13 +175,13 @@ fn ensure_schema(
     verify(guard)?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|_| unavailable())?;
+        .map_err(|error| unavailable_at("journal_schema", &error))?;
     let application_id: i64 = transaction
         .query_row("PRAGMA application_id", [], |row| row.get(0))
-        .map_err(|_| unavailable())?;
+        .map_err(|error| unavailable_at("journal_schema", &error))?;
     let version: i64 = transaction
         .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .map_err(|_| unavailable())?;
+        .map_err(|error| unavailable_at("journal_schema", &error))?;
     if application_id == 0 && version == 0 {
         let objects: i64 = transaction
             .query_row(
@@ -170,25 +189,27 @@ fn ensure_schema(
                 [],
                 |row| row.get(0),
             )
-            .map_err(|_| unavailable())?;
+            .map_err(|error| unavailable_at("journal_schema", &error))?;
         if objects != 0 {
             return Err(unavailable());
         }
         transaction
             .execute_batch(TABLE_SQL)
-            .map_err(|_| unavailable())?;
+            .map_err(|error| unavailable_at("journal_schema", &error))?;
         transaction
             .pragma_update(None, "application_id", APPLICATION_ID)
-            .map_err(|_| unavailable())?;
+            .map_err(|error| unavailable_at("journal_schema", &error))?;
         transaction
             .pragma_update(None, "user_version", SCHEMA_VERSION)
-            .map_err(|_| unavailable())?;
+            .map_err(|error| unavailable_at("journal_schema", &error))?;
     } else if application_id != APPLICATION_ID || version != SCHEMA_VERSION {
         return Err(unavailable());
     }
     validate_schema(&transaction)?;
     verify(guard)?;
-    transaction.commit().map_err(|_| unavailable())?;
+    transaction
+        .commit()
+        .map_err(|error| unavailable_at("journal_schema", &error))?;
     verify(guard)
 }
 
@@ -198,7 +219,7 @@ fn validate_schema(connection: &Connection) -> Result<(), VaultKeyStoreError> {
             "SELECT type, name, sql FROM sqlite_schema
          WHERE name NOT GLOB 'sqlite_*' ORDER BY name",
         )
-        .map_err(|_| unavailable())?;
+        .map_err(|error| unavailable_at("journal_schema", &error))?;
     let objects = statement
         .query_map([], |row| {
             Ok((
@@ -207,9 +228,9 @@ fn validate_schema(connection: &Connection) -> Result<(), VaultKeyStoreError> {
                 row.get::<_, String>(2)?,
             ))
         })
-        .map_err(|_| unavailable())?
+        .map_err(|error| unavailable_at("journal_schema", &error))?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| unavailable())?;
+        .map_err(|error| unavailable_at("journal_schema", &error))?;
     if objects.len() != 1
         || objects[0].0 != "table"
         || objects[0].1 != "vault_key_initialization"
@@ -234,7 +255,7 @@ fn read_state(connection: &Connection, scope: &str) -> Result<Option<State>, Vau
             },
         )
         .optional()
-        .map_err(|_| unavailable())?;
+        .map_err(|error| unavailable_at("journal_snapshot", &error))?;
     let Some((generation, phase, fingerprint)) = raw else {
         return Ok(None);
     };

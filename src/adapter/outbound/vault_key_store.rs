@@ -288,7 +288,7 @@ pub(crate) mod test_support {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
-    pub(crate) use super::initialization::CredentialBackend;
+    pub(crate) use super::initialization::{CredentialBackend, diagnostics};
     use super::*;
 
     pub(crate) fn get_or_create_with_store(
