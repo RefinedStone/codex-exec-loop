@@ -252,6 +252,7 @@ try {
   await panel.getByTestId("issue-draft-publish").click();
   await panel.getByTestId("issue-draft-cancel-validation").click();
   check("a cancel after the result is final is shown as refused", await until(async () => ((await panel.getByTestId("issue-draft-cancel-validation-state").textContent()) ?? "").includes("취소하지 못했습니다")));
+  check("a refused cancel can be retried while the publish runs", await panel.getByTestId("issue-draft-cancel-validation").isEnabled());
   issue.heldPublish?.resolve("failed");
   check("the finished validation keeps its own result", await until(async () => ((await panel.getByTestId("issue-draft-notice").textContent()) ?? "").includes("검증을 통과하지 못해서")));
   await title.fill("New title!");
