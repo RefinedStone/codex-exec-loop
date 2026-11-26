@@ -76,6 +76,15 @@ function DeliveryStrip({ thread, onReview }: { thread: MockThread; onReview(): v
   const delivery = useDelivery(thread);
   if (!delivery) return null;
   const next = delivery.next;
+  // 추천은 안내이다. 검토·검증을 끝내지 않아도 다른 전달 작업을 고를 수 있다.
+  const actions = [
+    { id: "verify", label: "검증 맡기기", available: !!thread.criteria && thread.criteria.passed < thread.criteria.total },
+    { id: "commit", label: "커밋", available: !thread.committed },
+    { id: "push", label: "push", available: !thread.pushed },
+    { id: "pr", label: "PR 만들기", available: !thread.pullRequest },
+    { id: "merge", label: "GitHub 에서 열기", available: thread.pullRequest?.checks === "pass" && !thread.pullRequest.merged },
+  ] as const;
+  const otherActions = actions.filter((action) => next !== null && action.available && action.id !== next.id);
   return (
     <div className="delivery">
       <ol className="delivery-steps" aria-label="전달 단계">
@@ -108,6 +117,18 @@ function DeliveryStrip({ thread, onReview }: { thread: MockThread; onReview(): v
           <span className="muted">머지까지 끝났습니다.</span>
         )}
       </div>
+      {otherActions.length > 0 && (
+        <details>
+          <summary className="ghost">다른 전달 작업</summary>
+          <div className="offer-buttons">
+            {otherActions.map((action) => (
+              <button key={action.id} type="button" className="button" onClick={() => runDelivery(thread.id, action.id)}>
+                {action.label}
+              </button>
+            ))}
+          </div>
+        </details>
+      )}
     </div>
   );
 }

@@ -61,6 +61,8 @@ export interface BlueprintState {
   viewed: Record<string, string[]>;
   /** 읽지 않은 스레드를 열었을 때 "새 내용" 구분선을 그릴 턴이다. */
   newFrom: Record<string, string>;
+  /** 아직 열지 않은 첫 완료 턴이다. 다음 예약 턴이 시작돼도 이 경계는 남는다. */
+  unreadFrom: Record<string, string>;
   /** 변경 패널이 처음 보일 파일이다. 대화의 변경 카드에서 파일을 누르면 정한다. */
   reviewPath: string | null;
   sidebarOpen: boolean;
@@ -98,6 +100,7 @@ export const useBlueprint = create<BlueprintState>(() => ({
   sidebarGroup: "project",
   viewed: {},
   newFrom: {},
+  unreadFrom: {},
   reviewPath: null,
   sidebarOpen: true,
   panel: null,
@@ -139,14 +142,17 @@ export function openThread(threadId: string): void {
   set((state) => {
     const unread = state.threads.find((thread) => thread.id === threadId)?.status === "unread";
     const lastTurnId = state.turns[threadId]?.at(-1)?.id;
+    const firstUnseen = state.unreadFrom[threadId] ?? (unread ? lastTurnId : undefined);
     const { [threadId]: _seen, ...newFrom } = state.newFrom;
+    const { [threadId]: _opened, ...unreadFrom } = state.unreadFrom;
     return {
       view: "thread",
       openThreadId: threadId,
       paletteOpen: false,
       // 스레드를 보면 읽지 않음 상태가 없어진다. 떠나 있던 동안 끝난 턴 앞에 "새 내용" 구분선을 둔다.
       threads: state.threads.map((thread) => (thread.id === threadId && unread ? { ...thread, status: "idle" } : thread)),
-      newFrom: unread && lastTurnId ? { ...newFrom, [threadId]: lastTurnId } : newFrom,
+      newFrom: firstUnseen ? { ...newFrom, [threadId]: firstUnseen } : newFrom,
+      unreadFrom,
     };
   });
 }
@@ -431,7 +437,11 @@ async function playReply(ref: TurnRef, run: Run): Promise<void> {
   // 변경이 바뀌면 "봄" 표시를 지우고, 커밋과 push 단계가 다시 남는다.
   set((state) => ({
     viewed: { ...state.viewed, [ref.threadId]: [] },
-    threads: state.threads.map((thread) => (thread.id === ref.threadId ? { ...thread, added: thread.added + 12, removed: thread.removed + 3, committed: false, pushed: false } : thread)),
+    threads: state.threads.map((thread) => (thread.id === ref.threadId ? {
+      ...thread, added: thread.added + 12, removed: thread.removed + 3, committed: false, pushed: false,
+      // 머지된 PR 은 이전 변경의 완료이다. 새 변경은 새 전달 흐름으로 시작한다.
+      pullRequest: thread.pullRequest?.merged ? null : thread.pullRequest,
+    } : thread)),
   }));
   await pause(run, 500);
   await playPushAndReport(ref, run, {
@@ -452,12 +462,15 @@ function finishRun(ref: TurnRef, status: MockTurn["status"]): void {
       item.type === "activity" ? { ...item, steps: item.steps.map((step) => (step.status === "running" ? { ...step, status: "failed" as const } : step)) } : item,
     ),
   }));
+  const watching = get().view === "thread" && get().openThreadId === ref.threadId;
   set((state) => {
     const { [ref.threadId]: _started, ...runStartedAt } = state.runStartedAt;
     const { [ref.threadId]: _approval, ...approvals } = state.approvals;
-    return { runStartedAt, approvals };
+    const unreadFrom = { ...state.unreadFrom };
+    if (watching) delete unreadFrom[ref.threadId];
+    else unreadFrom[ref.threadId] ??= ref.turnId;
+    return { runStartedAt, approvals, unreadFrom };
   });
-  const watching = get().view === "thread" && get().openThreadId === ref.threadId;
   setThreadStatus(ref.threadId, watching ? "idle" : "unread");
   // mock: 끝난 턴이 남은 완료 기준을 확인했다고 본다.
   const criteria = get().threads.find((thread) => thread.id === ref.threadId)?.criteria;

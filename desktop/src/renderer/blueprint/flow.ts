@@ -95,11 +95,16 @@ export function deliveryOf(thread: MockThread, viewedFiles: number, changedFiles
 /** 스레드의 주의 묶음과 이유이다. 이유는 원인(승인, 실패)이 먼저이고, 없으면 전달의 다음 단계이다. */
 export function attentionOf(thread: MockThread, approval: MockApproval | undefined, delivery: Delivery | null): Attention {
   const next = delivery?.next ? `다음: ${delivery.next.label}` : "";
+  if (thread.status === "approval") {
+    return { group: "mine", reason: approval ? `승인 필요: ${approval.command}` : "승인 필요" };
+  }
+  // PR 실패는 턴의 실행 상태와 별개이다. 후속 턴이 끝나도 해결 전까지 내 차례에 남는다.
+  if (thread.pullRequest?.checks === "fail" && !thread.pullRequest.merged) {
+    return { group: "mine", reason: `PR #${thread.pullRequest.number} 의 CI 실패` };
+  }
   switch (thread.status) {
-    case "approval":
-      return { group: "mine", reason: approval ? `승인 필요: ${approval.command}` : "승인 필요" };
     case "failed":
-      return { group: "mine", reason: thread.pullRequest?.checks === "fail" ? `PR #${thread.pullRequest.number} 의 CI 실패` : "턴 실패" };
+      return { group: "mine", reason: "턴 실패" };
     case "unread":
       return { group: "read", reason: next ? `끝남 · ${next}` : "끝남" };
     case "running":
@@ -111,6 +116,6 @@ export function attentionOf(thread: MockThread, approval: MockApproval | undefin
 
 /** `currentId` 다음의 "내 차례" 스레드이다. 끝에서는 처음으로 돌아간다. 하나도 없으면 null 이다. */
 export function nextInTurn(threads: readonly MockThread[], currentId: string | null): string | null {
-  const mine = threads.filter((thread) => isListed(thread) && (thread.status === "approval" || thread.status === "failed")).map((thread) => thread.id);
+  const mine = threads.filter((thread) => isListed(thread) && attentionOf(thread, undefined, null).group === "mine").map((thread) => thread.id);
   return mine[(mine.indexOf(currentId ?? "") + 1) % mine.length] ?? null;
 }
