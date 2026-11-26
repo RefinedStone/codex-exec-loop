@@ -3133,6 +3133,42 @@
       }
     },
     {
+      "name": "attention",
+      "summary": "What a person must answer now, derived on each read from pending approvals, proposed tasks awaiting acceptance, and blocked or failed pull request validation. Each item has a cause, a subject, the source revision, and next steps. An item leaves the list when its source changes; reading it does not remove it. Read and snooze state are not stored.",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "attention",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/AttentionItem"
+            },
+            "type": "array"
+          },
+          "type": {
+            "const": "attention",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "items"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "history",
       "summary": "A page of the decision log after a cursor. Send the answer's `next_after` as the next `after`. `recorder.degraded` means the kernel lost records and recovery is incomplete.",
       "input": {
@@ -6176,6 +6212,89 @@
         "observations"
       ],
       "type": "object"
+    },
+    "AttentionCause": {
+      "oneOf": [
+        {
+          "const": "approval_pending",
+          "type": "string"
+        },
+        {
+          "const": "task_proposed",
+          "type": "string"
+        },
+        {
+          "const": "pr_validation_blocked",
+          "type": "string"
+        },
+        {
+          "const": "pr_validation_failed",
+          "type": "string"
+        }
+      ]
+    },
+    "AttentionItem": {
+      "properties": {
+        "cause": {
+          "$ref": "#/$defs/AttentionCause"
+        },
+        "id": {
+          "type": "string"
+        },
+        "next": {
+          "items": {
+            "$ref": "#/$defs/NextStep"
+          },
+          "type": "array"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "subject": {
+          "$ref": "#/$defs/AttentionSubject"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "cause",
+        "subject",
+        "revision",
+        "summary",
+        "next"
+      ],
+      "type": "object"
+    },
+    "AttentionSubject": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/AttentionSubjectKind"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "type": "object"
+    },
+    "AttentionSubjectKind": {
+      "enum": [
+        "thread",
+        "task",
+        "pull_request"
+      ],
+      "type": "string"
     },
     "AutoFollowSettings": {
       "properties": {
@@ -12411,6 +12530,19 @@
         {
           "additionalProperties": false,
           "properties": {
+            "type": {
+              "const": "attention",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "after": {
               "default": null,
               "format": "int64",
@@ -12835,6 +12967,25 @@
           },
           "required": [
             "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/AttentionItem"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "attention",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "items"
           ],
           "type": "object"
         },

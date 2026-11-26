@@ -53,6 +53,9 @@ pub use next::{NextStep, reason_next};
 mod spec;
 pub use spec::{KernelSpec, describe};
 
+mod attention;
+pub use attention::{AttentionCause, AttentionItem, AttentionSubject, AttentionSubjectKind};
+
 mod task_acceptance;
 pub use task_acceptance::{TaskAcceptanceChannel, TaskAcceptanceCriterion};
 mod task_evidence;
@@ -1955,6 +1958,8 @@ pub enum KernelQuery {
         limit: Option<usize>,
     },
     Parallel {},
+    /// 사람이 지금 답해야 하는 일이다. 스냅샷의 원본에서 계산한다.
+    Attention {},
     /*
      * 판단 사건 기록이다 (plan 19 Q3-3). `after` 보다 뒤의 사건을 기록 순서대로 최대 `limit` 개 준다. 처음에는
      * `after` 를 비운다. 답의 `next_after` 를 다음 조회의 `after` 로 보낸다.
@@ -2080,6 +2085,19 @@ impl KernelQuery {
                 KernelQueryAnswer::TaskEvidence(TaskEvidenceState::unavailable())
             }
             Self::Parallel {} => KernelQueryAnswer::Parallel(ParallelState::from_core(parallel)),
+            Self::Attention {} => KernelQueryAnswer::Attention {
+                items: attention::attention_items(
+                    threads,
+                    parallel
+                        .supervisor
+                        .and_then(|supervisor| supervisor.pr_validation.as_ref()),
+                    snapshot
+                        .planning_parallel
+                        .planning_runtime
+                        .queue_projection()
+                        .map_or(&[], |queue| queue.proposed_tasks.as_slice()),
+                ),
+            },
             Self::History { after, .. } => {
                 KernelQueryAnswer::History(history.unwrap_or_else(|| KernelEventPage {
                     records: Vec::new(),
@@ -2153,6 +2171,8 @@ spec_names! {
             "Read current task acceptance scopes and host-observed evidence without creating attempts or artifacts. Choose explicit task_ids or after_task_id, never both. The default and maximum limit are 256; truncated and next_task_id describe later tasks. Unavailable source observations do not become Pass or Pending.";
         Parallel => "parallel",
             "The parallel mode state: pool, agents, merge queue, and pull request validation.";
+        Attention => "attention",
+            "What a person must answer now, derived on each read from pending approvals, proposed tasks awaiting acceptance, and blocked or failed pull request validation. Each item has a cause, a subject, the source revision, and next steps. An item leaves the list when its source changes; reading it does not remove it. Read and snooze state are not stored.";
         History => "history",
             "A page of the decision log after a cursor. Send the answer's `next_after` as the next `after`. `recorder.degraded` means the kernel lost records and recovery is incomplete.";
         Operation => "operation",
@@ -2210,6 +2230,9 @@ pub enum KernelQueryAnswer {
     TaskResult(Box<TaskResultState>),
     TaskEvidence(TaskEvidenceState),
     Parallel(ParallelState),
+    Attention {
+        items: Vec<AttentionItem>,
+    },
     /// 사건 하나는 `sequence`, `recorded_at`, `event` 이고 `event.kind` 가 종류이다 (`turn_started` 등).
     History(KernelEventPage),
     /// 연산 하나의 상태와 그 연산의 기록이다 (plan 18 K4-4).

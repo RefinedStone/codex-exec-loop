@@ -157,6 +157,30 @@ pub fn reason_next(reason: ReasonCode) -> Vec<NextStep> {
     }
 }
 
+/// 그 주의 원인 뒤의 다음 행동이다. `attention` 조회의 `items[].next` 이다.
+pub(super) fn attention_next(cause: super::attention::AttentionCause) -> Vec<NextStep> {
+    use super::attention::AttentionCause;
+    use NextStep as Step;
+    match cause {
+        AttentionCause::ApprovalPending => {
+            vec![
+                Step::AskUser,
+                Step::command(KernelCommandKind::DecideApproval),
+            ]
+        }
+        // 수락은 상태를 바꾸는 task 변경이다. 변경에는 사람이 읽은 planning 판이 필요하다.
+        AttentionCause::TaskProposed => vec![
+            Step::query(KernelQueryKind::Planning),
+            Step::AskUser,
+            Step::command(KernelCommandKind::UpdateTask),
+        ],
+        // PR 을 다시 열거나 바꾸는 명령은 프로토콜에 없다. 사람이 정한다.
+        AttentionCause::PrValidationBlocked | AttentionCause::PrValidationFailed => {
+            vec![Step::query(KernelQueryKind::Parallel), Step::AskUser]
+        }
+    }
+}
+
 /// 그 JSON-RPC 오류 뒤의 다음 행동이다. 스펙의 `errors[].next` 이다.
 pub(crate) fn error_next(error: KernelErrorKind) -> Vec<NextStep> {
     use NextStep as Step;
