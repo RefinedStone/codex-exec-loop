@@ -12,6 +12,7 @@ import { panels as PANELS, isPanelId } from "./extensions/panelDefinitions";
 import { STORAGE_EVIDENCE_EVENT, isStorageReference, queueStorageEvidence, clearStorageEvidence } from "./storage/storageEvidence";
 import { BrowserPanel } from "./browser/BrowserPanel";
 import { ApprovalPrompt } from "./conversation/ApprovalPrompt";
+import { AreaBoundary } from "./views/AreaBoundary";
 import { pullRequestBadgeClass } from "./conversation/BranchCommits";
 import { Composer, type ComposerActions } from "./conversation/Composer";
 import { ConversationView } from "./conversation/ConversationView";
@@ -291,7 +292,9 @@ function RightPanel({ panel, maximized, delegationEnabled, enabledExtensions, ch
         </button>
       </header>
       {/* 탭 머리줄은 그대로 두고 탭의 내용만 확대한다. 탭마다 값이 따로 있다. */}
-      <div className="panel-body" style={zoomStyle(zoom)} data-zoom-scope={panelZoomScope(panel)}>{children}</div>
+      <div className="panel-body" style={zoomStyle(zoom)} data-zoom-scope={panelZoomScope(panel)}>
+        <AreaBoundary key={panel} area="이 패널">{children}</AreaBoundary>
+      </div>
     </aside>
   );
 }
@@ -854,7 +857,7 @@ export function App() {
 
   return (
     <div className="shell">
-      {sidebarOpen && <Sidebar onOpenThread={openThread} onOpenRemoteThread={openRemoteThread} onReloadChats={reloadChats} />}
+      {sidebarOpen && <AreaBoundary area="사이드바"><Sidebar onOpenThread={openThread} onOpenRemoteThread={openRemoteThread} onReloadChats={reloadChats} /></AreaBoundary>}
       <div className="workspace">
         <TopBar onNavigate={navigate} onFork={forkOpenThread} tree={tree} documentCount={documents.phase === "loaded" ? documents.documents.length : null} changedDocumentCount={documents.phase === "loaded" ? changedCount(documents.documents) : 0} delegationEnabled={delegationEnabled} enabledExtensions={enabledExtensions} blog={blog} />
         <SessionBanner />
@@ -868,8 +871,11 @@ export function App() {
               <>
                 <WriterElsewhereBanner onReconnect={async () => session.current?.reopenThread()} onFork={forkOpenThread} />
                 <ForkedFromBanner onOpenThread={openThread} />
-                <ConversationView onLoadOlder={async () => session.current?.loadOlderTurns()}
-                  onDraftTask={kernelPhase === "attached" && attachedWorkspace === openCwd ? openTaskEditor : undefined} />
+                {/* 대화가 그리다 실패해도 입력창과 초안은 남는다. */}
+                <AreaBoundary key={openThreadId ?? ""} area="대화">
+                  <ConversationView onLoadOlder={async () => session.current?.loadOlderTurns()}
+                    onDraftTask={kernelPhase === "attached" && attachedWorkspace === openCwd ? openTaskEditor : undefined} />
+                </AreaBoundary>
                 {session.current && <ThreadCompactionControl key={openThreadId ?? ""} controller={session.current.compaction} />}
                 {/* 스레드마다 새로 만든다. 전송 중 표시와 오류가 다른 스레드의 입력창으로 넘어가지 않는다. 초안은 `uiStore` 에 남는다. */}
                 <Composer key={openThreadId ?? ""} actions={composerActions} above={<ApprovalPrompt onAnswer={(requestId, decision) => session.current?.answerApproval(requestId, decision)}
@@ -882,7 +888,9 @@ export function App() {
                 <div className="banner" data-testid="remote-banner">
                   <span>클라우드 · 읽기 전용입니다. 메시지를 보내지 않습니다.</span>
                 </div>
-                <ConversationView onLoadOlder={async () => remoteSessions.current.get(remoteHost)?.loadOlderTurns()} />
+                <AreaBoundary key={remoteHost} area="대화">
+                  <ConversationView onLoadOlder={async () => remoteSessions.current.get(remoteHost)?.loadOlderTurns()} />
+                </AreaBoundary>
               </ConversationStoreContext.Provider>
             )}
             </div>
