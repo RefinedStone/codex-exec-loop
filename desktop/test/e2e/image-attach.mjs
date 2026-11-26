@@ -29,11 +29,14 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST
 const env = { ...process.env, AKRA_GATEWAY_ENDPOINT: endpoint, AKRA_DESKTOP_HIDDEN: "1", AKRA_DESKTOP_USER_DATA: userData };
 delete env.ELECTRON_RUN_AS_NODE;
 
-const paste = (page, files) => page.getByTestId("composer-input").evaluate((element, list) => {
-  const data = new DataTransfer();
-  for (const { name, type, size } of list) data.items.add(new File([new Uint8Array(size)], name, { type }));
-  element.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
-}, files);
+// 묶음마다 붙여넣기 하나이다. 한 번에 보내므로 앞 묶음의 읽기가 끝나기 전에 다음 묶음이 붙는다.
+const paste = (page, ...batches) => page.getByTestId("composer-input").evaluate((element, list) => {
+  for (const files of list) {
+    const data = new DataTransfer();
+    for (const { name, type, size } of files) data.items.add(new File([new Uint8Array(size)], name, { type }));
+    element.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+  }
+}, batches);
 
 const app = await electron.launch({ executablePath: electronPath, args: [desktopDir, ...(process.env.CI ? ["--no-sandbox"] : [])], env });
 try {
@@ -42,20 +45,21 @@ try {
   await page.getByTestId("thread-entry").first().click();
   await page.getByTestId("composer-input").waitFor({ timeout: 15_000 });
 
-  await paste(page, [{ name: "shot.png", type: "image/png", size: 64 }]);
+  await paste(page, [{ name: "shot.png", type: "image/png", size: 64 }], [{ name: "second.png", type: "image/png", size: 64 }]);
   await page.getByTestId("attachments").waitFor({ timeout: 5_000 });
-  check("a pasted image shows a preview", (await page.locator('[data-testid="attachments"] img').count()) === 1);
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid="attachments"] img').length >= 2, null, { timeout: 5_000 }).catch(() => {});
+  check("two quick pastes keep both images", (await page.locator('[data-testid="attachments"] img').count()) === 2);
   await paste(page, [{ name: "huge.png", type: "image/png", size: 10 * 1024 * 1024 + 1 }]);
   await page.locator(".composer-area .error").filter({ hasText: "MB 까지" }).waitFor({ timeout: 5_000 });
-  check("an image over the size limit is refused with a reason", (await page.locator('[data-testid="attachments"] img').count()) === 1);
+  check("an image over the size limit is refused with a reason", (await page.locator('[data-testid="attachments"] img').count()) === 2);
 
   await page.getByTestId("composer-input").fill("이 화면을 보세요");
   await page.getByTestId("composer-send").click();
   const deadline = Date.now() + 10_000;
   while (starts.length === 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
   const input = starts[0]?.input ?? [];
-  check("the image goes to the turn input after the text", input.length === 2 && input[0].type === "text"
-    && input[1].type === "image" && String(input[1].url).startsWith("data:image/png;base64,"), JSON.stringify(input).slice(0, 200));
+  check("the images go to the turn input after the text", input.length === 3 && input[0].type === "text"
+    && input.slice(1).every((item) => item.type === "image" && String(item.url).startsWith("data:image/png;base64,")), JSON.stringify(input).slice(0, 200));
   await page.waitForFunction(() => document.querySelector('[data-testid="attachments"]') === null, null, { timeout: 5_000 });
   check("the attachments clear after sending", true);
 } catch (error) {
