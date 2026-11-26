@@ -15,6 +15,11 @@ export function activeMention(text: string, caret: number): ActiveMention | null
   return { start: before.length - match[2]!.length - 1, query: match[2]! };
 }
 
+/** 두 언급이 같은 `@` 자리와 같은 글인지 본다. 커서가 움직여 언급이 바뀌었는지 가린다. */
+export function sameMention(a: ActiveMention | null, b: ActiveMention | null): boolean {
+  return a === b || (a !== null && b !== null && a.start === b.start && a.query === b.query);
+}
+
 /** `@글` 을 고른 경로로 바꾼다. 경로에 공백이 있으면 따옴표로 감싼다. 뒤에 공백을 하나 둔다. */
 export function applyMention(text: string, mention: ActiveMention, caret: number, path: string): { text: string; caret: number } {
   const inserted = `${/\s/.test(path) ? JSON.stringify(path) : path} `;

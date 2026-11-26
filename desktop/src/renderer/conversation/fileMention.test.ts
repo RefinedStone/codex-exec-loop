@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { activeMention, applyMention } from "./fileMention";
+import { activeMention, applyMention, sameMention } from "./fileMention";
 
 describe("file mention (#2837)", () => {
   it("finds the @word before the caret only at a word start", () => {
@@ -14,5 +14,15 @@ describe("file mention (#2837)", () => {
     const at = activeMention("open @ma now", 8)!;
     expect(applyMention("open @ma now", at, 8, "src/main.ts")).toEqual({ text: "open src/main.ts  now", caret: 17 });
     expect(applyMention("@a", activeMention("@a", 2)!, 2, "my file.txt").text).toBe('"my file.txt" ');
+  });
+
+  it("tells when the caret left the open mention", () => {
+    const text = "read @main and preserve this instruction";
+    const open = activeMention(text, 10);
+    expect(sameMention(open, activeMention(text, 10))).toBe(true);
+    expect(activeMention(text, text.length)).toBeNull();
+    expect(sameMention(open, activeMention(text, text.length))).toBe(false);
+    expect(sameMention(open, activeMention(text, 8))).toBe(false);
+    expect(sameMention(null, null)).toBe(true);
   });
 });

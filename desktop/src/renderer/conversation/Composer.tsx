@@ -8,7 +8,7 @@ import { Icon } from "../design/icons";
 import { useDesktopStore } from "../session/desktopStore";
 import { HOME_DRAFT, setDraft as setDraftFor, useUiStore } from "../session/uiStore";
 import { isSendKey, recallCursor } from "./composerKeys";
-import { type ActiveMention, activeMention, applyMention } from "./fileMention";
+import { type ActiveMention, activeMention, applyMention, sameMention } from "./fileMention";
 import { isSentComposerDraft, runComposerAction, useComposerRequests } from "./composerAction";
 import { PlanList } from "./ConversationView";
 import { loadPrompts, rememberPrompt } from "./promptHistory";
@@ -135,7 +135,7 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
         await actions.sendMessage(text);
       }
       rememberPrompt(text);
-      if (isSentComposerDraft(useUiStore.getState().drafts[draftKey], text)) setDraft("");
+      if (isSentComposerDraft(useUiStore.getState().drafts[draftKey], text)) clearDraft();
     });
   };
 
@@ -151,6 +151,7 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
     const cursor = recallCursor(prompts.length, browsing ? (recalled.current?.cursor ?? null) : null, direction);
     const text = cursor === null ? "" : (prompts[cursor] ?? "");
     recalled.current = cursor === null ? null : { cursor, text };
+    closeMention();
     setDraft(text);
     return true;
   };
@@ -159,12 +160,25 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
   // 입력창은 스레드마다 새로 만들므로, 떠난 스레드의 결과는 이 번호로 막힌다.
   const [mention, setMention] = useState<{ at: ActiveMention; files: string[]; cursor: number } | null>(null);
   const mentionSeq = useRef(0);
+  // 마지막으로 찾기 시작한 언급이다. 커서만 움직여 언급이 바뀌면 (onSelect) 다시 찾거나 닫는다.
+  const mentionAt = useRef<ActiveMention | null>(null);
   useEffect(() => () => {
     mentionSeq.current += 1;
   }, []);
+  const closeMention = () => {
+    mentionSeq.current += 1;
+    mentionAt.current = null;
+    setMention(null);
+  };
+  /** 초안을 코드로 비운다. 열린 후보와 진행 중인 찾기도 버린다. */
+  const clearDraft = () => {
+    closeMention();
+    setDraft("");
+  };
   const updateMention = (text: string, caret: number) => {
     const seq = ++mentionSeq.current;
     const at = actions.searchFiles ? activeMention(text, caret) : null;
+    mentionAt.current = at;
     if (!at || !actions.searchFiles) {
       setMention(null);
       return;
@@ -181,9 +195,11 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
   const chooseMention = (path: string) => {
     if (!mention) return;
     const caret = input.current?.selectionStart ?? draft.length;
-    const next = applyMention(draft, mention.at, caret, path);
-    mentionSeq.current += 1;
-    setMention(null);
+    // 후보를 연 뒤 커서가 언급 밖으로 나갔으면 바꾸지 않는다. 바꾸면 커서까지의 글이 지워진다.
+    const at = activeMention(draft, caret);
+    closeMention();
+    if (!at || at.start !== mention.at.start) return;
+    const next = applyMention(draft, at, caret, path);
     setDraft(next.text);
     requestAnimationFrame(() => input.current?.setSelectionRange(next.caret, next.caret));
   };
@@ -204,8 +220,7 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
-        mentionSeq.current += 1;
-        setMention(null);
+        closeMention();
         return;
       }
     }
@@ -225,7 +240,7 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
     if (disabled || !draft.trim() || !actions.queueMessage) return;
     try {
       actions.queueMessage(draft);
-      setDraft("");
+      clearDraft();
       setError(null);
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
@@ -257,6 +272,10 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
             onChange={(event) => {
               setDraft(event.target.value);
               updateMention(event.target.value, event.target.selectionStart);
+            }}
+            onSelect={(event) => {
+              const { value, selectionStart } = event.currentTarget;
+              if (!sameMention(activeMention(value, selectionStart), mentionAt.current)) updateMention(value, selectionStart);
             }}
             onKeyDown={onKeyDown}
             placeholder={writerElsewhere ? "다른 Codex 앱이 이 스레드를 쓰는 동안 보낼 수 없습니다" : inProgress ? "진행 중인 턴에 추가 지시 (steer)" : "무엇을 할까요?"}

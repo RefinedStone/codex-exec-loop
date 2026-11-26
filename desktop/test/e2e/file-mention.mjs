@@ -51,6 +51,27 @@ try {
   await page.keyboard.type("@zzz");
   await page.waitForTimeout(400);
   check("no list when nothing matches", (await page.getByTestId("mention-list").count()) === 0);
+
+  // 후보를 연 뒤 커서를 언급 밖으로 옮기면 후보를 닫고 뒤의 글을 지우지 않는다.
+  const tail = "read @main and preserve this instruction";
+  await input.fill("read  and preserve this instruction");
+  await page.keyboard.press("Home");
+  for (let step = 0; step < 5; step += 1) await page.keyboard.press("ArrowRight");
+  await page.keyboard.type("@main");
+  await page.getByTestId("mention-list").waitFor({ timeout: 5_000 });
+  await page.keyboard.press("Control+End");
+  await page.waitForTimeout(400);
+  check("moving the caret out of the mention closes the list", (await page.getByTestId("mention-list").count()) === 0);
+  check("the text after the mention stays", (await input.inputValue()) === tail, await input.inputValue());
+
+  // 예약으로 초안을 비우면 후보도 사라지고 늦게 온 찾기가 다시 열지 않는다.
+  await input.fill("");
+  await page.keyboard.type("@main");
+  await page.getByTestId("mention-list").waitFor({ timeout: 5_000 });
+  await page.keyboard.type(".");
+  await page.getByTestId("composer-queue").click();
+  await page.waitForTimeout(400);
+  check("reserving the draft clears the candidates", (await input.inputValue()) === "" && (await page.getByTestId("mention-list").count()) === 0, await input.inputValue());
 } catch (error) {
   check(`flow finished without error (${String(error).split("\n")[0]})`, false);
 } finally {
