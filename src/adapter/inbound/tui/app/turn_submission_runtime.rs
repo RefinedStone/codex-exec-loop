@@ -1035,8 +1035,8 @@ mod tests {
     use anyhow::Result;
     use std::fs;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-    use std::sync::{Arc, Mutex, mpsc};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Condvar, Mutex, mpsc};
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     #[derive(Default)]
@@ -1137,6 +1137,13 @@ mod tests {
         fn path_str(&self) -> &str {
             &self.path_text
         }
+    }
+
+    fn workspace_is_empty(workspace: &TempWorkspace) -> bool {
+        fs::read_dir(&workspace.path)
+            .expect("temp workspace should be readable")
+            .next()
+            .is_none()
     }
 
     impl Drop for TempWorkspace {
@@ -1287,73 +1294,80 @@ mod tests {
     const MANUAL_PREPARATION_WATCHDOG: Duration = Duration::from_secs(10);
 
     /*
-     * Wraps the real filesystem adapter. The first planning workspace call stops the manual
-     * preparation worker until the test releases it, so the test decides when preparation
-     * completes. Each call records its port function as the current preparation stage.
+     * Wraps the real filesystem adapter. While the gate is closed, every planning workspace
+     * call from a worker thread waits, so manual preparation cannot complete before the test
+     * releases it. Planning runtime projection loads run on other workers at the same time,
+     * so a one-shot gate could hold one of them and let the preparation pass. Calls on the
+     * test thread never wait. Each call records its port function as the last stage.
      */
     struct GatedPlanningWorkspace {
         inner: FilesystemPlanningWorkspaceAdapter,
-        armed: AtomicBool,
+        gate: Arc<GateState>,
         entered: mpsc::SyncSender<()>,
-        release: Mutex<mpsc::Receiver<()>>,
-        stage: Arc<Mutex<&'static str>>,
+        test_thread: std::thread::ThreadId,
+    }
+
+    struct GateState {
+        released: Mutex<bool>,
+        opened: Condvar,
+        stage: Mutex<&'static str>,
     }
 
     struct PreparationGate {
+        state: Arc<GateState>,
         entered: mpsc::Receiver<()>,
-        release: mpsc::SyncSender<()>,
-        stage: Arc<Mutex<&'static str>>,
     }
 
     fn gated_planning_workspace() -> (GatedPlanningWorkspace, PreparationGate) {
         let (entered_tx, entered_rx) = mpsc::sync_channel(1);
-        let (release_tx, release_rx) = mpsc::sync_channel(1);
-        let stage = Arc::new(Mutex::new("no planning workspace call"));
+        let state = Arc::new(GateState {
+            released: Mutex::new(false),
+            opened: Condvar::new(),
+            stage: Mutex::new("no planning workspace call"),
+        });
         (
             GatedPlanningWorkspace {
                 inner: FilesystemPlanningWorkspaceAdapter::new(),
-                armed: AtomicBool::new(true),
+                gate: state.clone(),
                 entered: entered_tx,
-                release: Mutex::new(release_rx),
-                stage: stage.clone(),
+                test_thread: std::thread::current().id(),
             },
             PreparationGate {
+                state,
                 entered: entered_rx,
-                release: release_tx,
-                stage,
             },
         )
     }
 
     impl GatedPlanningWorkspace {
         fn enter(&self, stage: &'static str) {
-            *self.stage.lock().unwrap_or_else(|e| e.into_inner()) = stage;
-            if !self.armed.swap(false, Ordering::SeqCst) {
+            *self.gate.stage.lock().unwrap_or_else(|e| e.into_inner()) = stage;
+            if std::thread::current().id() == self.test_thread {
                 return;
             }
-            let _ = self.entered.send(());
-            // A dropped gate also releases the worker, so a failed test leaves no blocked thread.
-            let _ = self
-                .release
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .recv();
+            let mut released = self.gate.released.lock().unwrap_or_else(|e| e.into_inner());
+            if !*released {
+                let _ = self.entered.try_send(());
+            }
+            while !*released {
+                released = self
+                    .gate
+                    .opened
+                    .wait(released)
+                    .unwrap_or_else(|e| e.into_inner());
+            }
         }
     }
 
     impl PreparationGate {
         fn stage(&self) -> &'static str {
-            *self.stage.lock().unwrap_or_else(|e| e.into_inner())
-        }
-
-        fn has_held_worker(&self) -> bool {
-            self.entered.try_recv().is_ok()
+            *self.state.stage.lock().unwrap_or_else(|e| e.into_inner())
         }
 
         fn wait_until_worker_is_held(&self, app: &NativeTuiApp) {
             if let Err(error) = self.entered.recv_timeout(MANUAL_PREPARATION_WATCHDOG) {
                 panic!(
-                    "manual prompt preparation worker did not reach the planning workspace / {} / stage: {} / watchdog: {MANUAL_PREPARATION_WATCHDOG:?} / {error}",
+                    "no planning worker reached the closed gate / {} / stage: {} / watchdog: {MANUAL_PREPARATION_WATCHDOG:?} / {error}",
                     pending_manual_preparation_label(app),
                     self.stage(),
                 );
@@ -1361,9 +1375,19 @@ mod tests {
         }
 
         fn release(&self) {
-            self.release
-                .send(())
-                .expect("gated manual preparation worker should accept one release");
+            *self
+                .state
+                .released
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = true;
+            self.state.opened.notify_all();
+        }
+    }
+
+    // A failed test also releases held workers, so no thread stays blocked.
+    impl Drop for PreparationGate {
+        fn drop(&mut self) {
+            self.release();
         }
     }
 
@@ -1840,8 +1864,7 @@ mod tests {
             "ship it"
         );
         assert!(ready_conversation(&pending_app).messages.is_empty());
-        assert!(!gate.has_held_worker());
-        assert_eq!(gate.stage(), "no planning workspace call");
+        assert!(workspace_is_empty(&workspace));
 
         pending_app.shell.chrome.startup_state =
             StartupState::Ready(startup_ready_snapshot(workspace.path_str(), true));
@@ -1866,6 +1889,7 @@ mod tests {
         );
         assert_eq!(ready_conversation(&pending_app).composer.input_buffer, "");
         assert_eq!(ready_conversation(&pending_app).messages.len(), 1);
+        assert!(!workspace_is_empty(&workspace));
     }
 
     #[test]
