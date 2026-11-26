@@ -2,7 +2,7 @@
 // 도구 호출은 한 줄 요약으로 접고, 계획은 체크 목록으로, 변경은 요약 카드로 보여 준다 (R10).
 // 사용자가 맨 아래를 보고 있으면 새 내용이 올 때 맨 아래를 따라간다. 위로 올려 읽는 중이면 따라가지 않는다.
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { TurnPlanStep } from "../../shared/protocol/generated/v2/TurnPlanStep";
 import type { TurnStatus } from "../../shared/protocol/generated/v2/TurnStatus";
@@ -10,6 +10,7 @@ import { Icon, type IconName } from "../design/icons";
 import type { TaskDraftSource } from "../kernel/TaskEditor";
 import { ConversationStoreContext, useConversationStore } from "../session/desktopStore";
 import { openPanel, useUiStore } from "../session/uiStore";
+import { ConversationMenu, conversationMenuTarget, type ConversationMenuTarget } from "./ConversationMenu";
 import { copyText } from "./copyText";
 import { memoryOnLeave, newContentTurnId, restoreStep } from "./newContent";
 import { diffFileFromChange, totalCounts, turnDiffFiles, type DiffFile } from "./diff";
@@ -280,16 +281,22 @@ const threadViewMemory = new Map<string, ThreadViewMemory>();
 interface ConversationViewProps {
   onLoadOlder(): Promise<void>;
   onDraftTask?(source: TaskDraftSource): void;
+  /** 고른 글을 입력창 초안에 인용으로 붙인다 (#2842). 입력창이 없는 대화(원격)에는 주지 않는다. */
+  onQuote?(text: string): void;
+  /** 이 대화를 분기한다 (#2625). 분기할 수 없는 대화에는 주지 않는다. */
+  onFork?(): void;
 }
-export function ConversationView({ onLoadOlder, onDraftTask }: ConversationViewProps) {
+export function ConversationView({ onLoadOlder, onDraftTask, onQuote, onFork }: ConversationViewProps) {
   const openThreadId = useConversationStore((state) => state.openThreadId);
   if (!openThreadId) {
     return <p className="muted empty">왼쪽에서 스레드를 고르세요.</p>;
   }
-  return <ThreadConversation key={openThreadId} threadId={openThreadId} onLoadOlder={onLoadOlder} onDraftTask={onDraftTask} />;
+  return <ThreadConversation key={openThreadId} threadId={openThreadId} onLoadOlder={onLoadOlder} onDraftTask={onDraftTask} onQuote={onQuote} onFork={onFork} />;
 }
 
-function ThreadConversation({ threadId, onLoadOlder, onDraftTask }: ConversationViewProps & { threadId: string }) {
+function ThreadConversation({ threadId, onLoadOlder, onDraftTask, onQuote, onFork }: ConversationViewProps & { threadId: string }) {
+  const [menu, setMenu] = useState<ConversationMenuTarget | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
   const transcript = useConversationStore((state) => state.transcript);
   const transcriptError = useConversationStore((state) => state.transcriptError);
   const scrollRef = useRef<HTMLElement>(null);
@@ -530,7 +537,18 @@ function ThreadConversation({ threadId, onLoadOlder, onDraftTask }: Conversation
           </button>
         </div>
       )}
-      <section className="conversation" data-testid="conversation" ref={scrollRef} onScroll={onScroll}>
+      {menu && <ConversationMenu target={menu} onQuote={onQuote} onFork={onFork} onClose={closeMenu}
+        onFind={() => {
+          useUiStore.setState({ findOpen: true, overlay: null });
+          requestAnimationFrame(() => document.querySelector<HTMLInputElement>("[data-find-input]")?.select());
+        }} />}
+      <section className="conversation" data-testid="conversation" ref={scrollRef} onScroll={onScroll}
+        onContextMenu={(event) => {
+          const target = scrollRef.current && conversationMenuTarget(event, scrollRef.current);
+          if (!target) return;
+          event.preventDefault();
+          setMenu(target);
+        }}>
         <div className="column">
           {transcript.olderTurnsCursor && (
             <div className="load-older">
