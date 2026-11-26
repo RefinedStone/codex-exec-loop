@@ -9,6 +9,8 @@ use crate::application::port::outbound::vault_key_store_port::VaultKeyStoreError
 
 use super::{generate_key, safe_error, unavailable, validate_loaded};
 
+#[cfg(test)]
+pub(crate) mod diagnostics;
 mod journal;
 use journal::{Journal, Phase, State};
 
@@ -33,6 +35,8 @@ pub(super) fn get_or_create(
     for _ in 0..MAX_STATE_RETRIES {
         let observed = journal.snapshot()?;
         // 외부 keyring I/O 중 SQLite writer lock을 보유하지 않는다.
+        #[cfg(test)]
+        diagnostics::step("credential_load");
         let loaded = credential.load();
         journal.verify_identity()?;
         let loaded = match loaded {
@@ -95,11 +99,15 @@ fn store_once(
     credential: &dyn CredentialBackend,
 ) -> Result<VaultKey, VaultKeyStoreError> {
     journal.verify_identity()?;
+    #[cfg(test)]
+    diagnostics::step("credential_store");
     let stored = credential.store(&candidate);
     journal.verify_identity()?;
     // 오류는 원격 미실행의 증명이 아니다. Pending을 지우거나 같은 요청을 재전송하지 않는다.
     stored.map_err(|_| unavailable())?;
 
+    #[cfg(test)]
+    diagnostics::step("credential_readback");
     let loaded = credential.load();
     journal.verify_identity()?;
     let key = validate_loaded(loaded.map_err(|_| unavailable())?)?.ok_or_else(unavailable)?;

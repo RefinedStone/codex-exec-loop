@@ -52,7 +52,7 @@ fn two_processes_share_one_durable_initialization_key() {
         match harness.next() {
             Notice::StoreWaiting { .. } => harness.apply_next_store(true),
             Notice::Finished(result) => results.push(result),
-            _ => panic!("unexpected initialization notice"),
+            notice => panic!("unexpected initialization notice: {}", notice.summary()),
         }
     }
     harness.wait_worker(1);
@@ -93,14 +93,27 @@ fn two_processes_share_one_durable_initialization_key() {
     );
     assert!(restored.iter().all(|matches| *matches));
 
-    // Pending 때문에 보류된 호출도 별도 프로세스의 재조회로 이미 있는 키만 얻는다.
+    // 이미 초기화된 journal도 독립 프로세스 둘이 동시에 재조회한다.
     harness.spawn(3, WorkerMode::Seal);
-    let recovered = harness.result(3);
-    assert_success(
-        &mut harness,
-        &recovered,
-        snapshot.key_id.as_deref().unwrap(),
-    );
+    harness.spawn(4, WorkerMode::Seal);
+    let mut recovered = Vec::new();
+    while recovered.len() < 2 {
+        match harness.next() {
+            Notice::Finished(result) => recovered.push(result),
+            notice => panic!(
+                "warm initialization unexpectedly wrote: {}",
+                notice.summary()
+            ),
+        }
+    }
+    harness.wait_worker(3);
+    harness.wait_worker(4);
+    let mut workers: Vec<_> = recovered.iter().map(|result| result.worker).collect();
+    workers.sort_unstable();
+    assert_eq!(workers, vec![3, 4]);
+    for result in &recovered {
+        assert_success(&mut harness, result, snapshot.key_id.as_deref().unwrap());
+    }
     let after = harness.snapshot();
     assert_eq!(after.store_requests, 1);
     assert_eq!(after.applied_stores, 1);
@@ -258,4 +271,43 @@ fn construction_and_native_key_reads_do_not_create_coordination_state() {
         (after.loads, after.store_requests, after.applied_stores),
         (1, 0, 0)
     );
+}
+
+#[test]
+fn early_worker_failure_identifies_the_initial_load_barrier_and_journal_stage() {
+    let mut harness = Harness::new(1);
+    harness.block_runtime_with_file();
+    harness.spawn(1, WorkerMode::Seal);
+    let error = harness.try_release_loads(&[1]).unwrap_err();
+    assert!(error.contains("initial_load_barrier"), "{error}");
+    assert!(error.contains("Finished worker=1"), "{error}");
+    assert!(error.contains("KeyStoreUnavailable"), "{error}");
+    assert!(error.contains("journal_open"), "{error}");
+    assert!(error.contains("failed"), "{error}");
+    assert!(!error.contains("synthetic-runtime-blocker"));
+    harness.wait_worker(1);
+    let snapshot = harness.snapshot();
+    assert_eq!(
+        (
+            snapshot.loads,
+            snapshot.store_requests,
+            snapshot.applied_stores
+        ),
+        (0, 0, 0)
+    );
+}
+
+#[test]
+fn unexpected_notice_diagnostics_exclude_key_identifiers_and_ciphertext() {
+    let notice = Notice::Finished(WorkerResult {
+        worker: 9,
+        key_id: Some("synthetic-secret-key-id".into()),
+        ciphertext: Some(b"synthetic-secret-ciphertext".to_vec()),
+        failure: Some("synthetic-secret-provider-message".into()),
+        diagnostics: Vec::new(),
+    });
+    let summary = notice.summary();
+    assert!(summary.contains("Finished worker=9"));
+    assert!(summary.contains("unexpected_failure"));
+    assert!(!summary.contains("synthetic-secret"));
 }
