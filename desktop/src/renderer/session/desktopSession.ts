@@ -21,6 +21,7 @@ import type { ThreadStartResponse } from "../../shared/protocol/generated/v2/Thr
 import type { TurnStartResponse } from "../../shared/protocol/generated/v2/TurnStartResponse";
 import type { ThreadStatus } from "../../shared/protocol/generated/v2/ThreadStatus";
 import type { ThreadTurnsListResponse } from "../../shared/protocol/generated/v2/ThreadTurnsListResponse";
+import type { ThreadUnarchiveResponse } from "../../shared/protocol/generated/v2/ThreadUnarchiveResponse";
 import type { UserInput } from "../../shared/protocol/generated/v2/UserInput";
 import { GENERATED_CODEX_VERSION } from "../../shared/protocol/version";
 import { type ApprovalDecision, approvalKey, type PendingApproval, permissionsResponse, toPendingApproval } from "../conversation/approvals";
@@ -738,6 +739,35 @@ export class DesktopSession {
     if (this.store.getOpenThreadId() !== forkThreadId) {
       void this.client.request("thread/unsubscribe", { threadId: forkThreadId }).catch(() => undefined);
     }
+  }
+
+  /** 스레드 이름을 바꾼다 (#2841). app-server 가 모든 창에 `thread/name/updated` 를 보낸다. */
+  async renameThread(threadId: string, name: string): Promise<void> {
+    this.assertWritable();
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error("이름이 비어 있습니다.");
+    await this.client.request("thread/name/set", { threadId, name: trimmed });
+    this.renamedThreads.set(threadId, trimmed);
+    this.store.renameThread(threadId, trimmed);
+  }
+
+  /** 스레드를 보관한다. 목록에서 빠지고 다른 창에는 `thread/archived` 로 알려진다. */
+  async archiveThread(threadId: string): Promise<void> {
+    this.assertWritable();
+    await this.client.request("thread/archive", { threadId });
+    this.nextTurnQueue.pause(threadId, "대화가 보관되거나 삭제되어 예약을 멈췄습니다.");
+    this.removedThreadIds.add(threadId);
+    this.addedThreads.delete(threadId);
+    this.store.removeThread(threadId);
+  }
+
+  /** 보관을 되돌린다. 응답의 스레드를 목록에 다시 넣는다. */
+  async unarchiveThread(threadId: string): Promise<void> {
+    this.assertWritable();
+    const response = await this.client.request<ThreadUnarchiveResponse>("thread/unarchive", { threadId });
+    this.removedThreadIds.delete(threadId);
+    this.addedThreads.set(threadId, response.thread);
+    this.store.mergeFolders(groupThreadsByCwd([response.thread]));
   }
 
   /** 승인 요청에 답한다. 다른 창이 먼저 답했으면 이미 닫혀 있으므로 아무것도 하지 않는다. */

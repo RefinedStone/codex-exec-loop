@@ -38,6 +38,7 @@ function harness(readOnly = false, scheduler: (callback: () => void) => void = (
       readyCalls += 1;
     },
     chooseFolder: async () => null,
+    openFolder: async () => false,
     gitStatus: async () => ({ ok: false, message: "not used" }),
     gitFileDiff: async () => ({ kind: "binary" }),
     gitFileAction: async () => ({ ok: true as const }),

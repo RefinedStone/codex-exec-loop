@@ -2397,3 +2397,49 @@ button.issues-title:hover {
 .limit-high {
   color: var(--danger, #c62828);
 }
+
+/* 스레드 오른쪽 클릭 메뉴와 이름 바꾸기 칸, 보관 알림 (#2841). */
+.thread-menu {
+  position: fixed;
+  z-index: 50;
+  min-width: 160px;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--bg-elevated);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.18);
+}
+
+.thread-menu button {
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+  font-size: var(--text-s);
+}
+
+.thread-menu button:hover:not(:disabled),
+.thread-menu button:focus-visible {
+  background: var(--bg-hover, rgb(127 127 127 / 0.12));
+}
+
+.thread-menu button:disabled {
+  opacity: 0.5;
+}
+
+.thread-rename input {
+  width: 100%;
+  font-size: var(--text-s);
+}
+
+.archived-notice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 8px;
+  font-size: var(--text-s);
+}
