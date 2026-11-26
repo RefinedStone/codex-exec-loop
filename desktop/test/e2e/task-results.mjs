@@ -13,6 +13,7 @@ const fake = await import(pathToFileURL(join(desktopDir, "test/fake-gateway/fake
 const userData = await mkdtemp(join(tmpdir(), "akra-task-results-"));
 const requests = [];
 let failResult = false;
+let failTasks = false;
 let lineageComplete = true;
 let activeWorkspace = "/work/example-app";
 let resultBarrier;
@@ -69,6 +70,7 @@ const kernel = {
       return { result: { client_id: "1", protocol_version: 1, kernel: activeWorkspace === "/work/task-results-other" ? "task-result-other-repository" : kernel.kernel } };
     }
     if (method !== "akra/kernel/query") return undefined;
+    if (params.query?.type === "list_tasks" && failTasks) return { error: { code: -32013, message: "합성 작업 목록 조회 실패" } };
     if (params.query?.type === "list_tasks") return { result: { type: "list_tasks", available: true, planning_revision: 7, tasks } };
     if (params.query?.type === "task_result") {
       if (failResult) return { error: { code: -32013, message: "합성 결과 조회 실패" } };
@@ -123,6 +125,37 @@ try {
   assert.equal(await page.getByTestId("task-result-pr").count(), 2);
   assert((await page.getByTestId("task-result-pr").filter({ hasText: "PR #41" }).innerText()).includes("이 작업이 보완하는 PR"));
   assert((await page.getByTestId("task-result-facts").innerText()).includes("0개에 머지 SHA가 기록됨"), "a parent's merge is not this supplemental task's own PR merge");
+
+  // A failed read of another task keeps the edited task's ID, fields and revision. Both entry paths.
+  const title = page.locator("#task-editor-task-title");
+  const identity = page.getByTestId("task-editor-identity");
+  const editorError = page.getByTestId("task-editor-error").filter({ hasText: "합성 작업 목록 조회 실패" });
+  const commandsBeforeFailedReads = requests.filter((request) => request.method === "akra/kernel/command").length;
+  await title.fill("Edited supplemental title");
+  failTasks = true;
+  await page.locator("#task-editor-lookup").fill("completed-task");
+  await page.getByRole("button", { name: "ID로 열기", exact: true }).click();
+  await editorError.waitFor();
+  assert.match(await identity.innerText(), /^supplemental-task /, "a failed ID read keeps the edited task");
+  assert.equal(await title.inputValue(), "Edited supplemental title");
+  failTasks = false;
+  await page.getByRole("button", { name: "ID로 열기", exact: true }).click();
+  await identity.filter({ hasText: /^completed-task / }).waitFor();
+  assert.equal(await title.inputValue(), "Identical title");
+  assert.equal(await editorError.count(), 0);
+
+  await title.fill("Edited completed title");
+  failTasks = true;
+  await page.getByRole("button", { name: "supplemental-task 열기", exact: true }).click();
+  await editorError.waitFor();
+  assert.match(await identity.innerText(), /^completed-task /, "a failed linked-task read keeps the edited task");
+  assert.equal(await title.inputValue(), "Edited completed title");
+  failTasks = false;
+  await page.getByRole("button", { name: "supplemental-task 열기", exact: true }).click();
+  await identity.filter({ hasText: /^supplemental-task / }).waitFor();
+  assert.equal(await title.inputValue(), "Supplemental repair");
+  assert.equal(requests.filter((request) => request.method === "akra/kernel/command").length, commandsBeforeFailedReads, "failed reads send no save");
+  await page.getByTestId("task-result-pr").filter({ hasText: "PR #44" }).waitFor();
 
   await page.getByRole("button", { name: "completed-task 열기", exact: true }).click();
   await page.getByTestId("task-result-pr").filter({ hasText: "PR #42" }).waitFor();
