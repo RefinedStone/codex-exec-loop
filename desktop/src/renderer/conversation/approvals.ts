@@ -6,6 +6,10 @@ import type { RequestPermissionProfile } from "../../shared/protocol/generated/v
 import type { ToolRequestUserInputQuestion } from "../../shared/protocol/generated/v2/ToolRequestUserInputQuestion";
 import type { ToolRequestUserInputResponse } from "../../shared/protocol/generated/v2/ToolRequestUserInputResponse";
 import type { JsonRpcId } from "../rpc/jsonRpcClient";
+import { type ElicitationField, elicitationFields } from "./elicitation";
+
+export { elicitationFields } from "./elicitation";
+export type { ElicitationField } from "./elicitation";
 
 /** writeStdin 은 이미 실행 중인 프로세스(터미널)에 입력을 보내는 승인이다. 새 명령 실행과 구분해 보여 준다. */
 export type ApprovalKind = "command" | "writeStdin" | "fileChange" | "permissions" | "userInput" | "elicitation";
@@ -14,17 +18,6 @@ export type ApprovalDecision = "accept" | "acceptForSession" | "decline";
 /** 허용·거부 버튼으로 답하는 요청이다. 나머지(사용자 입력, elicitation)는 자기 양식으로 답한다. */
 export function answersWithDecision(kind: ApprovalKind): boolean {
   return kind === "command" || kind === "writeStdin" || kind === "fileChange" || kind === "permissions";
-}
-
-/** MCP elicitation 양식의 칸 하나이다. 스키마가 정한 기본 타입만 그린다. */
-export interface ElicitationField {
-  name: string;
-  label: string;
-  description: string | null;
-  required: boolean;
-  input: "text" | "number" | "integer" | "boolean" | "select" | "multiSelect";
-  options: Array<{ value: string; label: string }>;
-  defaultValue: unknown;
 }
 
 export interface ElicitationRequest {
@@ -66,59 +59,6 @@ function optionalString(value: unknown): string | null {
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
-
-function stringList(value: unknown): string[] | null {
-  return Array.isArray(value) && value.every((item) => typeof item === "string") ? value as string[] : null;
-}
-
-function constOptions(value: unknown): Array<{ value: string; label: string }> | null {
-  if (!Array.isArray(value)) return null;
-  return value.flatMap((item) => {
-    const option = record(item);
-    return option && typeof option.const === "string" ? [{ value: option.const, label: typeof option.title === "string" ? option.title : option.const }] : [];
-  });
-}
-
-function elicitationField(name: string, schema: unknown, required: boolean): ElicitationField | null {
-  const fields = record(schema);
-  if (!fields) return null;
-  const label = typeof fields.title === "string" && fields.title ? fields.title : name;
-  const base = { name, label, description: optionalString(fields.description), required, defaultValue: fields.default ?? null };
-  if (fields.type === "array") {
-    const items = record(fields.items);
-    const values = stringList(items?.enum);
-    const options = values ? values.map((value) => ({ value, label: value })) : constOptions(items?.anyOf ?? items?.oneOf);
-    return options && options.length > 0 ? { ...base, input: "multiSelect", options } : null;
-  }
-  if (fields.type === "string") {
-    const values = stringList(fields.enum);
-    if (values) {
-      const names = stringList(fields.enumNames);
-      return { ...base, input: "select", options: values.map((value, index) => ({ value, label: names?.[index] ?? value })) };
-    }
-    const options = constOptions(fields.oneOf);
-    return options ? { ...base, input: "select", options } : { ...base, input: "text", options: [] };
-  }
-  if (fields.type === "number" || fields.type === "integer" || fields.type === "boolean") {
-    return { ...base, input: fields.type, options: [] };
-  }
-  return null;
-}
-
-/** 양식 스키마를 칸 목록으로 바꾼다. 모르는 칸이 하나라도 있으면 null 이다 (반쯤 채운 응답을 보내지 않는다). */
-export function elicitationFields(schema: unknown): ElicitationField[] | null {
-  const fields = record(schema);
-  const properties = record(fields?.properties);
-  if (!fields || fields.type !== "object" || !properties) return null;
-  const required = new Set(stringList(fields.required) ?? []);
-  const result: ElicitationField[] = [];
-  for (const [name, property] of Object.entries(properties)) {
-    const field = elicitationField(name, property, required.has(name));
-    if (!field) return null;
-    result.push(field);
-  }
-  return result;
 }
 
 function toElicitation(fields: Record<string, unknown>): ElicitationRequest | null {
