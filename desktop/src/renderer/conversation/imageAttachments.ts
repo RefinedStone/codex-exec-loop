@@ -25,6 +25,12 @@ export function refuseAttachment(file: AttachmentFile, attachedCount: number): s
   return null;
 }
 
+/** 보낸 첨부만 뺀다. 보내는 동안 새로 붙인 첨부는 남긴다. */
+export function withoutSent(current: readonly ImageAttachment[], sent: readonly ImageAttachment[]): ImageAttachment[] {
+  const sentIds = new Set(sent.map((image) => image.id));
+  return current.filter((image) => !sentIds.has(image.id));
+}
+
 /** 파일을 data URL 로 읽는다. */
 export function readImage(file: File): Promise<ImageAttachment> {
   return new Promise((resolve, reject) => {

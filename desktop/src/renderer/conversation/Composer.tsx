@@ -9,7 +9,7 @@ import { useDesktopStore } from "../session/desktopStore";
 import { HOME_DRAFT, setDraft as setDraftFor, useUiStore } from "../session/uiStore";
 import { isSendKey, recallCursor } from "./composerKeys";
 import { type ActiveMention, activeMention, applyMention, sameMention } from "./fileMention";
-import { type ImageAttachment, readImage, refuseAttachment } from "./imageAttachments";
+import { type ImageAttachment, readImage, refuseAttachment, withoutSent } from "./imageAttachments";
 import { isSentComposerDraft, runComposerAction, useComposerRequests } from "./composerAction";
 import { PlanList } from "./ConversationView";
 import { loadPrompts, rememberPrompt } from "./promptHistory";
@@ -127,19 +127,23 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
 
   // 이미지 첨부이다 (#2838). 입력창은 스레드마다 새로 만들므로 첨부는 다른 스레드로 따라가지 않는다.
   const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
+  // 읽는 중인 파일도 첨부 자리를 차지한다. 읽기가 끝나기 전에 또 붙여도 같은 자리를 두 번 세지 않는다.
+  // shortcut: 읽기가 끝난 뒤 다시 그리기 전의 짧은 틈에 붙이면 MAX_IMAGES 를 하나 넘길 수 있다 (버리지는 않는다). 문제가 되면 reducer 로 옮긴다.
+  const pendingReads = useRef(0);
   const attachFiles = (files: readonly File[]) => {
-    let count = attachments.length;
     for (const file of files) {
-      const refused = refuseAttachment(file, count);
+      const refused = refuseAttachment(file, attachments.length + pendingReads.current);
       if (refused) {
         setError(refused);
         continue;
       }
-      count += 1;
+      pendingReads.current += 1;
       readImage(file).then(
-        (image) => setAttachments((current) => (current.length < count ? [...current, image] : current)),
+        (image) => setAttachments((current) => [...current, image]),
         (cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)),
-      );
+      ).finally(() => {
+        pendingReads.current -= 1;
+      });
     }
   };
   const attachRef = useRef(attachFiles);
@@ -169,7 +173,8 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
 
   const send = () => {
     const text = draft;
-    const images = attachments.map((image) => image.url);
+    const sent = attachments;
+    const images = sent.map((image) => image.url);
     if ((text.trim().length === 0 && images.length === 0) || disabled) {
       return;
     }
@@ -178,7 +183,7 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
         if (!(await actions.startThread(text))) return;
       } else {
         await actions.sendMessage(text, images);
-        setAttachments([]);
+        setAttachments((current) => withoutSent(current, sent));
       }
       rememberPrompt(text);
       if (isSentComposerDraft(useUiStore.getState().drafts[draftKey], text)) clearDraft();
