@@ -2,7 +2,7 @@
 
 ## 문서 상태
 
-- 상태: **구현 중**. Q5-1, Q5-2a (2026-11-17), Q5-2b (2026-11-18)를 구현했다 (§7). 나머지 조각은 제안이다. 현재 제품 동작의 기준은
+- 상태: **구현 중**. Q5-1, Q5-2a (2026-11-17), Q5-2b (2026-11-18), Q5-2c (2026-11-26)를 구현했다 (§7). 나머지 조각은 제안이다. 현재 제품 동작의 기준은
   `docs/reference/` 이다.
 - 상위 문서: [18 Akra 커널 아키텍처](18-akra-kernel-architecture.md) §5.4, §5.8, §5.9, §6 의 K6. 결정 KP-03, KP-04,
   KP-06. [19 Akra 커널 성질 목표](19-akra-kernel-quality-goals.md) §3.2, §5.3, §6 의 Q5, 성질 P4.
@@ -119,15 +119,20 @@ pub struct TurnConcurrencyPolicy {
 
 ### 3.3 thread 별 상태 (Q5-2)
 
-`ConversationTurnFeatureReducer` 의 session 을 맵 하나로 둔다 (K2 §3.2 의 모양).
+`ConversationTurnFeatureReducer` 의 session 을 맵 하나로 둔다. 키는 커널이 주는 session 번호이다 (Q5-2c, 2026-11-26).
+처음 제안은 thread id 를 키로 하는 맵(`by_thread`)과 초안 하나(`draft`)였다 (K2 §3.2 의 모양). 코드와 맞지 않아서 바꿨다
+(§7 의 Q5-2c).
 
 ```rust
 struct ThreadSessions {
-    by_thread: BTreeMap<String, ThreadSession>,
-    draft: ThreadSession,   // thread id 가 아직 없는 새 초안
-    viewed: ViewedThread,   // Draft 또는 Thread(id). K6-2 에서 클라이언트로 옮긴다
+    by_key: BTreeMap<SessionKey, ThreadSession>, // 보는 session 도 맵에 있다
+    viewed: SessionKey,                          // 보는 자리는 맵의 키이다. K6-2 에서 클라이언트로 옮긴다
+    next_key: u64,
 }
 ```
+
+- thread id 는 session 의 값이다 (`TurnStreamState`). thread id 로 찾을 때는 맵을 차례로 본다.
+- session 을 뒤로 보낼 때 새 번호를 준다. 그래서 번호의 차례가 뒤로 보낸 차례이다 (이전 목록의 차례와 같다).
 
 - 규칙은 `&mut ThreadSession` 과 공유 값(세대 번호, 기록, 승인 검토 줄)을 인자로 받는다. `self.session` 을 읽지
   않는다. `with_owning_session`, `reduce_background_session`, `serving_background` 를 지운다.
@@ -186,7 +191,7 @@ struct ThreadSessions {
 | Q5-1 (구현 2026-11-17, §7) | `TurnConcurrencyPolicy`. 턴을 받는 규칙이 도는 턴의 수를 정책 값과 견준다 | 유지 (기본값 1) | core 시험: 값 1 은 지금과 같다. 값 2 는 thread 둘의 턴을 받고 셋째를 거절한다. 같은 thread 의 둘째 턴은 값과 관계없이 거절한다 |
 | Q5-2a (구현 2026-11-17, §7) | session 의 자리(`SessionSlot`)와 찾기. steer, 승인 결정, runtime 알림, 작업 공간 변경의 규칙을 옮긴다 | 유지 | 기존 시험, 커널 시뮬레이션 |
 | Q5-2b (구현 2026-11-18, §7) | 남은 규칙을 옮긴다 (제출, 스트림, 정지, 평가, 경로, 모든 session 의 정책 변경). `mem::swap` 을 지운다 | 유지 | 기존 시험, 커널 시뮬레이션 |
-| Q5-2c | session 을 thread id 의 맵으로 둔다. 보는 자리는 맵의 키이다 | 유지 | 기존 시험, 커널 시뮬레이션 |
+| Q5-2c (구현 2026-11-26, §7) | session 을 맵으로 둔다. 키는 커널이 주는 session 번호이다 (처음 제안은 thread id). 보는 자리는 맵의 키이다 | 유지 | 기존 시험, 커널 시뮬레이션 |
 | Q5-3 | 자동 후속 차선. 큐 프롬프트를 자리가 날 때 낸다. 시뮬레이션에 값 2 를 넣는다 | 확장 (값 2 이상에서만 다르다) | 시뮬레이션의 새 불변식: 자동 후속을 이어 가는 thread 는 하나이다 |
 | K6-1 | TUI 의 대화를 app-server 중계로 읽는 client. 화면은 바꾸지 않는다 | 유지 | 가짜 Gateway 시험. 모델 턴은 없다 |
 | K6-2 | TUI 가 `akra/kernel/*` 로 붙는다. 잠금을 잡지 않는다. 하네스 화면은 Q-M5-1 의 답대로 한다 | 전환 | 터미널 검증 계약 (`docs/validation/terminal-ui-testing-methodology.md`) |
@@ -309,3 +314,28 @@ struct ThreadSessions {
 - session 은 아직 "보는 것 하나와 뒤의 목록"이다. thread id 의 맵으로 바꾸는 일은 Q5-2c 이다.
 - 승인 검토 저장의 줄은 모든 thread 가 하나를 쓴다. 정지는 보는 session 만 받는다 (`admit_stop_request`). 둘 다
   값 2 이상에서 고쳐야 한다 (Q5-3, §2.1).
+
+### Q5-2c (2026-11-26)
+
+- `ThreadSessions` (`src/core/app/conversation_turn_reducer.rs`): session 의 맵(`by_key`)과 보는 자리(`viewed`)이다. 보는
+  자리는 맵의 키(`SessionKey`)이다. reducer 의 `session` 과 `background_sessions` 를 이 값 하나(`sessions`)로 바꿨다.
+  `SessionSlot` 을 지웠다. 규칙은 키로 session 을 찾아(`ThreadSessions::find`) 그 session 만 고친다.
+- 계획과 다른 점: 키는 thread id 가 아니고 커널이 주는 session 번호이다. 이유는 셋이다.
+  1. thread id 는 턴을 받은 뒤에 정해진다 (`TurnStreamEvent::ThreadPrepared`). 그 전에 다른 대화를 열거나 새 대화를
+     시작하면, 일이 남은 session 이 thread id 없이 뒤로 간다. 그러면 thread id 없는 session 이 둘이 된다. 처음 제안의
+     `draft` 는 하나뿐이다.
+  2. `ThreadPrepared` 와 대화 무효는 맵 안의 session 의 thread id 를 정하거나 바꾸거나 지운다. thread id 가 키이면 스트림
+     사건마다 키를 다시 정해야 한다. 보는 자리도 같다.
+  3. thread id 의 차례(`BTreeMap`)는 지금의 "뒤로 보낸 차례"와 다르다. 이 차례로 정하는 것이 셋이다: 거절이 대는 턴과
+     정지(`other_sessions`), 먼저 시작할 평가(`next_post_turn_host_step`), 정책 변경의 차례(`ThreadSessions::for_each`).
+- 차례는 이전과 같다. 보는 session 이 먼저이고, 뒤의 session 은 뒤로 보낸 차례이다. 뒤로 보낼 때 새 번호를 주므로, 다시
+  연 thread 를 또 뒤로 보내면 차례의 끝으로 간다 (이전 목록의 `remove` 와 `push` 와 같다).
+
+확인: 동작을 바꾸지 않았다. 새 core 시험 셋: 보는 자리가 옮겨도 thread 의 주인 키는 그대로이다, 뒤의 차례는 뒤로 보낸
+차례이다, 정리는 일이 없는 뒤의 session 만 지운다. 기존 core 시험, 커널 시뮬레이션, 구조 시험이 통과한다.
+
+남긴 것:
+
+- 정지는 아직 보는 session 만 받는다 (`admit_stop_request`). 승인 검토 저장의 줄은 모든 thread 가 하나를 쓴다. Q5-3 과
+  #2481 A05 의 둘째 항목이다.
+- 턴을 넣을 때마다 다른 session 을 미리 읽는 것(Q5-2b 의 리뷰)은 그대로 두었다. session 수가 적다.
