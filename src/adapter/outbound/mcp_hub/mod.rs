@@ -20,7 +20,7 @@ mod tool_cache;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -31,10 +31,14 @@ pub(crate) use self::gateway_client::GatewayRoutedMcpHubBackend;
 pub(crate) use self::notion_resource_version::NotionResourceVersionAdapter;
 use self::session::HubAppServerSession;
 use crate::application::port::outbound::mcp_hub_backend_port::McpHubBackendPort;
+use crate::application::port::outbound::mcp_write_approval_port::{
+    McpWriteApproval, McpWriteApprovalPort, McpWriteApprovalRequest,
+};
 use crate::domain::mcp_hub::{
     McpHubServerSpec, McpHubServerStatus, McpHubSharedSkill, McpHubSharedSkillAction,
     McpHubToolCatalog, McpHubToolInfo, McpHubTransport,
 };
+use crate::domain::mcp_write_policy::{MCP_WRITE_POLICY_FILE, McpToolAccess, McpWritePolicy};
 
 const HUB_DIRECTORY: &str = "mcp-hub";
 const CONFIG_FILE: &str = "config.toml";
@@ -58,6 +62,8 @@ pub(crate) struct CodexMcpHubBackend {
     // None 이면 명령마다 app-server 를 띄우고 끝낸다. Some 이면 Gateway 처럼 app-server 를 유지한다.
     resident: Option<Mutex<Option<ResidentEngine>>>,
     sync_registry_directory: fn(&Path) -> std::io::Result<()>,
+    /// 쓰기 도구를 물어볼 곳이다 (#2830). Gateway 만 Desktop 에 묻는다. 없으면 쓰기 도구를 실행하지 않는다.
+    write_approver: Option<Arc<dyn McpWriteApprovalPort>>,
 }
 
 /// Gateway 가 유지하는 app-server 와 서버별 ephemeral 스레드이다. 스레드를 다시 쓰면 MCP 연결도 유지된다.
@@ -79,6 +85,7 @@ impl CodexMcpHubBackend {
             home: hub_home()?,
             resident: Some(Mutex::new(None)),
             sync_registry_directory: registry::sync_directory,
+            write_approver: None,
         })
     }
 
@@ -87,6 +94,61 @@ impl CodexMcpHubBackend {
             home,
             resident: None,
             sync_registry_directory: registry::sync_directory,
+            write_approver: None,
+        }
+    }
+
+    pub(crate) fn with_write_approver(mut self, approver: Arc<dyn McpWriteApprovalPort>) -> Self {
+        self.write_approver = Some(approver);
+        self
+    }
+
+    /// 쓰기 정책(`write-policy.toml`)을 보고, 쓰기 도구이면 승인을 받는다. 정책을 읽지 못하면 어떤 도구도 실행하지
+    /// 않는다: 어느 도구가 쓰기인지 모르기 때문이다.
+    fn authorize_call(&self, server: &str, tool: &str, arguments: &Value) -> Result<()> {
+        let path = self.home.join(MCP_WRITE_POLICY_FILE);
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => Some(text),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "cannot read the MCP write policy `{}`; no tool call runs",
+                        path.display()
+                    )
+                });
+            }
+        };
+        let policy = McpWritePolicy::parse(text.as_deref()).with_context(|| {
+            format!(
+                "fix the MCP write policy `{}`; no tool call runs until it is valid",
+                path.display()
+            )
+        })?;
+        if policy.access(server, tool) == McpToolAccess::Read {
+            return Ok(());
+        }
+        let Some(approver) = &self.write_approver else {
+            bail!(
+                "MCP tool `{server}/{tool}` writes; it runs only after approval in Akra Desktop through the Akra Gateway"
+            )
+        };
+        let request = McpWriteApprovalRequest {
+            server: server.to_string(),
+            tool: tool.to_string(),
+            arguments: arguments.clone(),
+        };
+        match approver.request_approval(&request) {
+            McpWriteApproval::Approved => Ok(()),
+            McpWriteApproval::Declined => {
+                bail!("MCP tool `{server}/{tool}` was declined in Akra Desktop")
+            }
+            McpWriteApproval::TimedOut => bail!(
+                "MCP tool `{server}/{tool}` got no answer in Akra Desktop in time; it did not run"
+            ),
+            McpWriteApproval::NoApprover => bail!(
+                "MCP tool `{server}/{tool}` writes; open Akra Desktop on this Gateway to approve it"
+            ),
         }
     }
 
@@ -333,6 +395,7 @@ impl McpHubBackendPort for CodexMcpHubBackend {
     }
 
     fn call_tool(&self, server: &str, tool: &str, arguments: Value) -> Result<Value> {
+        self.authorize_call(server, tool, &arguments)?;
         self.with_engine(|session, threads| {
             let thread_id = self.thread_for_server(session, threads, server)?;
             session.request(
@@ -690,6 +753,93 @@ lines.on('line', line => {
         result.unwrap();
         assert_eq!(LOGIN_TIMEOUT.as_secs(), 600);
         assert_eq!(urls, ["https://example.invalid/oauth"]);
+    }
+
+    struct FixedApprover(McpWriteApproval, std::sync::atomic::AtomicUsize);
+
+    impl McpWriteApprovalPort for FixedApprover {
+        fn request_approval(&self, request: &McpWriteApprovalRequest) -> McpWriteApproval {
+            assert_eq!(
+                (request.server.as_str(), request.tool.as_str()),
+                ("notion", "update")
+            );
+            self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.0
+        }
+    }
+
+    /// #2830: a write tool runs only after approval; a broken policy stops every call before the engine starts.
+    #[test]
+    fn write_tools_need_approval_and_a_broken_policy_stops_every_call() {
+        let home = temp_home("write-policy");
+        std::fs::create_dir_all(&home).unwrap();
+        let backend = CodexMcpHubBackend::with_home(home.clone());
+        let arguments = json!({"page": "p1"});
+        // No policy file: every tool is a read, as before.
+        backend
+            .authorize_call("notion", "update", &arguments)
+            .unwrap();
+
+        std::fs::write(
+            home.join(MCP_WRITE_POLICY_FILE),
+            "[servers.notion]
+write = [\"update\"]
+",
+        )
+        .unwrap();
+        backend
+            .authorize_call("notion", "search", &arguments)
+            .unwrap();
+        let error = backend
+            .call_tool("notion", "update", arguments.clone())
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("runs only after approval"),
+            "{error:#}"
+        );
+
+        for (answer, allowed) in [
+            (McpWriteApproval::Approved, true),
+            (McpWriteApproval::Declined, false),
+            (McpWriteApproval::TimedOut, false),
+            (McpWriteApproval::NoApprover, false),
+        ] {
+            let approver = Arc::new(FixedApprover(answer, Default::default()));
+            let backend =
+                CodexMcpHubBackend::with_home(home.clone()).with_write_approver(approver.clone());
+            assert_eq!(
+                backend
+                    .authorize_call("notion", "update", &arguments)
+                    .is_ok(),
+                allowed,
+                "{answer:?}"
+            );
+            assert_eq!(approver.1.load(std::sync::atomic::Ordering::SeqCst), 1);
+            backend
+                .authorize_call("notion", "search", &arguments)
+                .unwrap();
+            assert_eq!(
+                approver.1.load(std::sync::atomic::Ordering::SeqCst),
+                1,
+                "reads are not asked"
+            );
+        }
+
+        std::fs::write(
+            home.join(MCP_WRITE_POLICY_FILE),
+            "[servers.notion]
+write = \"update\"
+",
+        )
+        .unwrap();
+        let error = backend
+            .call_tool("notion", "search", arguments)
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("no tool call runs"),
+            "{error:#}"
+        );
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

@@ -26,6 +26,12 @@ pub const MCP_HUB_GATEWAY_CALL: &str = "akra/mcp/call";
 /// params `{ hubHome }` -> result `{}`. 등록부나 로그인이 바뀐 뒤 상주 엔진을 내린다.
 pub const MCP_HUB_GATEWAY_RELOAD: &str = "akra/mcp/reload";
 pub const MCP_HUB_GATEWAY_OTHER_HUB: i64 = -32040;
+/// Gateway -> Desktop 알림 `{ id, server, tool, arguments }`. 쓰기 도구 호출 하나의 승인을 묻는다 (#2830).
+pub const MCP_HUB_GATEWAY_WRITE_APPROVAL_REQUESTED: &str = "akra/mcp/writeApproval/requested";
+/// Gateway -> Desktop 알림 `{ id }`. 답했거나 제한 시간이 지나서 그 요청이 끝났다.
+pub const MCP_HUB_GATEWAY_WRITE_APPROVAL_RESOLVED: &str = "akra/mcp/writeApproval/resolved";
+/// Desktop -> Gateway 요청 `{ id, approve }` -> result `{ accepted }`. 이미 끝난 요청이면 `accepted` 는 false 이다.
+pub const MCP_HUB_GATEWAY_WRITE_APPROVAL_ANSWER: &str = "akra/mcp/writeApproval/answer";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpHubTransport {

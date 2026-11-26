@@ -1075,6 +1075,14 @@ call tools on demand.
   `akra/mcp/catalogs`, `akra/mcp/call`); otherwise the CLI uses its local backend. Codex owns the MCP transports, OAuth, and token storage and refresh. The
   registry is `$AKRA_HOME/mcp-hub/config.toml` in Codex `[mcp_servers.<name>]` form; extra Codex keys
   written by hand are kept.
+- Write policy (#2830): `$AKRA_HOME/mcp-hub/write-policy.toml` lists write tools per server
+  (`[servers.<name>] write = ["tool", ...]`; `"*"` marks every tool of the server, and `read = [...]`
+  takes tools back out). Tools that the file does not list are reads and run as before; with no file,
+  every tool is a read. A write call runs only after approval in Akra Desktop: the Gateway shows a card
+  (`akra/mcp/writeApproval/requested`) in every local Desktop window, the first answer decides, and the
+  call fails without running when the answer is decline, when no answer comes in 120 seconds, or when no
+  Desktop is connected. A late answer is ignored, and a retry asks again. Without a Gateway, `akra mcp
+  call` refuses write tools. When the file cannot be read or parsed, no tool call runs.
 - `call` opens an ephemeral thread with only the target server enabled. `servers`
   connects every enabled server. Requests that app-server sends to the hub (MCP elicitation and others)
   are declined.
