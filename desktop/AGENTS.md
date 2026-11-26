@@ -28,7 +28,8 @@ The repository-wide rules in [`../AGENTS.md`](../AGENTS.md) still apply.
 ```bash
 npm ci                 # ELECTRON_SKIP_BINARY_DOWNLOAD=1 when the Electron binary is not needed
 npm run check          # strict TypeScript for main/preload/tests and renderer
-npm test               # vitest, including the fake Gateway over a unix socket or named pipe
+npm test               # vitest, including the fake Gateway over a unix socket or named pipe; the real-git files run
+                       # last with 2 workers (project `real-git`, docs/validation/desktop-git-fixture-timeouts.md)
 npm run build          # electron-vite bundle into out/
 npm run dev            # fetch a missing Electron binary, cargo build akra-gateway, then open the app
                        # (starts the newer of ../target/{release,debug}/akra-gateway if none is running)

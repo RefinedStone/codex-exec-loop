@@ -52,6 +52,6 @@ it.skipIf(process.platform === "win32")("rejects a regular file replaced by a wr
     clearTimeout(watchdog);
     if (rescue) clearInterval(rescue);
     barrier.beforeOpen = null;
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });

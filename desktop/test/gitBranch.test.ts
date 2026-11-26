@@ -50,7 +50,7 @@ describe("branch summary parsing", () => {
 
 describe("branch summary in a real repository", () => {
   const base = mkdtempSync(join(tmpdir(), "akra-branch-"));
-  afterAll(() => rmSync(base, { recursive: true, force: true }));
+  afterAll(() => rmSync(base, { recursive: true, force: true, maxRetries: 5 }));
   const remote = join(base, "remote.git");
   const root = join(base, "work");
   const gitIn = (cwd: string, ...args: string[]) =>
@@ -189,7 +189,7 @@ describe("branch summary in a real repository", () => {
     try {
       expect(await readBranchSummary(plain, false, noPullRequest)).toEqual({ ok: false, message: "git 저장소가 아닙니다." });
     } finally {
-      rmSync(plain, { recursive: true, force: true });
+      rmSync(plain, { recursive: true, force: true, maxRetries: 5 });
     }
   });
 });
@@ -207,7 +207,7 @@ describe("GitHub repository of a folder", () => {
       git("remote", "set-url", "origin", "https://gitlab.com/sample/widgets.git");
       expect(await readGitHubRepository(folder)).toBeNull();
     } finally {
-      rmSync(folder, { recursive: true, force: true });
+      rmSync(folder, { recursive: true, force: true, maxRetries: 5 });
     }
   });
 

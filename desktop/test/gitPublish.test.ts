@@ -13,7 +13,7 @@ import { canCreatePullRequest, canPush, initialPullRequestDraft, type LoadedSumm
 
 describe("push and create a PR", () => {
   const base = mkdtempSync(join(tmpdir(), "akra-publish-"));
-  afterAll(() => rmSync(base, { recursive: true, force: true }));
+  afterAll(() => rmSync(base, { recursive: true, force: true, maxRetries: 5 }));
   const remote = join(base, "remote.git");
   const root = join(base, "work");
   const gitIn = (cwd: string, ...args: string[]) =>
@@ -116,7 +116,7 @@ describe("push and create a PR", () => {
       gitIn(lonely, "init", "-q", "-b", "main");
       expect(await planPush(lonely)).toEqual({ ok: false, message: "원격 저장소 origin 이 없습니다." });
     } finally {
-      rmSync(lonely, { recursive: true, force: true });
+      rmSync(lonely, { recursive: true, force: true, maxRetries: 5 });
     }
   });
 
