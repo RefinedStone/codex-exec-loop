@@ -78,6 +78,36 @@ describe("task authoring", () => {
     expect(h.sent.filter((r) => r.method === "akra/kernel/command")).toHaveLength(1);
   });
 
+  it("releases the lock when a lost update reply recovers a confirmed rejection", async () => {
+    const h = harness();
+    const update = h.controller.save("/a", "task-1", fields, 7);
+    const key = (h.sent[0]?.params as unknown as CommandRequest).idempotency_key;
+    h.client.reset("connection lost");
+    expect((await update).kind).toBe("uncertain");
+    h.controller.beginDraft("/a");
+    expect(h.controller.pending("/a")?.kind).toBe("uncertain");
+    const recovery = h.controller.recover("/a");
+    h.answer(1, { type: "history", next_after: 31, records: [
+      { sequence: 31, event: { kind: "command_received", op_id: 31, command: "update_task", idempotency_key: key } },
+    ] });
+    await settled(); await settled();
+    h.answer(2, {
+      type: "operation", op_id: 31, state: "rejected", records: [
+        { sequence: 31, recorded_at: "now", event: { kind: "command_received", op_id: 31, command: "update_task", idempotency_key: key } },
+        { sequence: 32, recorded_at: "now", event: { kind: "command_rejected", op_id: 31, reason: "planning_revision_stale" } },
+      ],
+    });
+    expect((await recovery).kind).toBe("rejected");
+    h.controller.beginDraft("/a");
+    expect(h.controller.pending("/a")).toBeNull();
+    const retry = h.controller.save("/a", "task-1", fields, 9);
+    const next = h.sent[3]?.params as unknown as CommandRequest;
+    expect(next.command).toMatchObject({ type: "update_task", expected_planning_revision: 9 });
+    expect(next.idempotency_key).not.toBe(key);
+    h.answer(3, { processed: true, result: { type: "task_updated", task_id: "task-1", planning_revision: 10 } });
+    expect(await retry).toEqual({ kind: "saved", taskId: "task-1", planningRevision: 10 });
+  });
+
   it.each(["wrong-key", "missing-receipt", "wrong-operation"])("never guesses a task after replay with %s", async (problem) => {
     const h = harness();
     const save = h.controller.save("/a", null, fields, 7);

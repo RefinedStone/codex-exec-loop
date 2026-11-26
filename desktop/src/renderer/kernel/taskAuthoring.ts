@@ -179,7 +179,12 @@ export class TaskAuthoringController {
       && event.command === attempt.request.command.type && event.idempotency_key === attempt.request.idempotency_key);
     if (!admitted) return { kind: "uncertain", message: UNCERTAIN };
     for (const { sequence, event } of answer.records) {
-      if (sequence <= admitted.sequence || event.kind !== "command_completed" || event.op_id !== opId) continue;
+      if (sequence <= admitted.sequence) continue;
+      // 확정 거절은 변경이 없었으므로 잠금을 풀고 최신 작업으로 새 요청을 만들게 한다.
+      if (event.kind === "command_rejected" && event.op_id === opId && answer.state === "rejected") {
+        return { kind: "rejected", message: `저장 요청이 거절되었습니다(${event.reason}). 최신 작업을 다시 읽고 새로 저장하세요.` };
+      }
+      if (event.kind !== "command_completed" || event.op_id !== opId) continue;
       if (event.result !== "done" || !event.task_mutation) return { kind: "uncertain", message: event.detail ?? UNCERTAIN };
       const expected = attempt.request.command.type === "update_task" ? attempt.request.command.task_id : null;
       if (expected && expected !== event.task_mutation.task_id) return { kind: "uncertain", message: UNCERTAIN };
