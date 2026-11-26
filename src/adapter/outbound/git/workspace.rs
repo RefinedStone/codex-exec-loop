@@ -25,6 +25,8 @@ use crate::application::port::outbound::git_workspace_port::{
 use crate::domain::git_operation::GitOperationImpact;
 use crate::{git_execution_guard, git_subprocess, subprocess};
 
+mod conversation_worktree;
+
 /// git 폴더 안의 이 파일이나 폴더가 있으면 그 작업이 끝나지 않았다.
 const IN_PROGRESS_MARKERS: &[(&str, &str)] = &[
     ("rebase-merge", "rebase"),
@@ -56,6 +58,26 @@ const ATTRIBUTE_FILES_PATHSPEC: &str = ":(glob)**/.gitattributes";
 pub(crate) struct GitWorkspaceAdapter;
 
 impl GitWorkspacePort for GitWorkspaceAdapter {
+    fn create_conversation_worktree(
+        &self,
+        repository_dir: &str,
+        destination: &str,
+        branch: &str,
+        base_commit: &str,
+    ) -> Result<()> {
+        conversation_worktree::create(repository_dir, destination, branch, base_commit)
+    }
+
+    fn inspect_conversation_worktree(
+        &self,
+        repository_dir: &str,
+        destination: &str,
+    ) -> Result<
+        Option<crate::application::port::outbound::git_workspace_port::GitConversationWorktree>,
+    > {
+        conversation_worktree::inspect(repository_dir, destination)
+    }
+
     fn read_condition(&self, repository_dir: &str) -> Result<GitWorkspaceCondition> {
         let repository = absolute(repository_dir)?;
         if let Some(refusal) = configuration_refusal(repository) {

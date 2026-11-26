@@ -25,6 +25,7 @@ use crate::application::port::outbound::gateway_upstream_port::{
 const DUPLEX_BUFFER_BYTES: usize = 64 * 1024;
 const TEST_TIMEOUT: Duration = Duration::from_secs(10);
 mod chat_routes;
+mod conversation_workspace;
 // 이슈 게시, 복원, 외부 변경 흐름의 검증이다 (#2429). Vault 파일 저장소는 unix 에서만 동작한다.
 mod human_confirmation;
 mod issue_decision;

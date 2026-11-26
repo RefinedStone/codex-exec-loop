@@ -11,6 +11,7 @@ mod context;
 mod delegation;
 pub(crate) use delegation::Delegations;
 pub(crate) use delegation::{advance_pr_review, expire_pr_reviews};
+mod conversation_workspace;
 mod dots;
 mod git;
 mod hosts;
@@ -143,6 +144,7 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         providers,
         git_graph,
         git_operations,
+        conversation_workspaces,
         issue_handoff,
         dots,
         chats,
@@ -178,6 +180,7 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
             delegations,
             git_graph: Some(git_graph),
             git_operations: Some(git_operations),
+            conversation_workspaces: Some(conversation_workspaces),
             issue_handoff: Some(issue_handoff),
             dots,
             chats,

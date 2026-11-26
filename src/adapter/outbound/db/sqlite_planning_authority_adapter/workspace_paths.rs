@@ -138,7 +138,7 @@ impl SqlitePlanningAuthorityAdapter {
     }
 
     /// 기존 marker만 읽는다. 상세 조회가 repository incarnation이나 store를 만들지 않는다.
-    pub(super) fn resolve_authority_location_for_read(
+    pub(crate) fn resolve_authority_location_for_read(
         workspace_dir: &str,
     ) -> Result<Option<PlanningAuthorityLocation>> {
         let workspace_root = canonicalize_best_effort(Path::new(workspace_dir));

@@ -154,3 +154,5 @@ pub mod provider_credential_mutation_port;
 pub mod provider_credentials_port;
 
 pub mod provider_work_port;
+
+pub mod conversation_workspace_store_port;
