@@ -293,7 +293,7 @@ function RightPanel({ panel, maximized, delegationEnabled, enabledExtensions, ch
       </header>
       {/* 탭 머리줄은 그대로 두고 탭의 내용만 확대한다. 탭마다 값이 따로 있다. */}
       <div className="panel-body" style={zoomStyle(zoom)} data-zoom-scope={panelZoomScope(panel)}>
-        <AreaBoundary key={panel} area="이 패널">{children}</AreaBoundary>
+        <AreaBoundary resetKey={panel} area="이 패널">{children}</AreaBoundary>
       </div>
     </aside>
   );
@@ -872,7 +872,7 @@ export function App() {
                 <WriterElsewhereBanner onReconnect={async () => session.current?.reopenThread()} onFork={forkOpenThread} />
                 <ForkedFromBanner onOpenThread={openThread} />
                 {/* 대화가 그리다 실패해도 입력창과 초안은 남는다. */}
-                <AreaBoundary key={openThreadId ?? ""} area="대화">
+                <AreaBoundary resetKey={openThreadId ?? ""} area="대화">
                   <ConversationView onLoadOlder={async () => session.current?.loadOlderTurns()}
                     onDraftTask={kernelPhase === "attached" && attachedWorkspace === openCwd ? openTaskEditor : undefined} />
                 </AreaBoundary>
@@ -888,7 +888,7 @@ export function App() {
                 <div className="banner" data-testid="remote-banner">
                   <span>클라우드 · 읽기 전용입니다. 메시지를 보내지 않습니다.</span>
                 </div>
-                <AreaBoundary key={remoteHost} area="대화">
+                <AreaBoundary resetKey={remoteHost} area="대화">
                   <ConversationView onLoadOlder={async () => remoteSessions.current.get(remoteHost)?.loadOlderTurns()} />
                 </AreaBoundary>
               </ConversationStoreContext.Provider>
