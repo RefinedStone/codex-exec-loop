@@ -14,8 +14,11 @@ import { loadPrompts, rememberPrompt } from "./promptHistory";
 import { contextPercent, isTurnInProgress } from "./transcript";
 import type { NextTurnQueue } from "../session/nextTurnQueue";
 import { QueuedInputs } from "./QueuedInputs";
+import type { NextTurnSettingsController } from "../session/nextTurnSettings";
+import { NextTurnSettings } from "./NextTurnSettings";
 
 export interface ComposerActions {
+  modelSettings?: NextTurnSettingsController;
   queue?: NextTurnQueue;
   queueMessage?(text: string): void;
   resumeQueuedMessages?(): void;
@@ -160,6 +163,8 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
         {livePlan && livePlan.length > 0 && <PlanStrip steps={livePlan} />}
         {!connected && <p className="muted">연결이 끊겨 입력할 수 없습니다.</p>}
         {error && <p className="error">{error}</p>}
+        {!home && transcript && actions.modelSettings && <NextTurnSettings key={transcript.threadId}
+          controller={actions.modelSettings} threadId={transcript.threadId} disabled={!connected || writerElsewhere} />}
         <div className="composer">
           <textarea
             ref={input}

@@ -23,6 +23,7 @@ export class NextTurnQueue {
   constructor(
     private readonly send: (threadId: string, text: string) => Promise<string>,
     private readonly canDispatch: (threadId: string) => boolean,
+    private readonly preflight: (threadId: string) => string | null = () => null,
   ) {}
 
   snapshot = (threadId: string): NextTurnQueueState => this.states.get(threadId) ?? EMPTY;
@@ -118,6 +119,8 @@ export class NextTurnQueue {
     const state = this.snapshot(threadId);
     const item = state.items[0];
     if (this.disposed || this.inFlight.has(threadId) || state.paused || state.waitingTurnId || item?.state !== "queued" || !this.canDispatch(threadId)) return;
+    const refusal = this.preflight(threadId);
+    if (refusal) { this.set(threadId, { ...state, paused: refusal }); return; }
     this.inFlight.add(threadId);
     this.set(threadId, { ...state, items: state.items.map((value) => value.id === item.id ? { ...value, state: "sending" } : value) });
     let timer: ReturnType<typeof setTimeout> | undefined;

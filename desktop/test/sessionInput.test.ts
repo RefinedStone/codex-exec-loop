@@ -194,6 +194,94 @@ const transcript = (status: "inProgress" | "completed"): Transcript => ({
   tokenUsage: null,
 });
 
+describe("model settings on session input", () => {
+  const catalog = (efforts = ["low", "high"]) => ({ data: [{ model: "model-a", displayName: "Model A", hidden: false,
+    supportedReasoningEfforts: efforts.map((reasoningEffort) => ({ reasoningEffort, description: reasoningEffort })),
+    defaultReasoningEffort: "low" }], nextCursor: null });
+  const ready = async (h: ReturnType<typeof harness>) => {
+    h.emitState("connected"); h.replyTo("initialize", {}); await Promise.resolve();
+    const loading = h.session.nextTurnSettings.refresh();
+    h.replyTo("model/list", catalog()); await loading;
+    h.receive({ method: "thread/settings/updated", params: { threadId: "t1", threadSettings: { model: "model-a", effort: "low" } } });
+  };
+
+  it("adds model settings only to a new turn and consumes them after acknowledgment", async () => {
+    const h = harness(); await ready(h); h.openWith(transcript("completed"));
+    h.session.nextTurnSettings.setModel("t1", "model-a"); h.session.nextTurnSettings.setEffort("t1", "high");
+    const sending = h.session.sendMessage("new task");
+    expect(h.sent.at(-1)).toMatchObject({ method: "turn/start", params: { threadId: "t1", model: "model-a", effort: "high" } });
+    expect(Object.keys(h.sent.at(-1)!.params!).sort()).toEqual(["effort", "input", "model", "threadId"]);
+    h.replyTo("turn/start", { turn: { id: "new-turn" } }); await sending;
+    expect(h.session.nextTurnSettings.snapshot("t1").draft).toEqual({ model: null, effort: null });
+    expect(h.session.nextTurnSettings.snapshot("t1").current).toBeNull();
+    h.receive({ method: "thread/settings/updated", params: { threadId: "t1", threadSettings: { model: "model-a", effort: "high" } } });
+    expect(h.session.nextTurnSettings.snapshot("t1").current?.effort).toBe("high");
+    h.session.stop();
+  });
+
+  it("keeps the pending settings through steer and applies them to the next reserved turn", async () => {
+    const h = harness(); await ready(h); h.openWith(transcript("inProgress"));
+    h.session.nextTurnSettings.setModel("t1", "model-a"); h.session.nextTurnSettings.setEffort("t1", "high");
+    const steer = h.session.sendMessage("additional instruction");
+    expect(h.sent.at(-1)).toMatchObject({ method: "turn/steer", params: { expectedTurnId: "turn-1" } });
+    expect(h.sent.at(-1)?.params).not.toHaveProperty("model");
+    expect(h.sent.at(-1)?.params).not.toHaveProperty("effort");
+    h.replyTo("turn/steer", { turnId: "turn-1" }); await steer;
+    expect(h.session.nextTurnSettings.snapshot("t1").draft.effort).toBe("high");
+    h.session.queueMessage("next task");
+    h.receive({ method: "turn/completed", params: { threadId: "t1", turn: { id: "turn-1", status: "completed", items: [], error: null } } });
+    expect(h.sent.at(-1)).toMatchObject({ method: "turn/start", params: { model: "model-a", effort: "high" } });
+    h.replyTo("turn/start", { turn: { id: "queued-turn" } });
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    h.session.stop();
+  });
+
+  it("preserves model settings through compaction and consumes them only on the released reserved turn", async () => {
+    const h = harness(); await ready(h); h.openWith(transcript("completed"));
+    h.session.nextTurnSettings.setModel("t1", "model-a"); h.session.nextTurnSettings.setEffort("t1", "high");
+    const draft = { model: "model-a", effort: "high" };
+    h.session.compaction.start("t1");
+    expect(h.sent.at(-1)).toMatchObject({ method: "thread/compact/start", params: { threadId: "t1" } });
+    expect(Object.keys(h.sent.at(-1)!.params!)).toEqual(["threadId"]);
+    h.replyTo("thread/compact/start", {});
+    h.session.nextTurnQueue.enqueue("t1", "after compact", null);
+    expect(() => h.session.resumeQueuedMessages()).toThrow();
+    h.receive({ method: "turn/started", params: { threadId: "t1", turn: { id: "compact-turn", status: "inProgress", items: [], error: null } } });
+    expect(h.sent.some(message => message.method === "turn/start" || message.method === "turn/steer")).toBe(false);
+    expect(h.session.nextTurnSettings.snapshot("t1").draft).toEqual(draft);
+
+    const item = { type: "contextCompaction", id: "compact-item" };
+    h.receive({ method: "item/completed", params: { threadId: "t1", turnId: "compact-turn", item } });
+    h.receive({ method: "turn/completed", params: { threadId: "t1", turn: { id: "compact-turn", status: "completed", items: [item], error: null } } });
+    expect(h.session.compaction.snapshot("t1").phase).toBe("completed");
+    expect(h.session.nextTurnSettings.snapshot("t1").draft).toEqual(draft);
+    expect(h.sent.some(message => message.method === "turn/start")).toBe(false);
+    h.session.resumeQueuedMessages();
+    expect(h.sent.filter(message => message.method === "turn/start")).toHaveLength(1);
+    expect(h.sent.at(-1)).toMatchObject({ method: "turn/start", params: { threadId: "t1", model: "model-a", effort: "high" } });
+    h.replyTo("turn/start", { turn: { id: "after-compact-turn" } });
+    await flush();
+    expect(h.session.nextTurnSettings.snapshot("t1").draft).toEqual({ model: null, effort: null });
+    h.session.stop();
+  });
+
+  it("holds a reservation before sending when the supported effort disappears", async () => {
+    const h = harness(); await ready(h); h.openWith(transcript("inProgress"));
+    h.session.nextTurnSettings.setModel("t1", "model-a"); h.session.nextTurnSettings.setEffort("t1", "high");
+    h.session.queueMessage("wait for valid settings");
+    const loading = h.session.nextTurnSettings.refresh(); h.replyTo("model/list", catalog(["low"])); await loading;
+    h.receive({ method: "turn/completed", params: { threadId: "t1", turn: { id: "turn-1", status: "completed", items: [], error: null } } });
+    expect(h.sent.some((message) => message.method === "turn/start")).toBe(false);
+    expect(h.session.nextTurnQueue.snapshot("t1")).toMatchObject({ items: [{ state: "queued" }], paused: expect.stringContaining("지원 목록") });
+    h.session.nextTurnSettings.reset("t1"); h.session.resumeQueuedMessages();
+    expect(h.sent.at(-1)).toMatchObject({ method: "turn/start" });
+    expect(h.sent.at(-1)?.params).not.toHaveProperty("effort");
+    h.replyTo("turn/start", { turn: { id: "after-review" } });
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    h.session.stop();
+  });
+});
+
 describe("queued session input", () => {
   it("resumes a paused reservation between the terminal notification and its transcript frame", async () => {
     const frames: Array<() => void> = [];
