@@ -126,6 +126,9 @@ mod tests {
         assert!(skill.contains("not completion authority"));
         assert!(skill.contains("PlanningTaskMutationService"));
         assert!(skill.contains("planning_task_commands"));
+        // #2802: a tool update carries the revision that list_tasks returned.
+        assert!(skill.contains("`committed_planning_revision`"));
+        assert!(skill.contains("`expected_planning_revision`"));
     }
 
     #[test]

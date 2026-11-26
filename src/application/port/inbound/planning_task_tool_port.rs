@@ -7,7 +7,7 @@ const TASK_TOOL_CONTRACT_JSON: &str = concat!(
     r#""request":{"version":1,"op":"list_tasks|create_task|update_task","apply":"true for create/update","provenance":"application-controlled","fields":"flat"},"#,
     r#""examples":{"list_tasks":{"version":1,"op":"list_tasks","status":["ready","blocked"],"limit":20},"#,
     r#""create_task":{"version":1,"op":"create_task","apply":true,"title":"Review queue handoff","status":"ready","depends_on":[],"blocked_by":[]},"#,
-    r#""update_task":{"version":1,"op":"update_task","apply":true,"task_id":"task-123","status":"blocked","priority_reason":"waiting for operator"}},"#,
+    r#""update_task":{"version":1,"op":"update_task","apply":true,"task_id":"task-123","status":"blocked","priority_reason":"waiting for operator","expected_planning_revision":7}},"#,
     r#""rules":["Use before final planning_task_commands.","#,
     r#""Do not edit files, SQL, or JSON authority.","#,
     r#""Run against `.`; in completion prompts do not use payload.worktree_path.","#,
@@ -15,7 +15,7 @@ const TASK_TOOL_CONTRACT_JSON: &str = concat!(
     r#""One narrow task per call; no broad backlog.","#,
     r#""If mutation succeeds, final commands must be empty."],"#,
     r#""create_task_fields":["title required","description optional","direction_id optional","direction_relation_note optional","status optional","base_priority optional","dynamic_priority_delta optional","priority_reason optional","depends_on optional array","blocked_by optional array"],"#,
-    r#""update_task_fields":["task_id required","existing descriptions are preserved","other fields optional"],"#,
+    r#""update_task_fields":["task_id required","existing descriptions are preserved","expected_planning_revision: committed_planning_revision from the list_tasks you read; a stale value is refused without changes","other fields optional"],"#,
     r#""response":{"ok":"boolean","error":"string","tasks":"list result","committed_task_ids":"mutation result","queue_head":"after mutation"}}"#
 );
 
@@ -136,6 +136,10 @@ pub struct PlanningTaskUpdatePayload {
     pub priority_reason: Option<String>,
     pub depends_on: Option<Vec<String>>,
     pub blocked_by: Option<Vec<String>>,
+    /// `list_tasks` 가 준 `committed_planning_revision` 이다. 있으면 그 뒤에 planning 이 바뀐 고치기를 거절한다.
+    /// 없으면(옛 skill) 지금처럼 검사하지 않는다.
+    #[serde(default)]
+    pub expected_planning_revision: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

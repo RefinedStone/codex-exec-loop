@@ -49,7 +49,8 @@
 
 ### 2.2 `planning-tool` 과 worker
 
-- 연산은 `list_tasks`, `create_task`, `update_task` 이다. 지우기는 없다. revision 을 검사하지 않는다.
+- 연산은 `list_tasks`, `create_task`, `update_task` 이다. 지우기는 없다. `update_task` 는 선택 필드
+  `expected_planning_revision` 이 있으면 그 revision 이 지금과 다를 때 아무것도 바꾸지 않고 거절한다 (9d-6, #2802). 없으면 검사하지 않는다.
 - admin 의 고치기와 뜻이 다르다:
 
   | | admin | `planning-tool` |
@@ -199,7 +200,7 @@ K4 설계는 `upsert_task` 처럼 "만들기와 고치기"를 한 명령으로 �
 | 9d-3 (구현 2026-11-18, §8) | 방향: 명령 셋과 admin | 전환 (고치기·지우기에 revision 이 필수가 된다) | 같다 |
 | 9d-4 | 파일 내보내기·적용: 명령 둘과 admin | 유지 | 같다. 작업 공간이 대표 checkout 과 다른 경우 |
 | 9d-5 | 초안의 승격: 명령 하나, 입력을 받는 승격 함수, admin | 유지 | 같다. 명령 전용 조립에서 승격이 되는지 본다 |
-| 9d-6 | `planning-tool` 의 선택 revision 과 worker 의 skill | 확장 | skill 파일 시험, CLI 시험 (모델 턴 없음) |
+| 9d-6 (구현 2026-11-26, #2802) | `planning-tool` 의 선택 revision 과 worker 의 skill | 확장 | skill 파일 시험, 도구 요청 시험 (모델 턴 없음) |
 | 9d-7 | 읽기 경로에서 프롬프트 기록 정리를 뺀다. 입구 경계 시험 | 유지 | 구조 시험 |
 
 - 9d-1 이 나머지의 전제이다. 9d-2 ~ 9d-5 는 서로 독립이다.

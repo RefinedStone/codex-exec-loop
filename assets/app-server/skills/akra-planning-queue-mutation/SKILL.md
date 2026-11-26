@@ -32,6 +32,7 @@ akra planning-tool run . < request.json
 Use `.` from the planning worker cwd. In parallel official-completion prompts, never pass the completion payload's `worktree_path` as the planning-tool workspace.
 
 - First run `list_tasks` to inspect accepted task state before choosing create vs update.
+- Copy its `committed_planning_revision` into each `update_task` request as `expected_planning_revision`. If planning changed since that read, the tool refuses the update without changes; run `list_tasks` again and decide from the new state.
 - For every `create_task` or `update_task` tool mutation, set `apply=true` only after the payload is specific and tied to accepted DB authority.
 - Use one narrow task per tool call; avoid broad backlog generation.
 - When the tool succeeds, return an empty `commands` array in the final JSON to avoid applying the same mutation twice.
