@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from enum import Enum
 from pathlib import Path, PurePosixPath
 
@@ -38,6 +39,10 @@ REVIEW_INSTRUCTIONS = [
 ]
 GIT_PROGRAM = "git"
 MODEL_COMMAND = None
+# 작업이 취소되었는지 묻는 함수이다 (#2873). 참이면 실행 중인 모델 프로세스 트리를 바로 끝낸다.
+STOP_CHECK = None
+STOP_POLL_SECONDS = 0.2
+MODEL_TIMEOUT_SECONDS = 600
 
 
 def digest(data):
@@ -216,6 +221,43 @@ class ReviewerError(Exception):
         self.code = code
 
 
+def kill_process_tree(process):
+    """모델 프로세스와 그 자식(Windows 의 cmd shim 아래 node 등)을 함께 끝낸다."""
+    if process.poll() is not None:
+        return
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, check=False, creationflags=0x08000000)
+    else:
+        import os
+        import signal
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    process.wait()
+
+
+def wait_for_model(process, prompt):
+    """입력을 보내고 끝나기를 기다린다. 취소되거나 제한 시간을 넘으면 프로세스 트리를 끝내고 알린다."""
+    try:
+        process.stdin.write(prompt)
+        process.stdin.close()
+    except OSError:
+        pass  # 모델이 먼저 끝났다. 종료 코드가 알려 준다.
+    deadline = time.monotonic() + MODEL_TIMEOUT_SECONDS
+    while True:
+        try:
+            return process.wait(timeout=STOP_POLL_SECONDS)
+        except subprocess.TimeoutExpired:
+            if STOP_CHECK is not None and STOP_CHECK():
+                kill_process_tree(process)
+                raise ReviewerError("작업을 취소했습니다.", "cancelled")
+            if time.monotonic() >= deadline:
+                kill_process_tree(process)
+                raise ReviewerError("Codex 검수 실행 실패: 제한 시간을 넘었습니다.", "model_timeout")
+
+
 def run_codex_json(model, prompt, schema, images):
     # On Windows npm can install codex as a cmd shim. Pass only fixed filenames
     # and a model identifier as arguments. All case-controlled text goes to stdin.
@@ -243,16 +285,16 @@ def run_codex_json(model, prompt, schema, images):
             (workspace / name).write_bytes(data)
             command.extend(["--image", name])
         try:
-            result = subprocess.run(
-                [*command, "--", "-"], cwd=workspace, input=prompt, timeout=600,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+            # POSIX 는 새 세션으로 띄워 프로세스 그룹째 끝낸다. Windows 는 taskkill /T 가 트리를 끝낸다.
+            process = subprocess.Popen(
+                [*command, "--", "-"], cwd=workspace, stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=sys.platform != "win32",
             )
-        except subprocess.TimeoutExpired as error:
-            raise ReviewerError(f"Codex 검수 실행 실패: {error}", "model_timeout") from error
         except OSError as error:
             raise ReviewerError(f"Codex 검수 실행 실패: {error}") from error
-        if result.returncode:
-            raise ReviewerError(f"Codex 검수 실패 (종료 코드 {result.returncode}). CLI 버전과 로그인을 확인하세요.")
+        returncode = wait_for_model(process, prompt)
+        if returncode:
+            raise ReviewerError(f"Codex 검수 실패 (종료 코드 {returncode}). CLI 버전과 로그인을 확인하세요.")
         try:
             answer = json.loads((workspace / "answer.json").read_text(encoding="utf-8"))
             return answer

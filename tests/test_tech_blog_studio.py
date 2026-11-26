@@ -3,6 +3,8 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -19,6 +21,18 @@ def draft_answer(text="# 키 생성 경합 막기\n본문"):
 def review_answer(decision):
     return {"checks": [{"id": "draft", "decision": decision, "reason": "글 전체", "sources": []},
                        {"id": "claim/c1", "decision": decision, "reason": "근거와 대조", "sources": ["s1"]}]}
+
+
+def process_exists(pid):
+    if sys.platform == "win32":
+        output = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True,
+                                creationflags=0x08000000).stdout
+        return str(pid) in output
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 class FakeModel:
@@ -132,6 +146,52 @@ class StudioTest(unittest.TestCase):
             self.host.request("generate", {"commits": commit})
         after = self.studio("next-kernel").request("open", {"id": c["id"]})
         self.assertEqual(("stopped", "interrupted"), (after["state"], after["stopped"]["reason"]))
+
+    def test_cancel_ends_the_running_model_process_within_a_second(self):
+        # #2873: a fake model writes its pid and sleeps; cancel from another request must end it.
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(folder, ignore_errors=True))
+        model = folder / "slow_model.py"
+        pid_file = folder / "model.pid"
+        model.write_text(
+            "import os, sys, time\n"
+            f"open({str(pid_file)!r}, 'w').write(str(os.getpid()))\n"
+            "sys.stdin.read()\n"
+            "time.sleep(60)\n",
+            encoding="utf-8",
+        )
+        a = self.generate()
+        self.assertTrue(self.host.execute_job(a["id"], a["job"]["id"])["more"])  # collect
+        cancel = {}
+
+        def cancel_when_the_model_runs():
+            deadline = time.monotonic() + 20
+            while not pid_file.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            if pid_file.exists():
+                other = studio.Studio(self.runtime, self.repo, "first-kernel")  # same kernel, another request
+                try:
+                    cancel["stopped"] = other.request("cancel", {"id": a["id"]})
+                    cancel["at"] = time.monotonic()
+                finally:
+                    other.db.close()
+
+        canceller = threading.Thread(target=cancel_when_the_model_runs)
+        with patch.object(studio.blog, "MODEL_COMMAND", [sys.executable, str(model)]):
+            canceller.start()
+            result = self.host.execute_job(a["id"], a["job"]["id"])
+            finished_at = time.monotonic()
+        canceller.join(timeout=10)
+        self.assertTrue(pid_file.exists(), "the fake model did not start")
+        pid = int(pid_file.read_text())
+        stopped = cancel["stopped"]
+        self.assertLess(finished_at - cancel["at"], 1.5)
+        self.assertEqual({"more": False}, result)
+        self.assertFalse(process_exists(pid), "the model process must be gone after cancel")
+        self.assertEqual(("stopped", "cancelled", "write"), (stopped["state"], stopped["stopped"]["reason"], stopped["stage"]))
+        # Finished stages stay and resume works.
+        b = self.run_all(self.host.request("resume", {"id": a["id"], "revision": stopped["revision"]}), FakeModel("pass"))
+        self.assertEqual("reviewed", b["state"])
 
     def test_targets_select_only_commits_after_the_last_article(self):
         first = self.host.request("targets", {})

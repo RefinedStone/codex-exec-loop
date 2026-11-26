@@ -1,5 +1,6 @@
 """기술 블로그 자료·리비전 경계를 실제 Git 저장소와 PNG로 검증한다."""
 import importlib.util
+import io
 import json
 import os
 from io import BytesIO
@@ -158,12 +159,9 @@ class BlogWorkflowTest(unittest.TestCase):
     def test_review_sends_verified_bytes_and_returns_reusable_result(self):
         self.add_captures()
         self.write_draft()
-        real_run = subprocess.run
         workspaces = []
 
         def simulate(command, **kwargs):
-            if command[0] != "fixture-codex":
-                return real_run(command, **kwargs)
             work = kwargs["cwd"]
             workspaces.append(work)
             self.assertEqual("exec", command[1])
@@ -184,10 +182,32 @@ class BlogWorkflowTest(unittest.TestCase):
             # Extra response fields cannot override the worker's revision or model.
             answer = {"checks": self.review_checks(), "input_sha256": "wrong", "model": "wrong"}
             (work / command[command.index("--output-last-message") + 1]).write_text(json.dumps(answer), "utf-8")
-            return subprocess.CompletedProcess(command, 0)
+            return 0
+
+        class SimulatedModel:
+            """The model process: it gets the prompt on stdin and writes its answer when waited on (#2873)."""
+
+            def __init__(self, command, **kwargs):
+                self.command, self.kwargs, self.pid, self.code = command, kwargs, 0, None
+                self.stdin = io.BytesIO()
+                self.stdin.close = lambda: None  # keep the prompt readable after the runner closes stdin
+
+            def wait(self, timeout=None):
+                if self.code is None:
+                    self.code = simulate(self.command, input=self.stdin.getvalue(), cwd=self.kwargs["cwd"])
+                return self.code
+
+            def poll(self):
+                return self.code
+
+        real_popen = subprocess.Popen
+
+        def popen(command, **kwargs):
+            # Git still runs for real; only the model command is simulated.
+            return SimulatedModel(command, **kwargs) if command[0] == "fixture-codex" else real_popen(command, **kwargs)
 
         with patch.object(worker.shutil, "which", return_value="fixture-codex"), \
-                patch.object(worker.subprocess, "run", side_effect=simulate):
+                patch.object(worker.subprocess, "Popen", side_effect=popen):
             result, code = self.review_cli()
         self.assertEqual((0, "reviewed", "test-model"), (code, result["state"], result["model"]))
         self.assertEqual(1, len(workspaces))

@@ -300,7 +300,7 @@ class Studio:
             return present(a)
         if action == "cancel":
             if a["job"]:
-                self.stop(a, "cancelled", "취소했습니다. 진행 중이던 모델 호출 1회는 끝까지 갈 수 있습니다.")
+                self.stop(a, "cancelled", "취소했습니다. 진행 중이던 모델 호출도 끝냈습니다.")
             return present(a)
         if action == "delete":
             self.db.execute("DELETE FROM image WHERE article=?", (a["id"],))
@@ -508,12 +508,16 @@ class Studio:
         if not job or job["id"] != job_id or job["owner"] != self.owner:
             return {"more": False}
         failure = None
+        # 모델을 기다리는 동안 다른 요청(취소, 다시 시작)이 이 작업을 끝내면 모델 프로세스를 바로 끝낸다 (#2873).
+        blog.STOP_CHECK = lambda: (self.find(key) or {}).get("job") != job
         try:
             updates = self.run_stage(a)
         except blog.ReviewerError as error:
             failure = (error.code, FAILURES.get(error.code, str(error)))
         except Exception as error:
             failure = ("worker_failed", f"작업 실패: {error}")
+        finally:
+            blog.STOP_CHECK = None
         self.db.execute("BEGIN IMMEDIATE")
         try:
             current = self.find(key)
