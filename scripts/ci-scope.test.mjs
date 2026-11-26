@@ -178,6 +178,36 @@ test("portable native selectors cover host verification through the actual Windo
   }
 });
 
+test("Windows trusted-temp contracts run once without selecting Windows-only tests on macOS", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/native-pr-checks.yml", import.meta.url), "utf8");
+  const windows = readFileSync(new URL("./check_windows_portable.sh", import.meta.url), "utf8");
+  const powershell = readFileSync(new URL("./check_native_pr.ps1", import.meta.url), "utf8");
+  const macosStep = workflow.match(/node scripts\/run_native_rust_contracts\.mjs[\s\S]*?(?=\n      - name:)/)?.[0] || "";
+  const powershellStep = powershell.match(/function Invoke-WindowsPortableChecks[\s\S]*?(?=\nPush-Location)/)?.[0] || "";
+  const windowsSelectors = [
+    ["Windows Bash", [...windows.matchAll(/^\s+'([^']+)'/gm)].map((match) => match[1])],
+    ["PowerShell", [...powershellStep.matchAll(/^\s+"([^"\r\n]+)",?\r?$/gm)].map((match) => match[1])],
+  ];
+  const macosSelectors = [...macosStep.matchAll(/^\s+'([^'\r\n]+)'(?:\s*\\)?\r?$/gm)]
+    .map((match) => match[1]);
+  assert.ok(macosSelectors.length > 0, "the macOS contract list must be parsed before checking exclusions");
+  const tempFilter = "adapter::outbound::github::automation::tests::windows_temp::";
+  const identityFilter = "private_fs::shared_directory_tests::";
+  for (const testPath of [tempFilter, identityFilter]) {
+    for (const [platform, filters] of windowsSelectors) {
+      assert.ok(filters.includes(testPath), `${platform} omits ${testPath}`);
+      assert.equal(filters.filter((filter) => testPath.includes(filter)).length, 1,
+        `${platform} must select ${testPath} through exactly one group`);
+    }
+    assert.equal(macosSelectors.filter((filter) => testPath.includes(filter)).length, 0,
+      `macOS must not select the Windows-only contract ${testPath}`);
+  }
+
+  const cleanHost = powershellStep.match(/if \(\$IncludeCleanHostContracts\) \{\s*\$testFilters \+= @\(([\s\S]*?)\n        \)/)?.[0] || "";
+  assert.ok(cleanHost.includes(`"${tempFilter}"`), "the real Git fixture belongs to the clean-host group");
+  assert.ok(!cleanHost.includes(`"${identityFilter}"`), "in-memory identity checks must run in ordinary Windows checks too");
+});
+
 test("portable native selectors cover immutable evidence policy and the delivery gate", () => {
   const workflow = readFileSync(new URL("../.github/workflows/native-pr-checks.yml", import.meta.url), "utf8");
   const windows = readFileSync(new URL("./check_windows_portable.sh", import.meta.url), "utf8");

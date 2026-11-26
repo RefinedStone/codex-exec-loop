@@ -1730,20 +1730,13 @@ pub(crate) fn create_private_temp_directory(prefix: &str) -> Result<PathBuf> {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
         let path = base.join(format!("{prefix}-{nonce}"));
-        #[allow(unused_mut)]
-        let mut builder = fs::DirBuilder::new();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
-        match builder.create(&path) {
-            Ok(()) => {
-                secure_private_directory(&path)?;
-                return Ok(path);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error).context("failed to create private temporary root"),
+        if create_private_directory(&path)? {
+            #[cfg(unix)]
+            secure_private_directory(&path)?;
+            #[cfg(windows)]
+            validate_private_directory(&path)
+                .context("private temporary root verification after atomic creation failed")?;
+            return Ok(path);
         }
     }
     bail!("failed to allocate a unique private temporary root")
@@ -1766,24 +1759,70 @@ pub(crate) fn trusted_temp_directory_base() -> Result<PathBuf> {
 #[cfg(windows)]
 pub(crate) fn trusted_temp_directory_base() -> Result<PathBuf> {
     let local_app_data = crate::private_fs::windows_local_app_data_path()?;
-    let akra = local_app_data.join("Akra");
-    let base = akra.join("trusted-temp");
-    for directory in [&akra, &base] {
-        match fs::create_dir(directory) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!(
-                        "failed to create trusted temp base `{}`",
-                        directory.display()
-                    )
-                });
-            }
-        }
-        secure_private_directory(directory)?;
-    }
+    trusted_temp_directory_base_in(&local_app_data)
+}
+
+#[cfg(windows)]
+fn trusted_temp_directory_base_in(local_app_data: &Path) -> Result<PathBuf> {
+    // General application data may already contain inherited ACLs from normal initialization.
+    // Keep transient helpers in their own private boundary; never repair or fall back to Akra.
+    let base = local_app_data.join("AkraTrustedTemp");
+    let created = create_private_directory(&base)?;
+    // A concurrent creator publishes the private directory in one OS operation. Existing
+    // roots are validation-only: resetting their inheritable ACL can race with children.
+    validate_shared_private_directory(&base)
+        .with_context(|| format!("trusted temp parent verification failed (created={created})"))?;
     Ok(base)
+}
+
+#[cfg(unix)]
+fn create_private_directory(path: &Path) -> Result<bool> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    match fs::DirBuilder::new().mode(0o700).create(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(error) => Err(error).context("failed to create private temporary directory"),
+    }
+}
+
+#[cfg(windows)]
+fn create_private_directory(path: &Path) -> Result<bool> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::Storage::FileSystem::CreateDirectoryW;
+
+    let parent = path
+        .parent()
+        .context("private directory parent is missing")?;
+    let name = path
+        .file_name()
+        .context("private directory name is missing")?;
+    let native_path = fs::canonicalize(parent)
+        .context("failed to resolve private directory parent")?
+        .join(name);
+    let security =
+        crate::private_fs::WindowsOwnerOnlySecurityDescriptor::for_current_user_directory()?;
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: security.as_raw(),
+        bInheritHandle: 0,
+    };
+    let wide = native_path
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    // SAFETY: the terminated path and private descriptor remain allocated for this call.
+    if unsafe { CreateDirectoryW(wide.as_ptr(), &attributes) } != 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.kind() == std::io::ErrorKind::AlreadyExists {
+        Ok(false)
+    } else {
+        Err(error).context("CreateDirectoryW failed to create private temporary directory")
+    }
 }
 
 fn write_private_file(path: &Path, contents: &str) -> Result<()> {
@@ -1885,6 +1924,7 @@ fn validate_private_file_identity(path: &Path, file: &File) -> Result<()> {
 fn secure_private_directory(path: &Path) -> Result<()> {
     secure_private_windows_path(path, true)?;
     validate_private_directory(path)
+        .context("private Windows directory verification through reopened handle failed")
 }
 
 #[cfg(windows)]
@@ -1921,6 +1961,25 @@ fn validate_private_directory(path: &Path) -> Result<()> {
         .with_context(|| format!("failed to validate private directory `{}`", path.display()))?;
     validate_windows_path_identity(path, &directory, true)?;
     validate_windows_private_owner_and_acl(path, &directory)
+}
+
+#[cfg(windows)]
+fn validate_shared_private_directory(path: &Path) -> Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    use crate::private_fs::{
+        WINDOWS_FILE_FLAG_BACKUP_SEMANTICS, WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT,
+        WINDOWS_FILE_SHARE_ALL, WINDOWS_GENERIC_READ, WINDOWS_READ_CONTROL,
+        validate_windows_shared_private_directory,
+    };
+    let directory = OpenOptions::new()
+        .read(true)
+        .access_mode(WINDOWS_GENERIC_READ | WINDOWS_READ_CONTROL)
+        .share_mode(WINDOWS_FILE_SHARE_ALL)
+        .custom_flags(WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT | WINDOWS_FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .context("failed to open shared private Windows directory")?;
+    validate_windows_shared_private_directory(path, &directory)
 }
 
 #[cfg(windows)]
@@ -1964,7 +2023,8 @@ fn secure_private_windows_path(path: &Path, directory: bool) -> Result<()> {
         .with_context(|| format!("failed to secure private Windows path `{}`", path.display()))?;
     validate_windows_path_identity(path, &file, directory)?;
     set_windows_private_acl(&file, directory)?;
-    validate_windows_private_owner_and_acl(path, &file)?;
+    validate_windows_private_owner_and_acl(path, &file)
+        .context("private Windows ACL verification immediately after setting failed")?;
     validate_windows_path_identity(path, &file, directory)
 }
 
@@ -2481,6 +2541,8 @@ fn parse_pull_request_number_from_url(output: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     mod frozen_integration;
+    #[cfg(windows)]
+    mod windows_temp;
 
     use std::fs;
     #[cfg(unix)]

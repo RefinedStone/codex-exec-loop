@@ -19,6 +19,7 @@ node scripts/run_native_rust_contracts.mjs --all-features --target "${target}" -
   'telegram_bot::tests::telegram_config_windows_' \
   'telegram_global_runner_lease::tests::' \
   'private_sqlite::tests::' \
+  'private_fs::shared_directory_tests::' \
   'filesystem::issue_publish_intent_journal::' \
   'filesystem::issue_creation_journal::' \
   'sqlite_issue_automation_restart_registry::tests::' \
@@ -81,6 +82,7 @@ node scripts/run_native_rust_contracts.mjs --all-features --target "${target}" -
   'application::service::parallel_mode::tests::distributor::evidence_gate::' \
   'application::service::parallel_mode::tests::distributor::work_permits::evidence_conditions::' \
   'adapter::outbound::github::automation::tests::frozen_integration::' \
+  'adapter::outbound::github::automation::tests::windows_temp::' \
   'application::service::parallel_mode::orchestrator_loop::tests::automatic_verification::' \
   'application::service::post_turn_evaluation::tests::automatic_verification::' \
   'application::service::parallel_mode::tests::automatic_verification::' \
