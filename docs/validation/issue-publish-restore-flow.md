@@ -42,13 +42,24 @@ Gateway session and builds them again on the same folders. The GitHub double and
    reload the editor shows the unknown result again and sends no publish. The local text is not in
    browser storage or the chat composer, and no turn starts.
 
-## Open items
+## Approved-copy follow-up (#2701)
 
-- **Gateway hand-off does not check the approved copy.** `akra/issue/handoffCopy` passes
-  `approved: None`. The service refuses a changed issue when it gets the approved hash of the
-  journal (asserted in test 2), but the Gateway does not give that hash. The test
-  `the_gateway_hand_off_refuses_an_issue_edited_after_its_approved_publish` is `#[ignore]`. The
-  product must first decide whether an external edit blocks the hand-off of that issue.
+[PR #2709](https://github.com/RefinedStone/codex-exec-loop/pull/2709) implemented the project-scoped
+approved-copy check. The Gateway still passes `approved: None` intentionally: the service reads the
+authoritative publication and creation journals instead of accepting a client-provided approval hash.
+An external edit or an uncertain journal state now blocks scoped hand-off. The test
+`the_gateway_hand_off_refuses_an_issue_edited_after_its_approved_publish` is active, without `#[ignore]`.
+
+See [the current contract and acceptance evidence](issue-handoff-approved-copy.md) for manual versus
+automatic authority, creation-only issues, UI results, cancellation boundaries, and the limits of the
+recorded checks. This correction does not claim a new CI or native OS validation run.
+
+## Original validation limits and separate follow-ups
+
+The items below describe the scope of the original #2429 validation; they are not a current product
+support matrix. Later work is tracked in [the native restore record](desktop-vault-native-restore.md)
+and [the Issue/Vault failure matrix](issue-vault-failure-matrix.md).
+
 - **Desktop native follow-up.** The original validation above had no shipped
   `VaultRestoreSource`. The [native restore follow-up](desktop-vault-native-restore.md) adds a
   local, target-bound read-only helper and an issue-detail entry point. Its synthetic UI and
