@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { compareSamples, createCargoObserver, distribution, measure, summarizeWorkflow } from "./ci-performance.mjs";
+import { compareSamples, createCargoObserver, distribution, groupLaneSamples, measure, summarizeWorkflow } from "./ci-performance.mjs";
 
 test("workflow latency is not the sum of parallel runner time", () => {
   const job = (name, start, end) => ({ name, started_at: start, completed_at: end, status: "completed", conclusion: "success", steps: [] });
@@ -25,8 +25,27 @@ test("unfinished workflow and missing gate do not become zero-duration successes
   assert.equal(result.incompleteJobs, 1);
 });
 test("median and range distinguish missing samples", () => {
-  assert.deepEqual(distribution([5, 1, 4, 2]), { samples: 4, median: 3, minimum: 1, maximum: 5 });
-  assert.deepEqual(distribution([null, undefined]), { samples: 0, median: null, minimum: null, maximum: null });
+  assert.deepEqual(distribution([5, 1, 4, 2]), { samples: 4, median: 3, p90: 5, minimum: 1, maximum: 5 });
+  assert.equal(distribution([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]).p90, 10);
+  assert.deepEqual(distribution([null, undefined]), { samples: 0, median: null, p90: null, minimum: null, maximum: null });
+});
+test("lane samples split Cargo build and test execution by restored target cache and skip failed commands", () => {
+  const record = (label, seconds, finished, testResults, exitCode = 0) => ({ label, seconds, exitCode, cargo: { finished, testResults } });
+  const restored = (hit) => [{ phase: "restored", caches: { target: { hit } } }, { phase: "complete", caches: { target: { hit: "exact" } } }];
+  const groups = groupLaneSamples([
+    { runId: "1", lane: "rust", snapshots: restored("fallback"), records: [
+      record("tests", 300, ["Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 06s"],
+        ["test result: ok. 9 passed; 0 failed; finished in 150.50s", "test result: ok. 1 passed; 0 failed; finished in 0.50s"]),
+      record("tests", 9, [], [], 101)] },
+    { runId: "2", lane: "rust", snapshots: restored("miss"), records: [record("tests", 400, ["Finished `test` profile in 4.5s"], [])] },
+    { runId: "3", lane: "node", snapshots: [], records: [record("node", 30, [], [])] },
+  ]);
+  assert.deepEqual(groups.map(({ lane, targetCache, runs }) => [lane, targetCache, runs]),
+    [["rust", "fallback", ["1"]], ["rust", "miss", ["2"]], ["node", "unrecorded", ["3"]]]);
+  assert.equal(groups[0].cargoBuildSeconds.median, 126);
+  assert.equal(groups[0].testExecutionSeconds.median, 151);
+  assert.equal(groups[0].wallSeconds.samples, 1);
+  assert.equal(groups[1].cargoBuildSeconds.median, 4.5);
 });
 test("comparison separates cohorts, cache scenarios and environment and rejects failed samples", () => {
   const environment = { runner: "macos-15", architecture: "arm64", toolchain: "1.95.0", features: "all", profile: "test", target: "aarch64-apple-darwin" };

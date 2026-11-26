@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
@@ -10,10 +10,38 @@ const elapsed = (start, end) => {
 };
 export function distribution(values) {
   const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
-  if (!sorted.length) return { samples: 0, median: null, minimum: null, maximum: null };
+  if (!sorted.length) return { samples: 0, median: null, p90: null, minimum: null, maximum: null };
   const middle = Math.floor(sorted.length / 2);
   return { samples: sorted.length, median: sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2,
-    minimum: sorted[0], maximum: sorted.at(-1) };
+    // Nearest-rank p90: an observed sample, never an interpolated value.
+    p90: sorted[Math.ceil(sorted.length * 0.9) - 1], minimum: sorted[0], maximum: sorted.at(-1) };
+}
+const cargoFinishedSeconds = (line) => {
+  const match = /in (?:(\d+)m )?([\d.]+)s$/.exec(line);
+  return match ? Number(match[1] ?? 0) * 60 + Number(match[2]) : 0;
+};
+const testResultSeconds = (line) => Number(/finished in ([\d.]+)s/.exec(line)?.[1] ?? 0);
+/** Groups command records by artifact lane, label and restored target cache class (exact/fallback/miss). */
+export function groupLaneSamples(lanes) {
+  const groups = new Map();
+  for (const { runId, lane, records, snapshots } of lanes) {
+    const targetCache = snapshots.find((snapshot) => snapshot.phase === "restored")?.caches?.target?.hit ?? "unrecorded";
+    for (const record of records) {
+      // A failed or cancelled command is not a timing sample.
+      if (record.exitCode !== 0) continue;
+      const key = JSON.stringify([lane, record.label, targetCache]);
+      const group = groups.get(key) ?? { lane, label: record.label, targetCache, runs: [], wall: [], compile: [], test: [] };
+      group.runs.push(runId);
+      group.wall.push(record.seconds);
+      group.compile.push(record.cargo.finished.reduce((sum, line) => sum + cargoFinishedSeconds(line), 0));
+      group.test.push(record.cargo.testResults.reduce((sum, line) => sum + testResultSeconds(line), 0));
+      groups.set(key, group);
+    }
+  }
+  return [...groups.values()].map(({ lane, label, targetCache, runs, wall, compile, test }) => ({
+    lane, label, targetCache, wallSeconds: distribution(wall), cargoBuildSeconds: distribution(compile),
+    testExecutionSeconds: distribution(test), runs,
+  }));
 }
 export function summarizeWorkflow(run, jobs) {
   const rows = jobs.map((job) => ({
@@ -183,8 +211,19 @@ export async function main(args) {
     const [input, output] = args.slice(1);
     if (!input || !output) throw new Error("usage: compare <samples.json> <comparison.json>");
     save(output, compareSamples(JSON.parse(readFileSync(input, "utf8"))));
+  } else if (args[0] === "lanes") {
+    const [input, output] = args.slice(1);
+    if (!input || !output) throw new Error("usage: lanes <downloads-dir> <lanes.json>");
+    // Layout of `gh run download RUN_ID -p 'ci-performance-*' -D <downloads-dir>/RUN_ID`.
+    const lanes = readdirSync(input).flatMap((runId) => readdirSync(join(input, runId)).map((lane) => {
+      const base = join(input, runId, lane, "artifacts", "ci-performance");
+      const lines = (name) => existsSync(join(base, name))
+        ? readFileSync(join(base, name), "utf8").split(/\r?\n/).filter(Boolean).map(JSON.parse) : [];
+      return { runId, lane, records: lines("steps.jsonl"), snapshots: lines("cache-snapshots.jsonl") };
+    }));
+    save(output, groupLaneSamples(lanes));
   } else {
-    throw new Error("usage: ci-performance.mjs <run|report|summarize|compare>");
+    throw new Error("usage: ci-performance.mjs <run|report|summarize|compare|lanes>");
   }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
