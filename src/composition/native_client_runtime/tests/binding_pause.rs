@@ -1,3 +1,5 @@
+use std::sync::atomic::Ordering;
+
 use super::*;
 use crate::adapter::outbound::db::SqliteIssueAutomationStoreAdapter;
 use crate::adapter::outbound::filesystem::RepositoryKernelLockAdapter;
@@ -309,4 +311,67 @@ fn assert_tui_binding_owner(owner_case: TuiOwnerCase) {
     drop(service);
     drop(store);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+fn tui_application_for_verification_test() -> NativeTuiApplicationComposition {
+    let planning = test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
+    let parallel = ParallelModeControlPlaneComposition::new(
+        crate::adapter::inbound::tui::app::test_helpers::test_parallel_mode_service(),
+        planning,
+        Arc::new(crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort),
+    );
+    let port = Arc::new(RecordingTurnRuntimePort::default());
+    NativeTuiApplicationComposition::from_services(
+        StartupService::new(port.clone()),
+        SessionService::new(port.clone()),
+        ConversationService::new(port),
+        parallel,
+        Arc::new(NoopConversationThreadTurnOptionsPort),
+        Arc::new(NoClipboard),
+    )
+}
+
+#[test]
+fn tui_kernel_owner_binds_host_verification_to_the_parallel_completion_handle() {
+    // #2814: the TUI passed an unbound handle, so a completion with a recipe was always held.
+    let fixture = crate::application::service::task_verification::tests::Fixture::new();
+    let handle = TaskVerificationHandle::default();
+    let parallel_clone = handle.clone();
+    let service = fixture.service.clone();
+    let bound = tui_application_for_verification_test()
+        .with_task_verification(handle, move |_wake| Ok(service))
+        .bind_client_runtime();
+
+    assert!(Arc::ptr_eq(
+        bound.client_runtime.task_verification.as_ref().unwrap(),
+        &fixture.service,
+    ));
+    assert_eq!(fixture.repository.recoveries.load(Ordering::SeqCst), 1);
+    let other = crate::application::service::task_verification::tests::Fixture::new();
+    other
+        .service
+        .initialize_live_owner("2026-11-23T12:00:00Z")
+        .unwrap();
+    assert!(parallel_clone.attach(&other.service).is_err());
+    parallel_clone.attach(&fixture.service).unwrap();
+}
+
+#[test]
+fn tui_without_a_verification_owner_stays_fail_closed() {
+    let handle = TaskVerificationHandle::default();
+    let parallel_clone = handle.clone();
+    let bound = tui_application_for_verification_test()
+        .with_task_verification(handle, |_wake| {
+            anyhow::bail!("private owner is unavailable")
+        })
+        .bind_client_runtime();
+    assert!(bound.client_runtime.task_verification.is_none());
+
+    // No owner was bound: a later live owner can still claim the shared handle.
+    let fixture = crate::application::service::task_verification::tests::Fixture::new();
+    fixture
+        .service
+        .initialize_live_owner("2026-11-23T12:00:00Z")
+        .unwrap();
+    parallel_clone.attach(&fixture.service).unwrap();
 }

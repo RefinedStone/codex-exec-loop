@@ -973,20 +973,32 @@ pub(crate) fn build_native_tui_application(
     let binding = issues
         .as_ref()
         .map(|(_, issues, _, _)| (admission.clone(), issues.automation_store()));
+    // 병렬 완료와 owner 가 같은 handle 을 나눈다. owner 가 없으면 recipe 가 있는 완료가 늘 보류된다 (#2814).
+    let verification_handle = TaskVerificationHandle::default();
     let application = build_native_application_for_workspace(
         &workspace,
         None,
-        TaskVerificationHandle::default(),
+        verification_handle.clone(),
         binding,
     )
     .application;
     match issues {
-        Some((workspace, _, pause, true)) => application.with_issue_binding_pause(
-            pause,
-            admission,
-            workspace,
-            kernel_event_log_port(),
-        ),
+        Some((repository_workspace, issues, pause, true)) => application
+            .with_issue_binding_pause(
+                pause,
+                admission.clone(),
+                repository_workspace,
+                kernel_event_log_port(),
+            )
+            // 병렬 완료는 이 화면의 `workspace` 로 검증을 부른다. 검증도 같은 문자열로 만든다.
+            .with_task_verification(verification_handle, move |wake| {
+                super::task_verification::build(
+                    &workspace,
+                    wake,
+                    admission,
+                    issues.automation_store(),
+                )
+            }),
         // An unowned fallback keeps durable pause facts for the next owner. It neither
         // polls pending commands nor appends/acknowledges their completion outbox.
         _ => application,
@@ -1179,21 +1191,10 @@ pub(crate) fn build_headless_kernel_runtime(
             admission.clone(),
         )
         .expect("one binding pause owner per runtime");
-    let waker = runtime.host_waker();
     // A failed private-owner initialization leaves verification unavailable. It cannot
     // turn this ordinary runtime into a command-only execution/recovery path.
-    let verification = super::task_verification::build(
-        workspace_dir,
-        Arc::new(move || waker.wake()),
-        admission,
-        issues.automation_store(),
-    )
-    .ok()
-    .and_then(|service| {
-        runtime
-            .attach_task_verification(service.clone(), &verification_handle)
-            .ok()
-            .map(|_| service)
+    let verification = runtime.attach_owned_task_verification(&verification_handle, |wake| {
+        super::task_verification::build(workspace_dir, wake, admission, issues.automation_store())
     });
     // 실행 중인 app-server의 제어 권한은 조립 안에서 저장 명령에 주입한다.
     // 클라이언트 facade에는 별도 제어 접근자를 남기지 않는다.
