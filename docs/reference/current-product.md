@@ -966,7 +966,15 @@ Akra Desktop (`desktop/`) runs from source as a development build; it has no pac
   `rejected_again` (the one resend was refused again; the task stays queued). The `planning` and
   `parallel` queries and events carry the planning
   queue and the parallel state (pool, agents, merge queue, PR validation); `refresh_planning` reads the
-  queue again. The `history` query (`{"type": "history", "after": <cursor>, "limit": <n>}`) pages
+  queue again. The `attention` query (plan 23 step 1, first slice) lists what a person must answer
+  now. The kernel derives it on each read from the same snapshot and stores no copy. The causes are
+  `approval_pending` (thread), `task_proposed` (task), and `pr_validation_blocked` or
+  `pr_validation_failed` (pull request). Each item has `id` (`<subject kind>:<subject id>:<revision>`),
+  `cause`, `subject`, `revision` (the approval id, the task `updated_at`, or the PR validation
+  observation revision), `summary` (the source text), `updated_at` (only tasks have a time), and
+  `next`. An item leaves the list when its source changes. There is no attention event, read state,
+  or snooze yet; a client reads the query again after `thread_activity`, `planning`, or `parallel`.
+  The `history` query (`{"type": "history", "after": <cursor>, "limit": <n>}`) pages
   through the kernel decision log in record order and answers with `records`, `next_after`, and
   `recorder` (the recorder state; `degraded: true` means this kernel lost records, so a restart
   restores less); send `next_after` as the next `after`. Each new record also arrives live as a `recorded` event with the

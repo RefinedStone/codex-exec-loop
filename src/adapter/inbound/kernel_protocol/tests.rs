@@ -844,7 +844,7 @@ fn events_and_description_have_stable_wire_shapes() {
         ])
     );
     let queries = describe().queries;
-    assert_eq!(queries.len(), 21);
+    assert_eq!(queries.len(), 22);
     for (name, query) in queries.iter().map(|query| query.name).zip([
         KernelQuery::Delegations {},
         KernelQuery::Delegation { id: "job-1".into() },
@@ -867,6 +867,7 @@ fn events_and_description_have_stable_wire_shapes() {
             limit: None,
         },
         KernelQuery::Parallel {},
+        KernelQuery::Attention {},
         KernelQuery::History {
             after: None,
             limit: None,
@@ -1260,6 +1261,57 @@ fn a_query_answers_with_the_event_of_the_same_name() {
         })
         .expect("notification should serialize"),
         json!({ "event": { "type": "resync" } })
+    );
+}
+
+#[test]
+fn the_attention_query_reads_the_snapshot_sources() {
+    let mut snapshot = crate::core::app::AppSnapshot::initial();
+    assert_eq!(
+        KernelQuery::Attention {}.answer(&snapshot, &[], no_parallel(), None, None),
+        KernelQueryAnswer::Attention { items: Vec::new() }
+    );
+    let proposed = queue_task(1, "task-3", TaskStatus::Proposed);
+    *snapshot.planning_parallel.planning_runtime = RuntimeProjection::ready_with_queue_projection(
+        "fragment".to_string(),
+        "1 task".to_string(),
+        None,
+        None,
+        crate::domain::planning::PriorityQueueProjection {
+            next_task: None,
+            active_tasks: Vec::new(),
+            proposed_tasks: vec![proposed],
+            skipped_tasks: Vec::new(),
+        },
+    );
+    let threads = [ThreadActivitySummary {
+        thread_id: "thread-1".to_string(),
+        running: true,
+        active_turn_id: None,
+        approval: Some(crate::domain::conversation::ConversationApprovalRequest {
+            approval_id: "approval-1".to_string(),
+            server_request_id: "request-1".to_string(),
+            method: "item/fileChange/requestApproval".to_string(),
+            kind: crate::domain::conversation::ConversationApprovalRequestKind::FileChange,
+            summary: "Apply the patch".to_string(),
+            details: Vec::new(),
+        }),
+        auto_follow_active: false,
+    }];
+
+    let KernelQueryAnswer::Attention { items } =
+        KernelQuery::Attention {}.answer(&snapshot, &threads, no_parallel(), None, None)
+    else {
+        panic!("attention answers with attention");
+    };
+
+    let ids: Vec<_> = items.iter().map(|item| item.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        [
+            "thread:thread-1:approval-1",
+            "task:task-3:2026-11-10T00:00:00Z"
+        ]
     );
 }
 
@@ -2583,6 +2635,7 @@ fn real_wire_values_match_the_schemas_of_the_spec() {
             limit: None,
         },
         KernelQuery::Parallel {},
+        KernelQuery::Attention {},
         KernelQuery::History {
             after: Some(3),
             limit: None,
@@ -2750,6 +2803,21 @@ fn real_wire_values_match_the_schemas_of_the_spec() {
         event_names.len(),
         spec["events"].as_array().expect("events").len()
     );
+    let attention = KernelQueryAnswer::Attention {
+        items: vec![AttentionItem {
+            id: "task:task-1:2026-11-26T01:02:03Z".to_string(),
+            cause: AttentionCause::TaskProposed,
+            subject: AttentionSubject {
+                kind: AttentionSubjectKind::Task,
+                id: "task-1".to_string(),
+            },
+            revision: "2026-11-26T01:02:03Z".to_string(),
+            summary: "Task".to_string(),
+            updated_at: Some("2026-11-26T01:02:03Z".to_string()),
+            next: vec![NextStep::AskUser],
+        }],
+    };
+    assert_matches_spec(&spec, "queries", "output", &to_json(&attention));
     matches_type(
         "AttachRequest",
         json!({ "workspace": "/workspace", "client_name": "akra-desktop" }),

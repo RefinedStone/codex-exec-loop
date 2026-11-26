@@ -106,6 +106,11 @@ attention 조회와 이벤트 (akra/kernel/query, akra/kernel/event)
 ## 6. 순서 (제안)
 
 1. `attention` 조회와 이벤트. §3 의 출처만 쓴다. task, PR, 저장소 항목과 kernel 이 낸 턴의 스레드 항목이 나온다.
+   - **첫 조각 (구현, 2026-11-26, #2481 A02):** `attention` 조회 하나. 원인은 승인 대기, 제안 task, PR 검증
+     막힘·실패의 세 출처이다. 조회할 때마다 스냅샷에서 계산하고 저장하지 않는다. 현재 동작은
+     [current-product](../reference/current-product.md) 에 있다.
+   - 남은 것 (제안): 이슈 결정 요청과 `awaiting_user` task, 턴 실패, auto-follow 멈춤, planning 고장, 슬롯 막힘
+     원인. `attention` 이벤트. Desktop 표시. 읽음과 미루기 (4단계).
 2. 사용 한도 표시. 1 과 독립이다.
 3. Gateway 탭과 관찰자 모드 (plan 20 ①). 그때 스레드의 판정을 `threadStatus.ts` 에서 kernel 로 옮긴다.
 4. 읽음을 kernel 기록으로 옮긴다.
