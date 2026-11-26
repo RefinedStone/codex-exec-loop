@@ -212,7 +212,8 @@ thread, so the command runs before the record is on disk. A command that core re
 The set of handled idempotency keys is a projection of the log: it lives in memory while the kernel
 runs, forgets what the log has trimmed, and is rebuilt from the command kinds when the log is
 attached. A resend with the same key and fingerprint does not run again while the kernel runs and
-after a restart that wrote its records; after a crash that lost the record it runs again. A kernel
+after a restart that wrote its records; after a crash that lost the record it runs again (the crash
+recovery contract is in [kernel-crash-recovery](kernel-crash-recovery.md)). A kernel
 without a log refuses a command that carries a key.
 The state of an operation is not stored. `operation_states` folds the records that carry an `op_id`
 (`command_received`, `command_rejected`, `command_completed`, the queue kinds, and the turn kinds);

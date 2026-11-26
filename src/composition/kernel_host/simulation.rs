@@ -16,9 +16,10 @@
 //!
 //! 지금 모델하는 범위: 수동 턴 제출(새 thread, 기존 thread), thread 지정 프롬프트(준비, 큐에 남김, 다시 냄), 중지
 //! 요청(성공, 실패, 무효), 턴 시작·종료·실패, 턴 뒤 평가, 자동 후속, 클라이언트 떼기와 다시 붙기, 커널 재시작(기록을
-//! 다 쓴 뒤), 승인 요청과 그 끝(app-server 가 알린 결정, 결정 없이 끝난 턴, 재시작), 멱등 키가 있는 thread 지정
-//! 프롬프트의 재전송, 시계. 병렬 모드, 클라이언트의 승인
-//! 결정 명령, steer, 기록을 다 쓰지 못한 강제 종료는 아직 모델하지 않는다.
+//! 다 쓴 뒤), 기록을 다 쓰지 못한 강제 종료(#2806: 기록의 끝을 잃음, 마지막 효과를 버림), 승인 요청과 그 끝(app-server
+//! 가 알린 결정, 결정 없이 끝난 턴, 재시작), 멱등 키가 있는 thread 지정 프롬프트의 재전송, 시계. 병렬 모드, 클라이언트의
+//! 승인 결정 명령, steer 는 아직 모델하지 않는다. 강제 종료 뒤의 기대값은 `docs/reference/kernel-crash-recovery.md` 의
+//! 계약 C1~C5 를 따른다.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -274,6 +275,10 @@ struct PlannedPrompt {
     task_id: String,
     thread_id: String,
     submissions: usize,
+    /// 강제 종료가 제출의 끝남 기록을 잃어 새 커널이 다시 낼 수 있는 횟수이다 (#2806 계약 C2).
+    resubmissions_allowed: usize,
+    /// 강제 종료가 기록은 남기고 제출 효과를 버렸다. app-server 가 한 번도 받지 못했을 수 있다 (계약 C3).
+    submission_may_be_lost: bool,
 }
 
 /// 불변식 I2, I3 을 보려고 모으는 기록이다. 어긋나면 위반 문장을 돌려준다.
@@ -316,7 +321,10 @@ impl InvariantLedger {
         ));
     }
 
-    /// I7: thread 지정 프롬프트는 커널을 다시 켜도 많아야 한 번, 자기 thread 에만 닿는다.
+    /*
+     * I7: thread 지정 프롬프트는 커널을 다시 켜도 많아야 한 번, 자기 thread 에만 닿는다. 강제 종료가 끝남 기록을 잃은
+     * 만큼만 더 닿을 수 있다 (계약 C2).
+     */
     fn record_planned_prompt_submission(
         &mut self,
         request: &TurnSubmissionRequest,
@@ -325,7 +333,7 @@ impl InvariantLedger {
             return Ok(());
         };
         planned.submissions += 1;
-        if planned.submissions > 1 {
+        if planned.submissions > 1 + planned.resubmissions_allowed {
             return Err(format!(
                 "I7: the prompt of {} reached the app-server {} times",
                 planned.task_id, planned.submissions
@@ -342,7 +350,8 @@ impl InvariantLedger {
 
     /*
      * I7 의 끝 확인이다. 기록에 남김이 열린 채 남으면 안 된다. 다시 내서 끝났다고 기록한 남김은 app-server 가 그
-     * 프롬프트를 정확히 한 번 받았어야 한다. 기록은 커널을 버린 뒤에 읽는다.
+     * 프롬프트를 정확히 한 번 받았어야 한다. 강제 종료가 있었으면 계약 C2, C3 이 정한 범위 안이다. 기록은 커널을 버린
+     * 뒤에 읽는다.
      */
     fn check_queued_prompt_records(&self, recorded: &[RecordedKernelEvent]) -> Result<(), String> {
         let events = || recorded.iter().map(|record| record.event.clone());
@@ -358,12 +367,15 @@ impl InvariantLedger {
             else {
                 continue;
             };
-            let submissions = self
+            let planned = self
                 .planned_prompts
                 .values()
-                .find(|planned| planned.task_id == task_id)
-                .map_or(0, |planned| planned.submissions);
-            if submissions != 1 {
+                .find(|planned| planned.task_id == task_id);
+            let submissions = planned.map_or(0, |planned| planned.submissions);
+            let fewest =
+                usize::from(!planned.is_some_and(|planned| planned.submission_may_be_lost));
+            let most = 1 + planned.map_or(0, |planned| planned.resubmissions_allowed);
+            if !(fewest..=most).contains(&submissions) {
                 return Err(format!(
                     "I7: the record says the queued prompt of {task_id} was submitted, but the app-server got it {submissions} times"
                 ));
@@ -408,6 +420,39 @@ impl InvariantLedger {
             } else if !approval.end_delivered {
                 approval.end = Some(ApprovalResolution::Lost);
                 approval.end_delivered = true;
+            }
+        }
+    }
+
+    /*
+     * 강제 종료가 끝난 커널의 기록 일부를 잃었다 (#2806 계약 C4). `kept` 는 그 커널이 쓴 기록 가운데 디스크에 닿은
+     * 것이다. 요청 기록을 잃은 승인은 기록에 없다. 요청은 남고 끝 기록을 잃은 승인은 새 커널이 `lost` 로 닫는다.
+     * 승인 id 는 커널마다 1 부터 다시 세므로, 끝은 같은 id 의 요청 뒤에서만 찾는다 (앞에는 이전 커널의 승인을 닫은
+     * 기록이 있을 수 있다).
+     */
+    fn forget_lost_approval_records(
+        &mut self,
+        ended_lifetime: usize,
+        kept: &[RecordedKernelEvent],
+    ) {
+        for approval in &mut self.approvals {
+            if approval.lifetime != ended_lifetime || !approval.request_delivered {
+                continue;
+            }
+            let request = kept.iter().position(|record| {
+                matches!(&record.event, KernelEvent::ApprovalRequested(request)
+                    if request.approval_id == approval.approval_id)
+            });
+            let Some(request) = request else {
+                approval.never_recorded = true;
+                continue;
+            };
+            let end_kept = kept[request..].iter().any(|record| {
+                matches!(&record.event, KernelEvent::ApprovalResolved { approval_id, .. }
+                    if approval_id == &approval.approval_id)
+            });
+            if approval.end_delivered && !end_kept {
+                approval.end = Some(ApprovalResolution::Lost);
             }
         }
     }
@@ -551,6 +596,19 @@ fn turn_key(thread_id: &str, turn_id: &str) -> (String, String) {
 /// 커널이 쓴 판단 사건이다 (plan 19 Q3-2). 기록기 스레드가 쓰고, 시뮬레이션은 커널을 버린 뒤에 읽는다.
 #[derive(Default)]
 struct SimKernelLog(Mutex<Vec<RecordedKernelEvent>>);
+
+impl SimKernelLog {
+    /*
+     * 기록을 다 쓰지 못한 강제 종료이다 (#2806). 앞의 `kept` 개만 디스크에 닿았고 그 뒤는 잃었다. 기록기는 차례대로
+     * 쓰므로 잃는 것은 언제나 끝 부분이다. 잃은 기록을 돌려준다.
+     */
+    fn lose_tail(&self, kept: usize) -> Vec<RecordedKernelEvent> {
+        self.0
+            .lock()
+            .expect("kernel log should lock")
+            .split_off(kept)
+    }
+}
 
 impl KernelEventLogPort for SimKernelLog {
     fn append_kernel_events(
@@ -786,6 +844,11 @@ struct Simulation {
     /// 보낸 thread 지정 프롬프트의 `(thread, 프롬프트, 처음 받은 연산 id)` 이다. 재전송은 여기서 고른다.
     sent_thread_prompts: Vec<(String, String, i64)>,
     prompt_resends: usize,
+    /*
+     * 강제 종료가 받은 기록(`command_received`)을 잃은 thread 지정 프롬프트이다 (#2806 계약 C1). 새 커널은 그 키를
+     * 모르므로 재전송을 다시 실행한다. 그 연산 id 는 새 커널이 다른 명령에 다시 줄 수 있어 결과 불명이다 (I11 에서 뺀다).
+     */
+    lost_command_prompts: BTreeSet<String>,
     next_task: u64,
     next_approval: u64,
     restarts: usize,
@@ -848,6 +911,7 @@ impl Simulation {
             thread_prompts_sent: 0,
             sent_thread_prompts: Vec::new(),
             prompt_resends: 0,
+            lost_command_prompts: BTreeSet::new(),
             next_task: 1,
             next_approval: 1,
             restarts: 0,
@@ -886,6 +950,7 @@ impl Simulation {
             let operations = self
                 .sent_thread_prompts
                 .iter()
+                .filter(|(_, prompt, _)| !self.lost_command_prompts.contains(prompt))
                 .map(|(_, prompt, op_id)| (*op_id, prompt.as_str()))
                 .collect::<Vec<_>>();
             check_kernel_records(&records, &self.lifetime_starts)
@@ -967,7 +1032,18 @@ impl Simulation {
                 let advance = Duration::from_millis(self.rng.below(1501));
                 return self.run_host_cycle(advance);
             }
-            SimAction::RestartKernel => return self.restart_kernel(),
+            SimAction::RestartKernel => {
+                if !self.rng.percent(50) {
+                    return self.restart_kernel();
+                }
+                // 잃는 위치는 기록기가 다 쓴 뒤에 정한다. 그 전의 길이는 기록기 스레드의 속도를 따라 seed 를 따르지 않는다.
+                let pick = self.rng.next_u64();
+                let drop_effects = self.rng.percent(50);
+                return self.crash_kernel(
+                    &|written: &[RecordedKernelEvent]| (pick % (written.len() as u64 + 1)) as usize,
+                    drop_effects,
+                );
+            }
             SimAction::SubmitManualTurn => self.submit_manual_turn(),
             SimAction::SubmitThreadPrompt => self.submit_thread_prompt(),
             SimAction::ResendThreadPrompt => return self.resend_thread_prompt(),
@@ -1033,6 +1109,44 @@ impl Simulation {
     fn restart_kernel(&mut self) -> Result<(), Violation> {
         // 이전 커널이 마지막으로 낸 효과를 먼저 받는다. 그 효과는 app-server 에 닿은 것으로 센다.
         self.accept_effects()?;
+        self.replace_kernel(None)
+    }
+
+    /*
+     * 기록을 다 쓰지 못한 강제 종료 뒤의 재시작이다 (#2806). 기록 확정과 바깥 효과의 완료를 따로 정한다. `keep` 은 죽은
+     * 커널이 쓴 기록 가운데 디스크에 닿은 개수를 고른다. `drop_effects` 이면 그 커널이 마지막으로 낸 효과는 바깥 세계에
+     * 닿지 않았다 (기록은 남았을 수 있다). 아니면 효과는 닿았다 (기록은 잃었을 수 있다).
+     */
+    fn crash_kernel(
+        &mut self,
+        keep: &dyn Fn(&[RecordedKernelEvent]) -> usize,
+        drop_effects: bool,
+    ) -> Result<(), Violation> {
+        let mut dropped_prompts = BTreeSet::new();
+        if drop_effects {
+            for effect in self.effects.take() {
+                if let CoreEffect::SubmitTurn { request, .. } = &effect {
+                    dropped_prompts.insert(request.prompt.clone());
+                }
+                self.record(format!(
+                    "crash: the effect {} did not leave the kernel",
+                    variant_name(&format!("{effect:?}"))
+                ));
+            }
+        } else {
+            self.accept_effects()?;
+        }
+        self.replace_kernel(Some((keep, dropped_prompts)))
+    }
+
+    /*
+     * 커널을 버리고 같은 기록으로 다시 조립한다. `crash` 가 있으면 죽은 커널이 쓴 기록의 끝을 잃는다. 그 기록이 없으므로
+     * 새 커널이 할 수 있는 일을 계약(`docs/reference/kernel-crash-recovery.md`)대로 기대값에 반영한다.
+     */
+    fn replace_kernel(
+        &mut self,
+        crash: Option<(&dyn Fn(&[RecordedKernelEvent]) -> usize, BTreeSet<String>)>,
+    ) -> Result<(), Violation> {
         self.restarts += 1;
         let SimKernel {
             host,
@@ -1042,6 +1156,9 @@ impl Simulation {
         } = build_sim_kernel();
         // 이전 커널을 버려야 기록기가 남은 사건을 다 쓴다. 새 커널은 그 뒤에 기록을 읽는다.
         drop(std::mem::replace(&mut self.host, host));
+        if let Some((keep, dropped_prompts)) = crash {
+            self.lose_record_tail(keep, &dropped_prompts);
+        }
         self.inbox = inbox;
         self.effects = effects;
         self.core_inputs = core_inputs;
@@ -1078,6 +1195,66 @@ impl Simulation {
         self.accept_effects()?;
         self.open_client_session();
         Ok(())
+    }
+
+    /// 죽은 커널이 쓴 기록의 끝을 잃고, 그 기록이 없어서 달라지는 기대값을 고친다 (#2806 계약 C1~C4).
+    fn lose_record_tail(
+        &mut self,
+        keep: &dyn Fn(&[RecordedKernelEvent]) -> usize,
+        dropped_prompts: &BTreeSet<String>,
+    ) {
+        let lifetime_start = self.lifetime_starts.last().copied().unwrap_or(0);
+        let kept = {
+            let records = self.kernel_log.0.lock().expect("kernel log should lock");
+            let written = &records[lifetime_start..];
+            lifetime_start + keep(written).min(written.len())
+        };
+        let lost = self.kernel_log.lose_tail(kept);
+        self.record(format!(
+            "kernel crashed: {} record(s) did not reach the disk, {} turn submission(s) dropped",
+            lost.len(),
+            dropped_prompts.len()
+        ));
+        {
+            let records = self.kernel_log.0.lock().expect("kernel log should lock");
+            self.ledger
+                .forget_lost_approval_records(self.restarts - 1, &records[lifetime_start..]);
+        }
+        for prompt in dropped_prompts {
+            if let Some(planned) = self.ledger.planned_prompts.get_mut(prompt) {
+                planned.submission_may_be_lost = true;
+            }
+        }
+        for record in &lost {
+            match &record.event {
+                KernelEvent::CommandReceived { op_id, .. } => {
+                    for (_, prompt, _) in self
+                        .sent_thread_prompts
+                        .iter()
+                        .filter(|(_, _, sent)| sent == op_id)
+                    {
+                        self.lost_command_prompts.insert(prompt.clone());
+                    }
+                }
+                KernelEvent::ThreadPromptSettled {
+                    task_id,
+                    settlement: ThreadPromptSettlement::Submitted,
+                    ..
+                } => {
+                    let planned =
+                        self.ledger
+                            .planned_prompts
+                            .iter_mut()
+                            .find(|(prompt, planned)| {
+                                planned.task_id == *task_id && !dropped_prompts.contains(*prompt)
+                            });
+                    if let Some((_, planned)) = planned {
+                        planned.resubmissions_allowed += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     fn submit_thread_prompt(&mut self) {
@@ -1135,11 +1312,37 @@ impl Simulation {
     /*
      * I9: 같은 멱등 키로 다시 보낸 명령은 다시 실행되지 않는다 (plan 19 Q3-6). 커널을 다시 켠 뒤에도 같다. 커널은
      * 처음의 영수증을 답한다. 다시 실행하면 planner 가 같은 프롬프트를 두 번 준비하고 작업이 둘이 된다.
+     *
+     * 예외는 계약 C1 이다: 강제 종료가 받은 기록을 잃었으면 새 커널은 그 키를 모르고 명령을 새 연산으로 다시 실행한다.
      */
     fn resend_thread_prompt(&mut self) -> Result<(), Violation> {
         self.prompt_resends += 1;
         let index = self.rng.index(self.sent_thread_prompts.len());
         let (thread_id, prompt, first_op_id) = self.sent_thread_prompts[index].clone();
+        if self.lost_command_prompts.remove(&prompt) {
+            self.ledger.prepared_prompts.remove(&prompt);
+            let KernelCommandOutcome::Handled {
+                operation: Some(receipt),
+                ..
+            } = self.send_thread_prompt(&thread_id, &prompt)
+            else {
+                return Err(self.violation(format!(
+                    "C1: the resend of '{prompt}' after its record was lost did not run again"
+                )));
+            };
+            self.record(format!(
+                "client: resend of '{prompt}' ran again as operation {} after a crash lost operation {first_op_id}",
+                receipt.op_id
+            ));
+            if let Some(reason) = receipt.rejection {
+                self.record(format!(
+                    "{REJECTED_AT_ONCE} '{prompt}' with {}",
+                    reason.name()
+                ));
+            }
+            self.sent_thread_prompts[index].2 = receipt.op_id;
+            return Ok(());
+        }
         let outcome = self.send_thread_prompt(&thread_id, &prompt);
         match outcome {
             KernelCommandOutcome::Replayed(receipt) if receipt.op_id == first_op_id => {
@@ -1714,6 +1917,8 @@ impl Simulation {
                 task_id: task_id.clone(),
                 thread_id,
                 submissions: 0,
+                resubmissions_allowed: 0,
+                submission_may_be_lost: false,
             },
         );
         self.record(format!("planner: '{raw_prompt}' -> {task_id}"));
@@ -2127,6 +2332,148 @@ fn kernel_simulation_answers_a_resend_with_the_first_receipt_after_a_restart() {
     assert_eq!((resends, prepared), (2, 1), "{}", trace.join("\n"));
 }
 
+/// 정해진 순서의 시나리오를 돌리고, 불변식이 깨지면 그 걸음과 기록으로 실패한다. 성공하면 기록과 커널 기록을 돌려준다.
+fn run_script(
+    script: impl FnOnce(&mut Simulation) -> Result<(), Violation>,
+) -> (Vec<String>, Vec<RecordedKernelEvent>) {
+    let mut simulation = Simulation::new(0);
+    let result = script(&mut simulation);
+    let log = simulation.kernel_log.clone();
+    match simulation.finish(result) {
+        Ok(trace) => (trace, log.0.lock().expect("kernel log should lock").clone()),
+        Err((violation, trace)) => panic!(
+            "step {}: {}\n{}",
+            violation.step,
+            violation.message,
+            trace.join("\n")
+        ),
+    }
+}
+
+/// 죽은 커널이 쓴 기록 가운데 처음으로 `matches` 에 맞는 기록 앞까지만 디스크에 닿았다.
+fn keep_before(matches: impl Fn(&KernelEvent) -> bool) -> impl Fn(&[RecordedKernelEvent]) -> usize {
+    move |written| {
+        written
+            .iter()
+            .position(|record| matches(&record.event))
+            .expect("the dying kernel should have written the record")
+    }
+}
+
+#[test]
+fn kernel_simulation_submits_a_queued_prompt_again_when_a_crash_lost_its_settlement() {
+    /*
+     * #2806 계약 C2: 남김은 디스크에 있고 끝남(`submitted`)은 잃었다. 새 커널은 그 프롬프트를 다시 낸다. 순서: 프롬프트가
+     * 큐에 남는다 → 정상 재시작 → 새 커널이 그 프롬프트를 낸다 → 끝남 기록이 닿기 전에 죽는다 → 다음 커널이 한 번 더 낸다.
+     */
+    let (trace, _) = run_script(|simulation| {
+        let cycle = Duration::from_millis(10);
+        simulation.open_client_session();
+        simulation.run_host_cycle(cycle)?;
+        simulation.deliver_completion();
+        simulation.run_host_cycle(cycle)?;
+
+        simulation.submit_thread_prompt();
+        simulation.run_host_cycle(cycle)?;
+        simulation.submit_manual_turn();
+        simulation.run_host_cycle(cycle)?;
+        let turn = simulation
+            .turn
+            .clone()
+            .expect("the manual turn should reach the app-server");
+        simulation.start_turn(turn);
+        simulation.run_host_cycle(cycle)?;
+        simulation.deliver_completion();
+        simulation.run_host_cycle(cycle)?;
+
+        simulation.restart_kernel()?;
+        simulation.crash_kernel(
+            &keep_before(|event| {
+                matches!(
+                    event,
+                    KernelEvent::ThreadPromptSettled {
+                        settlement: ThreadPromptSettlement::Submitted,
+                        ..
+                    }
+                )
+            }),
+            false,
+        )?;
+        simulation.settle()
+    });
+    let resubmitted = trace
+        .iter()
+        .filter(|line| line.contains("submitted after the restart"))
+        .count();
+    assert_eq!(resubmitted, 2, "{}", trace.join("\n"));
+}
+
+#[test]
+fn kernel_simulation_runs_a_resend_again_when_a_crash_lost_its_command_record() {
+    /*
+     * #2806 계약 C1: 받은 기록을 잃었다. 새 커널은 멱등 키를 모르므로 같은 키의 재전송을 새 연산으로 다시 실행한다.
+     * 죽은 커널이 낸 준비는 바깥에 닿았으므로 planner 는 같은 프롬프트를 두 번 준비한다.
+     */
+    let (trace, _) = run_script(|simulation| {
+        let cycle = Duration::from_millis(10);
+        simulation.open_client_session();
+        simulation.run_host_cycle(cycle)?;
+        simulation.deliver_completion();
+        simulation.run_host_cycle(cycle)?;
+
+        simulation.submit_thread_prompt();
+        simulation.crash_kernel(
+            &keep_before(|event| matches!(event, KernelEvent::CommandReceived { .. })),
+            false,
+        )?;
+        simulation.run_host_cycle(cycle)?;
+        simulation.deliver_completion();
+        simulation.run_host_cycle(cycle)?;
+        simulation.resend_thread_prompt()?;
+        simulation.settle()
+    });
+    let reruns = trace
+        .iter()
+        .filter(|line| line.contains("ran again as operation"))
+        .count();
+    let prepared = trace
+        .iter()
+        .filter(|line| line.contains("planner: prepare 'request 1'"))
+        .count();
+    assert_eq!((reruns, prepared), (1, 2), "{}", trace.join("\n"));
+}
+
+#[test]
+fn kernel_simulation_closes_a_command_as_lost_when_a_crash_dropped_its_effect() {
+    // #2806 계약 C3: 받은 기록은 디스크에 있고 준비 효과는 커널 밖으로 나가지 않았다. 새 커널은 다시 내지 않고 `lost` 로 닫는다.
+    let mut op_id = None;
+    let (trace, records) = run_script(|simulation| {
+        let cycle = Duration::from_millis(10);
+        simulation.open_client_session();
+        simulation.run_host_cycle(cycle)?;
+        simulation.deliver_completion();
+        simulation.run_host_cycle(cycle)?;
+
+        simulation.submit_thread_prompt();
+        op_id = simulation.sent_thread_prompts.first().map(|sent| sent.2);
+        simulation.crash_kernel(&|written| written.len(), true)?;
+        simulation.settle()
+    });
+    let op_id = op_id.expect("the prompt should have an operation");
+    let states = crate::domain::kernel_event::operation_states(records.iter().map(|r| &r.event));
+    assert_eq!(
+        states.get(&op_id),
+        Some(&crate::domain::kernel_spec::OperationState::Lost),
+        "{}",
+        trace.join("\n")
+    );
+    assert!(
+        !trace.iter().any(|line| line.contains("planner: prepare")),
+        "{}",
+        trace.join("\n")
+    );
+}
+
 #[test]
 fn kernel_simulation_replays_the_same_trace_for_the_same_seed() {
     // P2 의 바탕이다: 같은 seed 가 다른 순서를 만들면 실패를 seed 로 다시 만들 수 없다.
@@ -2158,6 +2505,8 @@ fn kernel_simulation_reaches_follow_up_turns_and_stops() {
         // plan 19 Q3-7: thread prompts and a restart. The restart with a queued prompt has its own scripted test.
         "(ManualIntake",
         "kernel restarted with 0",
+        // #2806: a crash that loses records. Contracts C1 to C3 have their own scripted tests.
+        "kernel crashed:",
         // plan 19 Q3-5: approvals. The restart with an open approval has its own scripted test.
         "requests approval-",
         "ended Accepted",
