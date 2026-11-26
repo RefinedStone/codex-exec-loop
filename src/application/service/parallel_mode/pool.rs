@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 #[cfg(test)]
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,6 +14,7 @@ use crate::application::port::outbound::planning_authority_port::{
     PlanningAuthorityRuntimeEventRecord, PlanningAuthorityRuntimeProjectionSnapshot,
 };
 use crate::diagnostics::event_log;
+use crate::domain::issue_secret_spans::redact_secrets;
 use crate::domain::parallel_mode::{
     ParallelModeAgentSessionDetailSnapshot, ParallelModeDispatchCommandSnapshot,
     ParallelModePoolBoardSnapshot, ParallelModePoolResetPolicy, ParallelModePoolResetReport,
@@ -1157,7 +1159,7 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
     */
     let baseline_head = target.commit_sha.clone();
     let created_baseline_branch = false;
-    let Some(mut worktree_records) = load_worktree_records(runtime, &repo_root) else {
+    let Ok(mut worktree_records) = load_worktree_records(runtime, &repo_root, "reconcile") else {
         return Err(Box::new((
             build_blocked_pool_board(
                 planning_authority,
@@ -1206,7 +1208,9 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
                     detail.to_string(),
                 ))
             })?;
-        if let Some(refreshed_records) = load_worktree_records(runtime, &repo_root) {
+        if let Ok(refreshed_records) =
+            load_worktree_records(runtime, &repo_root, "reconcile-cleanup-refresh")
+        {
             worktree_records = refreshed_records;
         }
     }
@@ -1258,7 +1262,9 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
     baseline으로 다시 관측되며, 사용자가 알아야 하는 action count는 아래 cleanup pass가
     반환하는 "실제로 slot을 돌려놓은 수"에 더 가깝다.
     */
-    if let Some(refreshed_records) = load_worktree_records(runtime, &repo_root) {
+    if let Ok(refreshed_records) =
+        load_worktree_records(runtime, &repo_root, "reconcile-reset-refresh")
+    {
         worktree_records = refreshed_records;
     }
     let provisioned_slots = provision_missing_slots(
@@ -1290,7 +1296,9 @@ pub(super) fn reconcile_pool_board_and_context_with_target_locked(
     cleanup과 board projection을 돌려야 missing slot이 같은 reconcile tick 안에서
     계속 missing으로 보이는 일이 없다.
     */
-    let Some(reloaded_worktree_records) = load_worktree_records(runtime, &repo_root) else {
+    let Ok(reloaded_worktree_records) =
+        load_worktree_records(runtime, &repo_root, "reconcile-reload")
+    else {
         return Err(Box::new((
             build_blocked_pool_board(
                 planning_authority,
@@ -1624,7 +1632,7 @@ fn load_pool_runtime_context_from_roots(
     let Some(baseline_head) = resolve_pool_baseline_head_with_runtime(runtime, repo_root) else {
         return Err("pool baseline is unavailable during inspection");
     };
-    let Some(worktree_records) = load_worktree_records(runtime, repo_root) else {
+    let Ok(worktree_records) = load_worktree_records(runtime, repo_root, "inspection") else {
         return Err("worktree list inspection failed");
     };
     let pool_root = derive_default_pool_root(canonical_repo_root);
@@ -1698,19 +1706,76 @@ pub(super) fn ensure_normalization_recovery_authority_is_empty(
 fn load_worktree_records(
     runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
-) -> Option<Vec<GitWorktreeRecord>> {
+    phase: &str,
+) -> Result<Vec<GitWorktreeRecord>, String> {
     /*
     `git worktree list --porcelain` is the inventory source for both reconcile
-    and inspection. Keeping it as an Option lets callers choose their own blocked
-    board copy instead of leaking command failures through a generic error.
+    and inspection. Callers keep their own blocked board copy; the error keeps the
+    failure kind and exit code, and the event log records them with the phase (#2748).
     */
-    let worktree_output = run_command_with_runtime(
-        runtime,
-        "git",
-        ["-C", repo_root, "worktree", "list", "--porcelain"],
-        None,
-    )?;
-    Some(parse_worktree_records(&worktree_output))
+    read_worktree_inventory(runtime, repo_root)
+        .map(|output| parse_worktree_records(&output))
+        .map_err(|(failure_kind, exit_code, detail)| {
+            event_log::emit_lazy("parallel_pool_worktree_inventory_failed", || {
+                serde_json::json!({
+                    "repo_root": repo_root,
+                    "phase": phase,
+                    "failure_kind": failure_kind,
+                    "exit_code": exit_code,
+                })
+            });
+            let exit_code = exit_code.map_or_else(|| "none".to_string(), |code| code.to_string());
+            let detail = bounded_redacted_diagnostic(&detail);
+            if detail.is_empty() {
+                format!("{failure_kind} during {phase}, exit_code={exit_code}")
+            } else {
+                format!("{failure_kind} during {phase}, exit_code={exit_code}: {detail}")
+            }
+        })
+}
+
+/// Failure kind, Git exit code, and unbounded raw detail of one inventory read.
+type WorktreeInventoryFailure = (&'static str, Option<i32>, String);
+
+fn read_worktree_inventory(
+    runtime: &dyn ParallelModeRuntimePort,
+    repo_root: &str,
+) -> Result<String, WorktreeInventoryFailure> {
+    // Same execution-config guard that `run_command` applied to `git -C <repo> worktree ...`.
+    runtime
+        .ensure_git_execution_safe(Path::new(repo_root))
+        .map_err(|error| ("execution-config-rejected", None, error))?;
+    let args = ["-C", repo_root, "worktree", "list", "--porcelain"].map(OsString::from);
+    let output = runtime
+        .run_git_command(&args, None)
+        .map_err(|error| ("command-error", None, error))?;
+    if !output.succeeded() {
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        return Err(("exit-status", output.exit_code, stderr));
+    }
+    let Ok(stdout) = String::from_utf8(output.stdout) else {
+        return Err(("invalid-utf8-output", output.exit_code, String::new()));
+    };
+    let stdout = stdout.trim();
+    if stdout.is_empty() {
+        return Err(("empty-output", output.exit_code, String::new()));
+    }
+    Ok(stdout.to_string())
+}
+
+const MAX_INVENTORY_DIAGNOSTIC_CHARS: usize = 512;
+
+fn bounded_redacted_diagnostic(detail: &str) -> String {
+    let redacted = redact_secrets(detail.trim());
+    if redacted.chars().count() <= MAX_INVENTORY_DIAGNOSTIC_CHARS {
+        return redacted;
+    }
+    let mut bounded = redacted
+        .chars()
+        .take(MAX_INVENTORY_DIAGNOSTIC_CHARS)
+        .collect::<String>();
+    bounded.push_str("...[truncated]");
+    bounded
 }
 
 pub(super) fn detect_canonical_repo_root(

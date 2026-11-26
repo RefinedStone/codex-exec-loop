@@ -3,7 +3,8 @@
 use super::*;
 use crate::application::port::inbound::task_evidence_query_port::TaskEvidenceSourceKind;
 use crate::application::port::outbound::parallel_mode_runtime_port::{
-    ParallelPoolMutationPermit, ParallelWorkerTreeRequest, ParallelWorkerTreeSnapshot,
+    ParallelCommandOutput, ParallelPoolMutationPermit, ParallelWorkerTreeRequest,
+    ParallelWorkerTreeSnapshot,
 };
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityRuntimeProjectionSnapshot;
 
@@ -216,14 +217,35 @@ impl ParallelModeRuntimePort for RunningRuntime {
             | ["rev-parse", "prerelease"]
             | ["rev-parse", "HEAD"] => Some("a".repeat(40)),
             ["rev-parse", "--abbrev-ref", "HEAD"] => Some(self.lease.branch_name.clone()),
-            ["worktree", "list", "--porcelain"] => Some(format!(
+            _ => panic!("unexpected metadata command: {args:?}"),
+        }
+    }
+    fn run_git_command(
+        &self,
+        args: &[std::ffi::OsString],
+        stdin: Option<&[u8]>,
+    ) -> std::result::Result<ParallelCommandOutput, String> {
+        assert!(stdin.is_none());
+        assert!(self.held.load(Ordering::SeqCst));
+        let args = args
+            .iter()
+            .map(|arg| arg.to_str().expect("fixture git args are UTF-8"))
+            .collect::<Vec<_>>();
+        let ["-C", workspace, "worktree", "list", "--porcelain"] = args[..] else {
+            panic!("unexpected git command: {args:?}");
+        };
+        assert!(self.known_workspace(workspace));
+        Ok(ParallelCommandOutput {
+            exit_code: Some(0),
+            stdout: format!(
                 "worktree {}\nHEAD {}\nbranch refs/heads/{}\n\n",
                 self.lease.worktree_path,
                 "a".repeat(40),
                 self.lease.branch_name,
-            )),
-            _ => panic!("unexpected metadata command: {args:?}"),
-        }
+            )
+            .into_bytes(),
+            stderr: Vec::new(),
+        })
     }
     fn snapshot_parallel_worker_tree(
         &self,

@@ -202,8 +202,10 @@ impl<'a> PoolSlotCleanupIdentity<'a> {
             ));
         }
 
-        let worktree_records = load_worktree_records(runtime, self.repo_root)
-            .ok_or_else(|| "git worktree inventory could not be loaded for cleanup".to_string())?;
+        let worktree_records =
+            load_worktree_records(runtime, self.repo_root, "cleanup").map_err(|detail| {
+                format!("git worktree inventory could not be loaded for cleanup: {detail}")
+            })?;
         let registered = worktree_records.iter().any(|record| {
             runtime.canonicalize_path(&record.path).ok().as_ref() == Some(&canonical_slot)
                 && if branch_must_be_checked_out {

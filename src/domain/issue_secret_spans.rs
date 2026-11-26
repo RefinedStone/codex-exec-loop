@@ -37,6 +37,23 @@ pub fn secret_spans(field: IssueTextField, text: &str) -> Vec<IssueSensitiveSpan
         .collect()
 }
 
+/// 비밀값으로 보이는 구간을 `[removed]` 로 바꾼 글이다. 진단과 외부 전송 전에 쓴다.
+pub fn redact_secrets(text: &str) -> String {
+    let mut ranges = secret_ranges(text);
+    ranges.sort_unstable_by_key(|range| range.start);
+    let mut out = String::with_capacity(text.len());
+    let mut end = 0;
+    for range in ranges {
+        if range.start >= end {
+            out.push_str(&text[end..range.start]);
+            out.push_str("[removed]");
+        }
+        end = end.max(range.end);
+    }
+    out.push_str(&text[end..]);
+    out
+}
+
 /// 비밀값으로 보이는 구간이다. 겹칠 수 있다. 모든 경계는 ASCII 글자 옆이므로 문자 경계이다.
 /// shortcut: 알려진 모양(토큰 접두사, Bearer, URL 의 계정 정보, `키=값`, PEM 개인 키)만 찾는다. 이름과 경로는
 /// 찾지 않는다. 다른 모양이 필요하면 사용자 지정 검증기(#2431)에서 구간을 받는다.

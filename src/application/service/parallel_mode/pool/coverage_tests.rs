@@ -1,5 +1,8 @@
 use super::*;
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
+use crate::application::port::outbound::parallel_mode_runtime_port::{
+    ParallelCommandOutput, ParallelPoolMutationPermit,
+};
 use crate::application::port::outbound::planning_authority_port::{
     NoopPlanningAuthorityPort, PlanningAuthorityPort,
 };
@@ -588,7 +591,7 @@ fn low_level_context_loaders_report_missing_git_inventory_or_baseline() {
     let runtime =
         crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new();
 
-    assert!(load_worktree_records(&runtime, &workspace_dir).is_none());
+    assert!(load_worktree_records(&runtime, &workspace_dir, "inspection").is_err());
     assert_eq!(
         load_pool_runtime_context_from_roots(
             &runtime,
@@ -879,6 +882,280 @@ fn traced_parallel_enable_reset_covers_live_blocker_and_reset_event_payloads() {
     assert_eq!(report.succeeded_reset_slot_count(), 1);
     assert!(live_slot_path.join(".git").exists());
     assert!(reset_slot_path.join(".git").exists());
+
+    remove_pool_artifacts(&repo);
+}
+
+// Injects one guard result and one `git worktree list` result. Any other command panics, so a
+// test that finishes proves no cleanup or remote step ran after the inventory failure (#2748).
+struct InventoryRuntime {
+    guard: Result<(), String>,
+    inventory: Result<ParallelCommandOutput, String>,
+    git_calls: Mutex<Vec<Vec<OsString>>>,
+}
+
+impl InventoryRuntime {
+    fn new(guard: Result<(), String>, inventory: Result<ParallelCommandOutput, String>) -> Self {
+        Self {
+            guard,
+            inventory,
+            git_calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn exited(exit_code: Option<i32>, stdout: &[u8], stderr: &str) -> Self {
+        Self::new(
+            Ok(()),
+            Ok(ParallelCommandOutput {
+                exit_code,
+                stdout: stdout.to_vec(),
+                stderr: stderr.as_bytes().to_vec(),
+            }),
+        )
+    }
+
+    fn git_call_count(&self) -> usize {
+        self.git_calls.lock().expect("git call log").len()
+    }
+}
+
+struct InventoryPermit;
+
+impl ParallelPoolMutationPermit for InventoryPermit {
+    fn verify_pool_root(&self, _pool_root: &Path) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+impl ParallelModeRuntimePort for InventoryRuntime {
+    fn try_acquire_pool_mutation_permit(
+        &self,
+        _pool_root: &Path,
+    ) -> Result<Option<Box<dyn ParallelPoolMutationPermit>>, String> {
+        Ok(Some(Box::new(InventoryPermit)))
+    }
+
+    fn ensure_git_execution_safe(&self, _path: &Path) -> Result<(), String> {
+        self.guard.clone()
+    }
+
+    fn run_git_command(
+        &self,
+        args: &[OsString],
+        stdin: Option<&[u8]>,
+    ) -> Result<ParallelCommandOutput, String> {
+        assert!(stdin.is_none());
+        assert_eq!(
+            &args[2..],
+            ["worktree", "list", "--porcelain"].map(OsString::from)
+        );
+        self.git_calls
+            .lock()
+            .expect("git call log")
+            .push(args.to_vec());
+        self.inventory.clone()
+    }
+
+    fn canonicalize_path(&self, path: &Path) -> std::io::Result<PathBuf> {
+        Ok(path.to_path_buf())
+    }
+
+    fn path_is_symlink(&self, _path: &Path) -> std::io::Result<bool> {
+        Ok(false)
+    }
+
+    fn detect_git_repo_root(&self, _workspace_dir: &str) -> Option<String> {
+        panic!("unexpected repo root probe after inventory")
+    }
+
+    fn command_succeeds(&self, program: &str, args: &[&str]) -> bool {
+        panic!("unexpected command after inventory: {program} {args:?}")
+    }
+
+    fn run_command(&self, program: &str, args: &[&str], _: Option<&str>) -> Option<String> {
+        panic!("unexpected command after inventory: {program} {args:?}")
+    }
+
+    fn run_command_with_stdin(&self, program: &str, args: &[&str], _: &str) -> Option<String> {
+        panic!("unexpected command after inventory: {program} {args:?}")
+    }
+
+    fn find_executable(&self, _program: &str) -> Option<PathBuf> {
+        None
+    }
+
+    fn gh_auth_status(&self, _repo_root: Option<&str>) -> bool {
+        panic!("unexpected GitHub probe after inventory")
+    }
+
+    fn current_timestamp(&self) -> String {
+        "2026-11-26T00:00:00Z".to_string()
+    }
+
+    fn canonicalize_best_effort(&self, path: &Path) -> PathBuf {
+        path.to_path_buf()
+    }
+
+    fn path_exists(&self, _path: &Path) -> bool {
+        true
+    }
+
+    fn ensure_directory_exists(&self, _path: &Path) -> std::io::Result<()> {
+        panic!("unexpected directory creation after inventory")
+    }
+
+    fn write_runtime_mirror_atomic(&self, _: &Path, _: &Path, _: &str) -> std::io::Result<()> {
+        panic!("unexpected mirror write after inventory")
+    }
+
+    fn read_runtime_mirror_optional(&self, _: &Path, _: &Path) -> std::io::Result<Option<String>> {
+        panic!("unexpected mirror read after inventory")
+    }
+
+    fn read_runtime_mirror_directory(
+        &self,
+        _: &Path,
+        _: &Path,
+    ) -> std::io::Result<Vec<(PathBuf, String)>> {
+        panic!("unexpected mirror read after inventory")
+    }
+
+    fn remove_runtime_mirror_file(&self, _: &Path, _: &Path) -> std::io::Result<()> {
+        panic!("unexpected mirror removal after inventory")
+    }
+}
+
+#[test]
+fn worktree_inventory_failures_keep_kind_exit_code_and_bounded_redacted_detail() {
+    let secret = format!("ghp_{}", "A".repeat(24));
+    let cases = [
+        (
+            InventoryRuntime::new(
+                Err("host Git execution-config audit failed".to_string()),
+                Ok(ParallelCommandOutput {
+                    exit_code: Some(0),
+                    stdout: b"worktree /repo\n".to_vec(),
+                    stderr: Vec::new(),
+                }),
+            ),
+            "execution-config-rejected during cleanup, exit_code=none: host Git execution-config audit failed",
+            0,
+        ),
+        (
+            InventoryRuntime::new(
+                Ok(()),
+                Err("command `parallel runtime git command` timed out after 30s".to_string()),
+            ),
+            "command-error during cleanup, exit_code=none: command `parallel runtime git command` timed out after 30s",
+            1,
+        ),
+        (
+            InventoryRuntime::exited(
+                Some(128),
+                b"",
+                &format!("fatal: remote https://user:{secret}@example.invalid/x.git\n"),
+            ),
+            "exit-status during cleanup, exit_code=128: fatal: remote https://[removed]@example.invalid/x.git",
+            1,
+        ),
+        (
+            InventoryRuntime::exited(None, b"", ""),
+            "exit-status during cleanup, exit_code=none",
+            1,
+        ),
+        (
+            InventoryRuntime::exited(Some(0), &[0xff, 0xfe], ""),
+            "invalid-utf8-output during cleanup, exit_code=0",
+            1,
+        ),
+        (
+            InventoryRuntime::exited(Some(0), b" \n", ""),
+            "empty-output during cleanup, exit_code=0",
+            1,
+        ),
+    ];
+
+    for (runtime, expected, git_calls) in cases {
+        let error = load_worktree_records(&runtime, "/repo", "cleanup")
+            .expect_err("injected inventory failure should surface");
+        assert_eq!(error, expected);
+        assert!(!error.contains(&secret));
+        assert_eq!(runtime.git_call_count(), git_calls);
+    }
+
+    let noisy = InventoryRuntime::exited(Some(1), b"", &"x".repeat(5_000));
+    let error = load_worktree_records(&noisy, "/repo", "inspection")
+        .expect_err("noisy inventory failure should surface");
+    assert!(error.ends_with("...[truncated]"));
+    assert!(
+        error.len() < 700,
+        "diagnostic should stay bounded: {}",
+        error.len()
+    );
+}
+
+#[test]
+fn worktree_inventory_failure_stops_slot_cleanup_before_any_git_mutation() {
+    let canonical_repo_root = PathBuf::from("/repo");
+    let pool_root = derive_default_pool_root(&canonical_repo_root);
+    let slot_path = pool_root.join("slot-1");
+    let branch_name = format!("{AKRA_AGENT_BRANCH_PREFIX}/slot-1/task");
+    let lease = lease(
+        "slot-1",
+        "task",
+        ParallelModeSlotLeaseState::CleanupPending,
+        "2026-11-26T00:00:00Z",
+    );
+    let runtimes = [
+        InventoryRuntime::new(Err("blocked".to_string()), Err("unused".to_string())),
+        InventoryRuntime::new(Ok(()), Err("timed out".to_string())),
+        InventoryRuntime::exited(Some(128), b"", "fatal"),
+        InventoryRuntime::exited(Some(0), b"", ""),
+    ];
+
+    for runtime in runtimes {
+        let mutation_lock = try_acquire_pool_mutation_lock_at(&runtime, &pool_root)
+            .expect("fake permit")
+            .expect("fake permit should be free");
+        let identity = super::cleanup::PoolSlotCleanupIdentity::new(
+            "/repo",
+            &canonical_repo_root,
+            &pool_root,
+            "slot-1",
+            &slot_path,
+            &branch_name,
+        );
+
+        let error = identity
+            .validate(&runtime)
+            .expect_err("inventory failure should block identity validation");
+        assert!(
+            error.starts_with("git worktree inventory could not be loaded for cleanup: "),
+            "{error}"
+        );
+        // The fake panics on every command except the inventory read.
+        assert!(!super::cleanup::cleanup_slot_to_ref_locked(
+            &NoopPlanningAuthorityPort::default(),
+            &runtime,
+            &identity,
+            "baseline",
+            super::cleanup::PoolSlotCleanupLeaseAuthority::CleanupPending(&lease),
+            &mutation_lock,
+        ));
+    }
+}
+
+#[test]
+fn worktree_inventory_reads_a_real_temporary_repository() {
+    let repo = init_temp_git_repo("akra-inventory-ok");
+    let records = load_worktree_records(&git_runtime(), &path_string(&repo), "inspection")
+        .expect("real repository inventory should load");
+
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        fs::canonicalize(&records[0].path).expect("listed worktree should exist"),
+        fs::canonicalize(&repo).expect("repo should exist")
+    );
 
     remove_pool_artifacts(&repo);
 }
