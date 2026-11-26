@@ -1284,7 +1284,11 @@ The Gateway records the external documents that a thread mentions, without a mod
   the Gateway reads the issue with `gh`, finds known secret shapes (token prefixes, `Bearer` values, URL
   credentials, `key=value` secrets, PEM private keys), and applies the AI hand-off issue policy. The raw
   remote text does not reach the renderer. An unreadable policy or a span that needs user confirmation
-  refuses the hand-off. Names and paths are not detected, and the approved-copy check has no record yet
+  refuses the hand-off. Names and paths are not detected. With a project folder, the service reads the
+  latest confirmed publication or creation approval from the canonical workspace journals; an edited,
+  uncertain, or unreadable approved state refuses hand-off. Without a project approval history, or
+  without a folder, manual reading uses the current applicable AI policy and grants no automatic
+  execution authority. See [the approved-copy contract and evidence](../validation/issue-handoff-approved-copy.md)
   (`desktop/src/renderer/work/githubProjects.ts`, `desktop/src/renderer/work/GitHubProjectPanel.tsx`,
   `src/adapter/inbound/gateway/issue.rs`, `src/application/service/issue_handoff.rs`).
   The "변경" side panel lists the working-tree changes of the open thread's folder and can stage, unstage, discard,
