@@ -109,6 +109,7 @@ pub(crate) fn seed_issue_work(
         authorization: None,
         permit_authorization_epoch: 0,
         order: IssueWorkOrder {
+            criteria_adoption: None,
             work_order_id: issue_work_order_id(issue),
             issue: issue.clone(),
             field_hash: snapshot.basis.field_hash.clone(),

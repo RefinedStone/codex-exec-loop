@@ -11,6 +11,7 @@ pub mod closure;
 pub mod collection;
 pub mod comment_command;
 pub mod coordinator;
+pub mod criteria;
 pub mod execution;
 pub mod execution_answer;
 pub mod feedback;

@@ -3,6 +3,7 @@ use crate::domain::issue_work::IssueFieldHash;
 
 fn target() -> IssueConfirmationTarget {
     IssueConfirmationTarget::Decision {
+        criteria_digest: None,
         workspace: "/workspace/repo".into(),
         decision_id: IssueDecisionId::new("decision-1").unwrap(),
         option: "accept".into(),

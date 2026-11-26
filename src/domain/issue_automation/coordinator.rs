@@ -83,6 +83,8 @@ pub struct IssueWorkOrder {
     pub title: String,
     pub handoff: IssueSharedCopy,
     pub acceptance: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub criteria_adoption: Option<super::criteria::IssueWorkCriteriaAdoption>,
     pub scope: String,
     pub branch_hint: Option<String>,
     pub link_reference: Option<String>,
@@ -156,6 +158,15 @@ impl IssueWorkCheckpoint {
 
     pub fn validate(&self) -> Result<(), &'static str> {
         self.start_authority.validate(self.decision_id.as_ref())?;
+        if let Some(adoption) = &self.order.criteria_adoption {
+            adoption.validate()?;
+            if self.start_authority != IssueWorkStartAuthority::Human
+                || self.decision_id.as_ref() != Some(&adoption.decision_id)
+                || self.approved_basis != adoption.basis
+            {
+                return Err("criteria adoption does not match the original start approval");
+            }
+        }
         super::validate_reference(&self.order.issue).map_err(|_| "invalid work issue")?;
         self.approved_basis
             .validate()

@@ -186,6 +186,7 @@ impl PlanningWorkOrderRepositoryPort for FixtureRepository {
         work_order_id: &str,
         origin: &str,
         link_reference: Option<&PlanningWorkLinkReference>,
+        acceptance_receipt: Option<&str>,
     ) -> Result<Option<PlanningWorkOrderRecord>> {
         assert_eq!(workspace_dir, self.workspace);
         let mut script = self.script.lock().unwrap();
@@ -198,6 +199,9 @@ impl PlanningWorkOrderRepositoryPort for FixtureRepository {
         };
         existing.validate()?;
         existing.ensure_origin(origin)?;
+        if existing.acceptance_receipt.as_deref() != acceptance_receipt {
+            bail!("work order was admitted with a different acceptance approval");
+        }
         if existing.link_reference.as_ref() != link_reference {
             match (&existing.link_reference, link_reference) {
                 (None, Some(reference)) if !reference.close_on_merge => {
@@ -322,6 +326,7 @@ impl PlanningWorkOrderRepositoryPort for FixtureRepository {
                 planning_revision, ..
             } => {
                 let work_order = PlanningWorkOrderRecord {
+                    acceptance_receipt: registration.acceptance_receipt.map(str::to_owned),
                     link_reference: registration.link_reference.cloned(),
                     work_order_id: registration.work_order_id.to_string(),
                     origin: registration.origin.to_string(),

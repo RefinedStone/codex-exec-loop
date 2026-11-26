@@ -161,6 +161,7 @@ fn seed_issue_task(repo: &TempGitRepo, store: &SqlitePlanningAuthorityAdapter) {
                 .register_work_order(
                     &workspace,
                     PlanningWorkOrderRegistration {
+                        acceptance_receipt: None,
                         work_order_id: &work,
                         origin: "issue_automation",
                         link_reference: Some(&reference),

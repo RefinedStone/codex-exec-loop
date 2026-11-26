@@ -13,6 +13,7 @@ fn basis() -> PlanningWorkPermitBasis {
 
 fn record(stage: PlanningWorkPermitStage) -> PlanningWorkOrderRecord {
     PlanningWorkOrderRecord {
+        acceptance_receipt: None,
         link_reference: None,
         work_order_id: "order-1".into(),
         origin: "synthetic".into(),

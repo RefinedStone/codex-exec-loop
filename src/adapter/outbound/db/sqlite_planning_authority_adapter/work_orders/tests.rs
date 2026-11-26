@@ -172,6 +172,7 @@ fn register_document(
     SqlitePlanningAuthorityAdapter::new().register_work_order(
         workspace,
         PlanningWorkOrderRegistration {
+            acceptance_receipt: None,
             link_reference: None,
             work_order_id: order_id,
             origin,
@@ -506,3 +507,5 @@ mod admission;
 
 mod remediation;
 mod validation;
+
+mod criteria_adoption;

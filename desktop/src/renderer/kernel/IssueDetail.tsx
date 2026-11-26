@@ -20,7 +20,7 @@ interface IssueDetailProps {
   stale: boolean;
   error: string | null;
   busy: boolean;
-  onAnswer(decisionId: string, option: string, note: string): Promise<void>;
+  onAnswer(decisionId: string, option: string, note: string, criteria?: import("./protocol").TaskAcceptanceCriterion[]): Promise<void>;
   onIntervene(action: IssueInterventionName, message?: string, confirm?: boolean): Promise<IssueCommandOutcome>;
   onOpenConversation(): Promise<void>;
   onRefresh(): Promise<void>;

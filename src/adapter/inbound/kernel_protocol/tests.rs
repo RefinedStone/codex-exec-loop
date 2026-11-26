@@ -110,6 +110,7 @@ fn sample_commands() -> Vec<KernelCommand> {
             expected_revision: 0,
         },
         KernelCommand::AnswerIssueDecision {
+            criteria: None,
             decision_id: "decision-1".to_owned(),
             option: "continue".to_owned(),
             note: None,

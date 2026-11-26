@@ -36,6 +36,7 @@ export function issueTextBytes(value: string): number {
 }
 
 export interface IssueDecisionDraft {
+  readonly criteria?: import("./protocol").TaskAcceptanceCriterion[];
   readonly option: string;
   readonly note: string;
 }

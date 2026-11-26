@@ -89,6 +89,7 @@ impl IssueDecisionRequest {
         let mut record = self.to_record();
         record.state = IssueDecisionState::Answered;
         record.answer = Some(IssueDecisionAnswer {
+            criteria: None,
             option: recommended.clone(),
             note: None,
             by: IssueDecisionAnswerBy::Default,

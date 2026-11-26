@@ -34,11 +34,12 @@ pub(crate) fn prepare(
             super::task_evidence::build(workspace).prepare_waiver(request)
         }
         StoredCommand::AnswerIssueDecision {
+            criteria,
             decision_id,
             option,
             ..
         } => super::issue_collection::build_decisions(workspace)
-            .prepare_confirmation(decision_id, option),
+            .prepare_confirmation_with_criteria(decision_id, option, criteria.as_deref()),
         StoredCommand::SetIssueAutomationMode { mode } => {
             super::issue_collection::build(workspace).prepare_mode_confirmation(*mode)
         }

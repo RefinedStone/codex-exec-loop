@@ -40,6 +40,7 @@ fn legacy_publication_reference_real_submit_does_not_upgrade_unreviewed_delivery
         body: "Synthetic shared handoff for legacy resubmission.".into(),
     };
     let order = IssueWorkOrder {
+        criteria_adoption: None,
         work_order_id: ORDER.into(),
         issue: IssueReference {
             provider: IssueProvider::GitHub,
@@ -77,6 +78,7 @@ fn legacy_publication_reference_real_submit_does_not_upgrade_unreviewed_delivery
     assert_eq!(
         recovered,
         PlanningWorkOrderRecord {
+            acceptance_receipt: None,
             link_reference: Some(reference()),
             ..original
         }

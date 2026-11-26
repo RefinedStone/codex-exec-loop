@@ -460,6 +460,7 @@ fn answer(
 ) -> KernelCommandOutcome {
     let request = CommandRequest {
         command: WireCommand::AnswerIssueDecision {
+            criteria: None,
             decision_id: decision_id.into(),
             option: option.into(),
             note: note.map(str::to_owned),

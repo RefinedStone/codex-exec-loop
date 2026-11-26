@@ -56,6 +56,7 @@ fn jira_key_extraction_rejects_noncanonical_or_injected_links_without_reinterpre
 
 fn record() -> PlanningWorkOrderRecord {
     PlanningWorkOrderRecord {
+        acceptance_receipt: None,
         link_reference: None,
         work_order_id: "source:item:hash:attempt-1".to_string(),
         origin: "example_module".to_string(),

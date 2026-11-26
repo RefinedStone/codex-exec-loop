@@ -178,6 +178,7 @@ impl StoredCommandService {
                 })
             }
             StoredCommand::AnswerIssueDecision {
+                criteria,
                 decision_id,
                 option,
                 note,
@@ -189,7 +190,13 @@ impl StoredCommandService {
                     .decisions
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("issue decisions are unavailable"))?
-                    .answer(&decision_id, &option, note.as_deref(), context)?;
+                    .answer_with_criteria(
+                        &decision_id,
+                        &option,
+                        note.as_deref(),
+                        criteria.as_deref(),
+                        context,
+                    )?;
                 Ok(StoredCommandResult::IssueDecisionResolved {
                     fact: Box::new(answer.commit.record.request.fact()),
                     outcome: answer.outcome,

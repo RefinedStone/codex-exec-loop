@@ -986,16 +986,22 @@ fn target_matches_command(
         }
         (
             IssueConfirmationTarget::Decision {
+                criteria_digest,
                 decision_id,
                 option,
                 ..
             },
             StoredCommand::AnswerIssueDecision {
+                criteria,
                 decision_id: id,
                 option: choice,
                 ..
             },
-        ) => decision_id.as_str() == id && option == choice,
+        ) => decision_id.as_str() == id && option == choice && match criteria {
+            None => criteria_digest.is_none(),
+            Some(criteria) => crate::domain::issue_automation::criteria::normalize_issue_work_criteria(criteria)
+                .is_ok_and(|normalized| criteria_digest.as_deref() == Some(crate::domain::issue_automation::criteria::issue_work_criteria_digest(&normalized).as_str())),
+        },
         (
             IssueConfirmationTarget::Mode { to, .. },
             StoredCommand::SetIssueAutomationMode { mode },

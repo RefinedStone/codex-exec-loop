@@ -131,6 +131,7 @@ fn snapshot(issue: IssueReference) -> IssueFeedbackSnapshot {
         authorization: None,
         permit_authorization_epoch: 0,
         order: IssueWorkOrder {
+            criteria_adoption: None,
             work_order_id: WORK_ORDER.into(),
             issue: issue.clone(),
             field_hash: hash.clone(),

@@ -237,6 +237,10 @@ try {
     });
   });
   page = await app.firstWindow();
+  const pageErrors = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  // firstWindow() can resolve before Electron has installed the isolated preload bridge.
+  await page.waitForFunction(() => typeof window.akra?.settings?.set === "function", undefined, { timeout: 30_000 });
   // 숨긴 fixture는 실제 운영체제 알림을 만들지 않는다. 알림 이동은 아래에서 명시적으로 시험한다.
   await page.evaluate(async () => {
     window.issueNotifications = [];
@@ -249,8 +253,6 @@ try {
     await window.akra.settings.set({ notifications: { mode: "always", sound: false } });
   });
 
-  const pageErrors = [];
-  page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.getByTestId("connection-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 30_000 });
   await page.getByTestId("thread-entry").first().click();
   await page.getByTestId("issues-toggle").click();
@@ -859,6 +861,45 @@ try {
   assert.equal(await page.evaluate(() => window.issueNotifications.length), beforeArbiterNotices + 2);
   await capture("arbiter-history");
   console.log("PASS current arbiter Wait preserves drafts and Human confirmation; late Wait cannot reopen; Applied history and notifications retain original actor");
+
+  const criteriaRequest = { ...requestDecision("decision-criteria-adoption"),
+    options: [{ id: "start", label: "작업 시작", effect: "확정한 완료 기준으로 작업을 생성합니다." }],
+    recommended: "start", criteria_scenarios: ["검색 결과를 그대로 보존한다."],
+    basis: { ...requestDecision().basis, field_hash: { version: 1, sha256: "a".repeat(64) } } };
+  openDecisions = [criteriaRequest]; revision++;
+  await panel.getByTestId("issue-execution-refresh").click();
+  const criteriaCard = () => panel.locator('[data-testid="issue-decision-card"][data-decision-id="decision-criteria-adoption"][data-state="open"]');
+  await criteriaCard().waitFor();
+  await criteriaCard().locator('input[value="start"]').check();
+  assert.equal(await criteriaCard().getByTestId("issue-decision-answer").isDisabled(), true);
+  assert.equal(await criteriaCard().getByTestId("task-criterion").count(), 0, "the source text does not infer a validation channel");
+  await criteriaCard().getByLabel("제안 기준 1 검증 채널").selectOption("command");
+  await criteriaCard().getByLabel("호스트 검증").selectOption("git_diff_check_v1");
+  const beforeCriteria = commandRequests("answer_issue_decision").length;
+  await app.evaluate(() => { globalThis.issueInterventionFixture.nextAnswer = 1; });
+  await criteriaCard().getByTestId("issue-decision-answer").click();
+  await until(async () => await criteriaCard().getByTestId("issue-decision-answer").isEnabled());
+  assert.equal(commandRequests("answer_issue_decision").length, beforeCriteria, "cancelled native review writes nothing");
+  assert.equal(await criteriaCard().getByTestId("task-criterion").count(), 1, "cancellation preserves the user's exact criteria draft");
+  assert.equal(await criteriaCard().getByLabel("호스트 검증").inputValue(), "git_diff_check_v1");
+  openDecisions = [{ ...criteriaRequest, basis: { ...criteriaRequest.basis, field_hash: { version: 1, sha256: "b".repeat(64) } } }];
+  revision++;
+  await panel.getByTestId("issue-execution-refresh").click();
+  await until(async () => await criteriaCard().locator('input[value="start"]').isChecked() === false);
+  await criteriaCard().locator('input[value="start"]').check();
+  assert.equal(await criteriaCard().getByTestId("task-criterion").count(), 0, "a changed issue specification discards criteria tied to the previous approval basis");
+  await criteriaCard().getByLabel("제안 기준 1 검증 채널").selectOption("command");
+  await criteriaCard().getByLabel("호스트 검증").selectOption("git_diff_check_v1");
+  await capture("criteria-adoption");
+  await app.evaluate(() => { globalThis.issueInterventionFixture.nextAnswer = 0; });
+  await criteriaCard().getByTestId("issue-decision-answer").click();
+  await until(async () => commandRequests("answer_issue_decision").length === beforeCriteria + 1);
+  assert.equal(commandRequests("answer_issue_decision").at(-1).method, "akra/kernel/command_confirmed");
+  assert.deepEqual(commandRequests("answer_issue_decision").at(-1).request.command.criteria, [
+    { id: "issue-criterion-1", scenario: "검색 결과를 그대로 보존한다.", channel: "command", essential: true, verification_recipe: "git_diff_check_v1" },
+  ]);
+  console.log("PASS explicit issue criteria → native review → confirmed submission, cancellation and stale-spec draft fencing");
+
   assert.equal(gateway.receivedMethods.includes("turn/start"), false);
   assert.equal(gateway.receivedMethods.includes("turn/steer"), false);
   assert.deepEqual(pageErrors, []);

@@ -58,6 +58,7 @@ fn submit(
 
 fn answer_command(id: &str) -> WireCommand {
     WireCommand::AnswerIssueDecision {
+        criteria: None,
         decision_id: id.into(),
         option: "proceed".into(),
         note: None,

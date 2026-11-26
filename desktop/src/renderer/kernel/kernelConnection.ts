@@ -564,12 +564,12 @@ export class KernelConnection {
     await this.runIssueCommand({ type: "set_issue_autonomy", command_id: crypto.randomUUID(), level }, "autonomy");
   }
 
-  async answerIssueDecision(decisionId: string, option: string, note = ""): Promise<void> {
+  async answerIssueDecision(decisionId: string, option: string, note = "", criteria?: import("./protocol").TaskAcceptanceCriterion[]): Promise<void> {
     const issues = this.store.getKernel().issues;
     const detail = !issues.detailStale && issues.detail?.status === "ready" ? issues.detail : null;
     const decision = detail?.open_decisions?.find((request) => request.id === decisionId && request.state === "open");
     if (!detail || !sameIssue(issues.selectedIssue, detail.item.issue) || !decision || !decision.options.some((choice) => choice.id === option)) return Promise.resolve();
-    await this.runIssueCommand({ type: "answer_issue_decision", decision_id: decisionId, option, ...(note ? { note } : {}) }, "decision");
+    await this.runIssueCommand({ type: "answer_issue_decision", decision_id: decisionId, option, ...(note ? { note } : {}), ...(criteria ? { criteria } : {}) }, "decision");
   }
 
   interveneIssue(action: IssueInterventionName, message?: string, confirm = false): Promise<IssueCommandOutcome> {
@@ -1166,7 +1166,7 @@ export class KernelConnection {
       let response: CommandResponse;
       if (command.type === "answer_issue_decision") {
         if (!this.confirmations.confirmIssueDecision || !this.wanted) throw new Error("이 창에서는 시스템 확인을 열 수 없습니다.");
-        confirmation = await this.confirmations.confirmIssueDecision({ workspace: this.wanted, decisionId: command.decision_id, option: command.option, note: command.note, key: crypto.randomUUID() });
+        confirmation = await this.confirmations.confirmIssueDecision({ workspace: this.wanted, decisionId: command.decision_id, option: command.option, note: command.note, criteria: command.criteria, key: crypto.randomUUID() });
       } else if (command.type === "set_issue_binding_paused" && !command.paused) {
         if (!this.confirmations.confirmIssueBindingResume || !this.wanted) throw new Error("이 창에서는 시스템 확인을 열 수 없습니다.");
         confirmation = await this.confirmations.confirmIssueBindingResume({ workspace: this.wanted, commandId: command.command_id,

@@ -166,6 +166,7 @@ fn register_replay(
     let result = SqlitePlanningAuthorityAdapter::new().register_work_order(
         workspace,
         PlanningWorkOrderRegistration {
+            acceptance_receipt: None,
             work_order_id: ORDER,
             origin,
             link_reference: reference,
@@ -230,6 +231,7 @@ fn assert_legacy_replay(service: bool) {
     let original = stored(&workspace, ORDER);
     let before = rows_except_links(&workspace);
     let expected = PlanningWorkOrderRecord {
+        acceptance_receipt: None,
         link_reference: Some(reference()),
         ..original
     };
@@ -286,7 +288,13 @@ fn legacy_publication_reference_rejects_identity_and_authority_changes() {
     let adapter = SqlitePlanningAuthorityAdapter::new();
     assert!(
         adapter
-            .replay_work_order(&workspace, ORDER, "another-origin", Some(&reference()))
+            .replay_work_order(
+                &workspace,
+                ORDER,
+                "another-origin",
+                Some(&reference()),
+                None
+            )
             .is_err()
     );
     assert!(register_replay(&workspace, "another-origin", Some(&reference())).is_err());

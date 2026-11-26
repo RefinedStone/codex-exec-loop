@@ -51,6 +51,7 @@ impl IssueDecisionRequest {
             .ok_or(IssueDecisionError::InvalidField { field: "now" })?;
         record.state = IssueDecisionState::Answered;
         record.answer = Some(IssueDecisionAnswer {
+            criteria: None,
             option: proposal.decision.clone(),
             note: proposal.note.clone(),
             by: IssueDecisionAnswerBy::Arbiter,

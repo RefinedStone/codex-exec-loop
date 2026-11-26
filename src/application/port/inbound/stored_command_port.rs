@@ -125,6 +125,7 @@ pub enum StoredCommand {
         request: IssueInterventionRequest,
     },
     AnswerIssueDecision {
+        criteria: Option<Vec<crate::domain::issue_automation::criteria::IssueWorkCriterion>>,
         decision_id: String,
         option: String,
         note: Option<String>,

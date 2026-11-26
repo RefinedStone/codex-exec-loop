@@ -61,6 +61,7 @@ fn open_delivery(
                 authorization: None,
                 permit_authorization_epoch: 0,
                 order: IssueWorkOrder {
+                    criteria_adoption: None,
                     work_order_id: issue_work_order_id(&item.issue),
                     issue: item.issue.clone(),
                     field_hash: snapshot.basis.field_hash.clone(),

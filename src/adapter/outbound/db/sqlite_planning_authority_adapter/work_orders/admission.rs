@@ -202,6 +202,7 @@ pub(super) fn admit(
         validate_new_task_candidate(
             &existing,
             PlanningWorkOrderRegistration {
+                acceptance_receipt: None,
                 work_order_id,
                 link_reference: current.work_order.link_reference.as_ref(),
                 origin: &current.work_order.origin,

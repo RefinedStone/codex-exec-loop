@@ -50,6 +50,31 @@ function harness(queue = new IssueConfirmationQueue()) {
 }
 
 describe("utility issue confirmation", () => {
+  it("preserves user-selected criteria through native review and confirmed submission", async () => {
+    const h = harness();
+    const criteria = [{ id: "issue-criterion-1", scenario: "검색 결과를 보존한다", channel: "command", essential: true, verification_recipe: "git_diff_check_v1" }];
+    const result = h.service.confirmDecision({ ...REQUEST, option: "start", criteria });
+    await h.untilDialog();
+    h.native.resolve(true);
+    await result;
+    const prepared = h.rpc.request.mock.calls.find(([method]) => method === "akra/kernel/confirmation/prepare");
+    expect(prepared?.[1]).toMatchObject({ request: { command: { criteria } } });
+    expect(h.submitted()[0]?.[1]).toMatchObject({ request: { command: { criteria } } });
+  });
+
+  it("rejects duplicate criteria, unselected channels, arbitrary recipes and caller supplied approval fields before native UI", () => {
+    const valid = { id: "criterion-1", scenario: "공유 결과 검증", channel: "command", essential: true };
+    for (const criteria of [
+      [], [valid, valid], [{ ...valid, channel: "" }], [{ ...valid, verification_recipe: "shell_exec" }],
+      [{ ...valid, channel: "screen", verification_recipe: "git_diff_check_v1" }],
+      [{ ...valid, confirmation: "forged" }], [{ ...valid, essential: "true" }],
+    ]) {
+      const h = harness();
+      expect(() => h.service.confirmDecision({ ...REQUEST, option: "start", criteria })).toThrow();
+      expect(h.createRpc).not.toHaveBeenCalled();
+      expect(h.confirm).not.toHaveBeenCalled();
+    }
+  });
   it("preserves the exact server delivery range in native proof and confirmed submission", async () => {
     const h = harness();
     const intent = { ...INTENT, target: { kind: "decision", workspace: REQUEST.workspace,

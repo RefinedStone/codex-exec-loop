@@ -41,6 +41,8 @@ pub enum IssueConfirmationTarget {
         option: String,
         basis: IssueDecisionBasis,
         decision_revision: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        criteria_digest: Option<String>,
     },
     Autonomy {
         workspace: String,
@@ -120,11 +122,18 @@ impl IssueConfirmationTarget {
                 option,
                 basis,
                 decision_revision,
+                criteria_digest,
                 ..
             } => {
                 if !identifier(option, MAX_ISSUE_DECISION_OPTION_BYTES)
                     || !valid_revision(*decision_revision)
                     || basis.validate().is_err()
+                    || criteria_digest.as_ref().is_some_and(|digest| {
+                        digest.len() != 64
+                            || !digest
+                                .bytes()
+                                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    })
                 {
                     return Err(IssueConfirmationError::Invalid);
                 }

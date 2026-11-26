@@ -141,9 +141,12 @@ impl PlanningWorkLinkReference {
     }
 }
 
-/// Durable planning lineage. This identity does not depend on mutable task provenance or receipts.
+/// Durable planning lineage, independent of mutable task provenance and transient command receipts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanningWorkOrderRecord {
+    /// Immutable digest of the exact confirmed acceptance receipt. Independent of mutable task criteria.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acceptance_receipt: Option<String>,
     pub work_order_id: String,
     pub origin: String,
     /// Once present, publication metadata is immutable across retries, resets, and supplements.
@@ -176,6 +179,14 @@ impl PlanningWorkOrderRecord {
 
     pub fn validate(&self) -> Result<()> {
         validate_work_order_identity(&self.work_order_id, &self.origin)?;
+        if self.acceptance_receipt.as_ref().is_some_and(|digest| {
+            digest.len() != 64
+                || !digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        }) {
+            bail!("invalid work-order acceptance receipt");
+        }
         self.initial_task_id()?;
         if let Some(reference) = &self.link_reference {
             reference.validate()?;
@@ -206,6 +217,7 @@ impl PlanningWorkOrderRecord {
 /// revision, and mutation audit in one transaction. There is deliberately no permits input.
 #[derive(Debug, Clone, Copy)]
 pub struct PlanningWorkOrderRegistration<'a> {
+    pub acceptance_receipt: Option<&'a str>,
     pub work_order_id: &'a str,
     pub origin: &'a str,
     pub link_reference: Option<&'a PlanningWorkLinkReference>,
@@ -426,12 +438,14 @@ pub trait PlanningWorkOrderRepositoryPort: PlanningTaskRepositoryPort {
     /// A missing legacy reference may become Some only with close_on_merge=false; any existing
     /// reference must match exactly. Replaying never grants permits or bumps planning revision.
     /// Stale permits do not prevent replay: the caller may be retrying to refresh them.
+    /// The immutable acceptance receipt must match before any legacy reference recovery.
     fn replay_work_order(
         &self,
         workspace_dir: &str,
         work_order_id: &str,
         origin: &str,
         link_reference: Option<&PlanningWorkLinkReference>,
+        acceptance_receipt: Option<&str>,
     ) -> Result<Option<PlanningWorkOrderRecord>>;
 
     fn load_work_order(

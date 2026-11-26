@@ -1619,6 +1619,15 @@
       "input": {
         "additionalProperties": false,
         "properties": {
+          "criteria": {
+            "items": {
+              "$ref": "#/$defs/IssueWorkCriterion"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "decision_id": {
             "maxLength": 128,
             "minLength": 1,
@@ -8385,6 +8394,12 @@
             "basis": {
               "$ref": "#/$defs/IssueDecisionBasis"
             },
+            "criteria_digest": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "decision_id": {
               "$ref": "#/$defs/IssueDecisionId"
             },
@@ -8963,6 +8978,15 @@
         },
         "basis": {
           "$ref": "#/$defs/IssueDecisionBasisRecord"
+        },
+        "criteria_scenarios": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "delivery_review": {
           "anyOf": [
@@ -10615,6 +10639,49 @@
       ],
       "type": "string"
     },
+    "IssueWorkCriterion": {
+      "additionalProperties": false,
+      "properties": {
+        "channel": {
+          "$ref": "#/$defs/IssueWorkCriterionChannel"
+        },
+        "essential": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "scenario": {
+          "type": "string"
+        },
+        "verification_recipe": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueWorkVerificationRecipe"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "scenario",
+        "channel",
+        "essential"
+      ],
+      "type": "object"
+    },
+    "IssueWorkCriterionChannel": {
+      "enum": [
+        "command",
+        "data",
+        "http",
+        "screen"
+      ],
+      "type": "string"
+    },
     "IssueWorkSummary": {
       "additionalProperties": false,
       "properties": {
@@ -10647,6 +10714,12 @@
         "delivery_granted"
       ],
       "type": "object"
+    },
+    "IssueWorkVerificationRecipe": {
+      "enum": [
+        "git_diff_check_v1"
+      ],
+      "type": "string"
     },
     "IssueWorkflowState": {
       "enum": [
@@ -11289,6 +11362,15 @@
         {
           "additionalProperties": false,
           "properties": {
+            "criteria": {
+              "items": {
+                "$ref": "#/$defs/IssueWorkCriterion"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
             "decision_id": {
               "maxLength": 128,
               "minLength": 1,

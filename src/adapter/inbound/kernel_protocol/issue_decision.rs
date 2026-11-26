@@ -33,6 +33,9 @@ pub struct IssueDecisionRequestState {
     pub kind: IssueDecisionKind,
     /// 정책 경계에서 이미 가린 공유 문장이다.
     pub question: String,
+    /// 현재 승인 판과 일치하는 공유 명세의 제안 문장이다. 채널과 실행법은 사용자가 고른다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub criteria_scenarios: Option<Vec<String>>,
     pub options: Vec<IssueDecisionOptionState>,
     pub recommended: Option<String>,
     pub basis: IssueDecisionBasisRecord,
@@ -91,6 +94,7 @@ impl From<&StoredIssueDecision> for IssueDecisionRequestState {
             gate: definition.gate.into(),
             kind: definition.kind,
             question: definition.question.as_str().to_owned(),
+            criteria_scenarios: None,
             options: definition
                 .options
                 .iter()
@@ -147,6 +151,19 @@ pub(super) fn validate_answer_input(
     {
         return Err(KernelProtocolError::invalid_params(
             "invalid issue decision answer",
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_criteria_input(
+    criteria: Option<&[crate::domain::issue_automation::criteria::IssueWorkCriterion]>,
+) -> Result<(), KernelProtocolError> {
+    if criteria.is_some_and(|criteria| {
+        crate::domain::issue_automation::criteria::normalize_issue_work_criteria(criteria).is_err()
+    }) {
+        return Err(KernelProtocolError::invalid_params(
+            "invalid confirmed issue criteria",
         ));
     }
     Ok(())
