@@ -828,3 +828,48 @@ describe("server request parsing", () => {
     expect(toPendingApproval("item/tool/call", { threadId: "t" }, 1)).toBeNull();
   });
 });
+
+describe("account usage limits (#2821)", () => {
+  const snapshot = {
+    limitId: "codex", limitName: null, normalModelSlug: null, credits: null, individualLimit: null,
+    spendControlReached: null, planType: null, rateLimitReachedType: null,
+    primary: { usedPercent: 42.4, windowDurationMins: 300, resetsAt: 1_900_000_000 },
+    secondary: null,
+  };
+
+  async function connectWithLimits(reply: { result?: unknown; error?: { code: number; message: string } }) {
+    const { useAccountLimits } = await import("../src/renderer/session/accountLimits");
+    useAccountLimits.setState({ status: "unknown", snapshot: null });
+    const fake = await startFakeGateway(uniqueTestEndpoint(), BASIC_RECORDING, {
+      appServer: (method) => (method === "account/rateLimits/read" ? reply : undefined),
+    });
+    cleanups.push(() => fake.close());
+    const { connection, bridge } = connectBridge(fake.endpoint);
+    const store = sessionStore();
+    const session = new DesktopSession(bridge, store, "test", (callback) => setTimeout(callback, 0));
+    session.start();
+    cleanups.push(() => session.stop());
+    connection.start();
+    await waitFor(() => useAccountLimits.getState().status !== "unknown");
+    return { fake, useAccountLimits };
+  }
+
+  it("shows the server's windows and follows updates", async () => {
+    const { fake, useAccountLimits } = await connectWithLimits({ result: { rateLimits: snapshot } });
+    expect(useAccountLimits.getState()).toMatchObject({ status: "ready", snapshot: { primary: { usedPercent: 42.4 }, secondary: null } });
+    expect(fake.receivedMethods).toContain("account/rateLimits/read");
+    const { applyAccountLimitsNotification } = await import("../src/renderer/session/accountLimits");
+    applyAccountLimitsNotification("account/rateLimits/updated", { rateLimits: { ...snapshot, primary: { ...snapshot.primary, usedPercent: 91 } } });
+    expect(useAccountLimits.getState().snapshot?.primary?.usedPercent).toBe(91);
+  });
+
+  it("hides the line on a server without the method and never invents zero", async () => {
+    const { useAccountLimits } = await connectWithLimits({ error: { code: -32601, message: "unknown" } });
+    expect(useAccountLimits.getState()).toEqual({ status: "unsupported", snapshot: null });
+    const { limitWindows, resetLabel, windowLabel } = await import("../src/renderer/session/accountLimits");
+    expect(limitWindows({ ...snapshot, primary: null })).toEqual([]);
+    expect(resetLabel({ usedPercent: 0, windowDurationMins: 10_080, resetsAt: null })).toBeNull();
+    expect(windowLabel({ usedPercent: 0, windowDurationMins: 10_080, resetsAt: null })).toBe("주간");
+    expect(windowLabel({ usedPercent: 0, windowDurationMins: 300, resetsAt: null })).toBe("5시간");
+  });
+});

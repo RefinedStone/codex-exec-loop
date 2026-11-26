@@ -5,6 +5,7 @@ import type { ConnectionState } from "../../shared/bridge";
 import { Icon } from "../design/icons";
 import { remoteHostKey, remoteHostStore, useDesktopStore, type WorkspaceFolder, type WorkspaceThread } from "../session/desktopStore";
 import { closeChat, closeDot, isDotDockVisible, MOD_KEY, showChat, showDot, showHome, showView, toggleTheme, useUiStore } from "../session/uiStore";
+import { limitWindows, resetLabel, useAccountLimits, windowLabel } from "../session/accountLimits";
 import { DotAvatar } from "../views/DotChat";
 import { DiagnosticsDialog } from "../views/DiagnosticsDialog";
 import { useZoomFactor, zoomStyle } from "../views/useZoom";
@@ -67,6 +68,28 @@ function ThreadRow({ thread, onOpenThread }: { thread: WorkspaceThread; onOpenTh
         </span>
       </button>
     </li>
+  );
+}
+
+/** 계정 사용 한도 한 줄이다 (#2821). 서버가 준 창만 보인다. 받지 못했으면 이유만 짧게 쓴다. */
+function AccountLimitsLine() {
+  const { status, snapshot } = useAccountLimits();
+  const windows = limitWindows(snapshot);
+  if (status === "unknown" || status === "unsupported") return null;
+  if (status === "unavailable" || windows.length === 0) {
+    return <p className="account-limits muted" data-testid="account-limits">사용 한도를 확인하지 못했습니다.</p>;
+  }
+  return (
+    <p className="account-limits" data-testid="account-limits">
+      {windows.map((window) => {
+        const reset = resetLabel(window);
+        return (
+          <span key={windowLabel(window)} className={window.usedPercent >= 90 ? "limit-window limit-high" : "limit-window"}>
+            {windowLabel(window)} {Math.round(window.usedPercent)}%{reset ? ` · ${reset} 초기화` : ""}
+          </span>
+        );
+      })}
+    </p>
   );
 }
 
@@ -349,6 +372,7 @@ export function Sidebar({ onOpenThread, onOpenRemoteThread, onReloadChats }: { o
           <FolderSection key={folder.cwd} folder={folder} connected={phase === "connected"} onOpenThread={onOpenThread} />
         ))}
       </div>
+      <AccountLimitsLine />
       <footer className="sidebar-footer">
         <button type="button" className="connection diagnostic-connection" title="Gateway 연결 상태 · 로컬 연결 진단 저장" aria-label="연결 진단 저장" data-testid="diagnostics-open" onClick={() => useUiStore.setState({ overlay: "diagnostics" })}>
           <span className={`connection-dot connection-${phase}`} />
