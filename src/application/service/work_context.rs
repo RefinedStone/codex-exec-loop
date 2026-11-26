@@ -164,14 +164,15 @@ impl WorkContextService {
     }
 
     /// 확인한 지 오래된 문서의 지금 버전을 제공자에게 묻고 장부에 적는다. 처음 확인한 버전은 읽은 버전이 된다.
-    fn check_versions(&self, scope: &LedgerScope) -> Result<()> {
+    /// `links` 는 그 범위의 연결 중 확인할 것이다.
+    fn check_versions(&self, scope: &LedgerScope, links: Vec<WorkContextLink>) -> Result<()> {
         let mut state = self
             .version_check
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let now = (self.clock)();
         let mut due = Vec::new();
-        for link in self.links(scope)? {
+        for link in links {
             let Some(provider) = self.version_provider(&link.resource.kind) else {
                 continue;
             };
@@ -329,7 +330,7 @@ impl WorkContextPort for WorkContextService {
     fn refresh_thread_resources(&self, thread_id: &str) -> Result<Vec<ContextResource>> {
         let scope = LedgerScope::thread(thread_id)?;
         self.collect(&scope.id)?;
-        self.check_versions(&scope)?;
+        self.check_versions(&scope, self.links(&scope)?)?;
         self.resources(&scope)
     }
 
@@ -375,7 +376,13 @@ impl WorkContextPort for WorkContextService {
             &request.source,
             std::slice::from_ref(&resource),
         )?;
-        self.check_versions(&scope)?;
+        // 이은 문서만 확인한다. 범위에 오래된 문서가 많아도 새 문서가 확인 상한 밖으로 밀리지 않는다.
+        let attached = self
+            .links(&scope)?
+            .into_iter()
+            .filter(|link| link.resource.kind == resource.kind && link.resource.key == resource.key)
+            .collect();
+        self.check_versions(&scope, attached)?;
         self.resources(&scope)
     }
 
@@ -1067,6 +1074,30 @@ mod tests {
         assert_eq!(listed[0].confirmed_version.as_deref(), Some("v1"));
         assert_eq!(listed[0].current_version.as_deref(), Some("v2"));
         assert!(listed[0].changed);
+    }
+
+    #[test]
+    fn attach_checks_the_attached_document_even_when_the_scope_has_many_stale_documents() {
+        let (service, versions, now) = versioned_service("");
+        let service = service.with_repository_identity(Arc::new(FakeRepositories));
+        let repository = || scope("/one", ContextScope::Repository);
+        for number in 0..MAX_VERSION_CHECKS_PER_REFRESH {
+            let url = format!("https://github.com/a/b/pull/{number}");
+            versions.set(&format!("a/b#{number}"), "old");
+            service
+                .attach_scope_resource(&attach(repository(), &url))
+                .unwrap();
+        }
+        *now.lock().unwrap() += chrono::Duration::seconds(6 * 60);
+        versions.set("a/b#99", "new");
+        versions.asked.lock().unwrap().clear();
+
+        let listed = service
+            .attach_scope_resource(&attach(repository(), "https://github.com/a/b/pull/99"))
+            .unwrap();
+        assert_eq!(*versions.asked.lock().unwrap(), ["a/b#99"]);
+        let attached = listed.iter().find(|item| item.key == "a/b#99").unwrap();
+        assert_eq!(attached.confirmed_version.as_deref(), Some("new"));
     }
 
     #[test]
