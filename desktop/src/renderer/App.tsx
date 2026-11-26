@@ -830,6 +830,9 @@ export function App() {
   };
 
   const composerActions: ComposerActions = {
+    queue: session.current?.nextTurnQueue,
+    queueMessage: (text) => session.current?.queueMessage(text),
+    resumeQueuedMessages: () => session.current?.resumeQueuedMessages(),
     sendMessage: async (text) => session.current?.sendMessage(text),
     interrupt: async () => session.current?.interrupt(),
     startThread: async (text) => {

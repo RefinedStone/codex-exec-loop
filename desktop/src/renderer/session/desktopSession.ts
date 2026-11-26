@@ -18,6 +18,7 @@ import type { ThreadListResponse } from "../../shared/protocol/generated/v2/Thre
 import type { ThreadReadResponse } from "../../shared/protocol/generated/v2/ThreadReadResponse";
 import type { ThreadResumeResponse } from "../../shared/protocol/generated/v2/ThreadResumeResponse";
 import type { ThreadStartResponse } from "../../shared/protocol/generated/v2/ThreadStartResponse";
+import type { TurnStartResponse } from "../../shared/protocol/generated/v2/TurnStartResponse";
 import type { ThreadStatus } from "../../shared/protocol/generated/v2/ThreadStatus";
 import type { ThreadTurnsListResponse } from "../../shared/protocol/generated/v2/ThreadTurnsListResponse";
 import type { UserInput } from "../../shared/protocol/generated/v2/UserInput";
@@ -39,6 +40,7 @@ import { KERNEL_METHOD, type IssueAutomationModeRecord, type IssueEventReference
 import { JsonRpcClient, JsonRpcError, type JsonRpcId, NO_RESPONSE } from "../rpc/jsonRpcClient";
 import { checkCodexVersion } from "./codexVersion";
 import { ChatHistory } from "./chatHistory";
+import { NextTurnQueue } from "./nextTurnQueue";
 import { type DotLiveState, type DotSummary, type GatewayInfo, type SessionStore, sortFolders, type WorkspaceFolder, type WorkspaceThread } from "./desktopStore";
 
 const THREAD_LIST_LIMIT = 100;
@@ -196,6 +198,9 @@ interface OpenedThread {
 }
 
 export class DesktopSession {
+  readonly nextTurnQueue: NextTurnQueue;
+  private readonly pendingTurnStarts = new Set<string>();
+  private readonly acknowledgedTurnStarts = new Map<string, string>();
   private readonly versionProviderListeners = new Set<() => void>();
 
   onVersionProviderReady(listener: () => void): () => void {
@@ -253,6 +258,15 @@ export class DesktopSession {
     private readonly readOnly = false,
   ) {
     this.client = new JsonRpcClient((text) => bridge.send(text));
+    this.nextTurnQueue = new NextTurnQueue(async (threadId, text) => {
+      this.assertWritable();
+      this.assertSubscribed(threadId);
+      this.assertTurnSubmissionAvailable(threadId, true);
+      if (this.store.getOpenThreadId() !== threadId || this.loading) throw new Error("예약한 대화가 현재 열려 있지 않습니다.");
+      const response = await this.startTextTurn(threadId, text);
+      return response?.turn?.id ?? "";
+    }, (threadId) => this.connected && this.canSend() && !this.loading && !this.pendingTurnStarts.has(threadId)
+      && this.store.getOpenThreadId() === threadId && this.writerElsewhereThreadId !== threadId);
     this.taskAuthoring = new TaskAuthoringController(this.client, () => {
       const kernel = this.store.getKernel();
       return { workspace: kernel.workspace, kernel: kernel.kernel,
@@ -296,6 +310,7 @@ export class DesktopSession {
   }
 
   stop(): void {
+    this.nextTurnQueue.dispose();
     this.providerVersionScope = "";
     for (const unsubscribe of this.unsubscribers.splice(0)) {
       unsubscribe();
@@ -444,13 +459,71 @@ export class DesktopSession {
     if (!threadId || trimmed.length === 0) {
       return;
     }
+    this.assertTurnSubmissionAvailable(threadId);
     const input: UserInput[] = [{ type: "text", text: trimmed, text_elements: [] }];
     const transcript = this.store.getTranscript();
     const activeTurn = isTurnInProgress(transcript) ? transcript?.turns.at(-1) : undefined;
     if (activeTurn) {
       await this.client.request("turn/steer", { threadId, input, expectedTurnId: activeTurn.id });
     } else {
-      await this.client.request("turn/start", { threadId, input });
+      const acknowledgedTurnId = this.acknowledgedTurnStarts.get(threadId);
+      if (acknowledgedTurnId) {
+        await this.client.request("turn/steer", { threadId, input, expectedTurnId: acknowledgedTurnId });
+      } else {
+        await this.startTextTurn(threadId, trimmed);
+      }
+    }
+  }
+
+  queueMessage(text: string): void {
+    this.assertWritable();
+    const threadId = this.store.getOpenThreadId();
+    this.assertSubscribed(threadId);
+    if (!threadId || !this.connected) throw new Error("연결된 대화에서 입력을 예약하세요.");
+    if (this.pendingTurnStarts.has(threadId) && !this.nextTurnQueue.hasInFlight(threadId)) throw new Error("새 턴의 접수 확인 후 예약하세요.");
+    const transcript = this.store.getTranscript();
+    const turnId = isTurnInProgress(transcript) ? transcript?.turns.at(-1)?.id ?? null : null;
+    this.nextTurnQueue.enqueue(threadId, text, turnId);
+  }
+
+  resumeQueuedMessages(): void {
+    this.assertWritable();
+    const threadId = this.store.getOpenThreadId();
+    this.assertSubscribed(threadId);
+    if (!threadId) return;
+    const transcript = this.store.getTranscript();
+    this.nextTurnQueue.resume(threadId, isTurnInProgress(transcript)
+      ? transcript?.turns.at(-1)?.id ?? null : this.acknowledgedTurnStarts.get(threadId) ?? null);
+  }
+
+  private assertTurnSubmissionAvailable(threadId: string, fromQueue = false): void {
+    if (this.pendingTurnStarts.has(threadId) || (!fromQueue && this.nextTurnQueue.hasInFlight(threadId))) {
+      throw new Error("새 턴의 접수를 확인하는 중입니다. 확인 후 다시 보내세요.");
+    }
+    if (this.nextTurnQueue.snapshot(threadId).items.some((item) => item.state === "unknown")) {
+      throw new Error("결과 불명인 예약 입력의 대화 기록을 확인하고 목록에서 지운 뒤 보내세요.");
+    }
+  }
+
+  isTurnSubmissionPending(threadId: string): boolean {
+    return this.pendingTurnStarts.has(threadId) || this.nextTurnQueue.hasInFlight(threadId);
+  }
+
+  private async startTextTurn(threadId: string, text: string): Promise<TurnStartResponse> {
+    const generation = this.conversationGeneration;
+    this.pendingTurnStarts.add(threadId);
+    try {
+      const input: UserInput[] = [{ type: "text", text, text_elements: [] }];
+      const response = await this.client.request<TurnStartResponse>("turn/start", { threadId, input });
+      if (typeof response?.turn?.id === "string") {
+        this.nextTurnQueue.started(threadId, response.turn.id);
+        if (generation === this.conversationGeneration && this.nextTurnQueue.snapshot(threadId).waitingTurnId === response.turn.id) {
+          this.acknowledgedTurnStarts.set(threadId, response.turn.id);
+        }
+      }
+      return response;
+    } finally {
+      this.pendingTurnStarts.delete(threadId);
     }
   }
 
@@ -459,6 +532,7 @@ export class DesktopSession {
     this.assertWritable();
     const threadId = this.store.getOpenThreadId();
     this.assertSubscribed(threadId);
+    if (threadId) this.nextTurnQueue.pause(threadId, "사용자가 중단을 요청해 예약을 멈췄습니다. 확인 후 계속하세요.");
     const transcript = this.store.getTranscript();
     const turn = transcript?.turns.at(-1);
     if (!threadId || !turn || turn.status !== "inProgress") {
@@ -818,6 +892,8 @@ export class DesktopSession {
   }
 
   private invalidateConversation(): number {
+    this.acknowledgedTurnStarts.clear();
+    this.nextTurnQueue.pauseAll("대화 또는 접속이 바뀌어 예약을 멈췄습니다. 해당 대화에서 계속하세요.");
     this.loading = null;
     return ++this.conversationGeneration;
   }
@@ -985,6 +1061,13 @@ export class DesktopSession {
     if (!threadId) {
       return;
     }
+    if (method === "turn/completed") {
+      const turn = (params as { turn?: { id?: unknown; status?: unknown } }).turn;
+      if (typeof turn?.id === "string" && (turn.status === "completed" || turn.status === "failed" || turn.status === "interrupted")) {
+        if (this.acknowledgedTurnStarts.get(threadId) === turn.id) this.acknowledgedTurnStarts.delete(threadId);
+        this.nextTurnQueue.terminal(threadId, turn.id, turn.status);
+      }
+    }
     if (method === "thread/name/updated") {
       const name = (params as { threadName?: string }).threadName;
       if (name) {
@@ -993,6 +1076,7 @@ export class DesktopSession {
       }
     }
     if (method === "thread/archived" || method === "thread/deleted") {
+      this.nextTurnQueue.pause(threadId, "대화가 보관되거나 삭제되어 예약을 멈췄습니다.");
       this.removedThreadIds.add(threadId);
       this.addedThreads.delete(threadId);
       this.store.removeThread(threadId);
