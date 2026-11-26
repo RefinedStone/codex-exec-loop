@@ -1,4 +1,4 @@
-//! Index path observations only: never traverse or hash working tree contents through Git.
+//! Cached index paths and bounded repository ignore controls; working file contents stay closed.
 use super::super::index::StorageIndex;
 use super::{evidence, git, git_metadata};
 use crate::domain::storage_analysis::StorageEvidence;
@@ -29,7 +29,32 @@ pub(super) fn observe(
         cancelled,
     )
     .and_then(|bytes| compare(db, repository, path, &bytes));
-    reasons(result)
+    let verified = result.is_ok();
+    let mut observations = reasons(result);
+    if verified {
+        match super::ignore::observe(db, repository, path, metadata, cancelled) {
+            Ok(summary) => {
+                observations.retain(|reason| reason.code != "untracked_observed");
+                if summary.untracked + summary.ignored > 0 {
+                observations.push(evidence(
+                    "ignore_rules_observed",
+                    format!("관측한 미추적 후보 중 저장소 .gitignore와 info/exclude 규칙으로 {}개를 제외했습니다. 사용자 전역 exclude는 읽지 않았으며 전체 Git 상태 판정이 아닙니다.", summary.ignored),
+                ));
+                }
+                if summary.untracked > 0 {
+                    observations.push(evidence(
+                        "untracked_files",
+                        format!("저장소 ignore 규칙을 적용한 뒤 인덱스 밖 관측 파일 {}개가 남았습니다. 전역 exclude와 스캔 이후 파일은 포함해 검증한 것이 아니므로 검토가 필요합니다.", summary.untracked),
+                    ));
+                }
+            }
+            Err(_) => observations.push(evidence(
+                "ignore_unknown",
+                "저장소 ignore 규칙을 검증하지 못했습니다. 범위 밖 exclude 설정, 읽기 실패·변경·링크·placeholder·조회 한도를 확인하세요. 인덱스 밖 경로 관측은 무시된 파일을 포함할 수 있습니다.",
+            )),
+        }
+    }
+    observations
 }
 fn reasons(result: Result<PathSummary>) -> Vec<StorageEvidence> {
     match result {

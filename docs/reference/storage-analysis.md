@@ -126,9 +126,17 @@ Windows에서는 검증한 기존 config·경로 포인터 파일의 읽기 hand
 
 공통 Git 디렉터리마다 `git worktree list --porcelain -z`를 한 번 수행하고 결과를 작업 SQLite에 캐시합니다. 명령 시간은 3초, 표준 출력은 1MiB, 목록은 4,096개 record로 제한합니다. NUL 구분 경로를 파싱하고 main/linked/bare/detached/locked/prunable 근거를 보존합니다. 사라진 등록이나 `prunable` 표시에 회수 가능 바이트를 부여하지 않습니다. 분리된 Git 디렉터리가 main 경로로 반환되면, 고정한 local config의 `core.worktree`가 관측한 작업 폴더 경로와 파일 ID에 대응하는지도 확인합니다. 서브모듈은 검증한 부모 cached index의 stage 0·mode `160000` gitlink가 같은 작업에서 관측하고 Git 등록을 확인한 자식 디렉터리의 경로·파일 ID와 대응할 때만 표시합니다. 인덱스 등록을 SQLite에 보존한 뒤 전체 후보 관측이 끝나면 대조하므로 부모·자식 발견 순서에 의존하지 않습니다. `.git/modules/...`라는 경로 모양만으로 서브모듈을 확정하지 않으며, 이를 위해 `.gitmodules`나 원본 본문을 읽거나 외부 부모 트리를 새로 순회하지 않습니다. 각 Git 명령을 시작할 때와 명령 사이에 취소를 확인합니다. 취소 전에 이미 시작한 명령은 기존 timeout 안에서 종료를 기다릴 수 있습니다.
 
-**작업 파일 본문에 기초한 수정 판정과 ignore 규칙을 적용한 완전한 미추적 목록은 제공하지 않습니다.** `git status` 대신 cached index와 로컬 HEAD를 비교하여 `index_changes/index_unchanged/index_unknown`을 남기고, 항상 `status_unknown`을 유지합니다. `index_unchanged`를 깨끗한 worktree나 삭제 가능 판정으로 해석하면 안 됩니다. 사용자 clean filter·external diff·textconv를 실행하는 원본 본문 검사를 하지 않습니다.
+**일반 작업 파일의 내용을 비교하기 위해 본문을 열거나 hash하지 않습니다.** cached index와 로컬 HEAD의 비교는 `index_changes/index_unchanged/index_unknown`으로 표시합니다. 별도로 `git ls-files --cached --stage --debug -z --sparse`의 cached stat을 현재 파일 메타데이터와 대조하여 사라진 경로, 크기, 파일 유형·실행 권한, 시각의 차이를 `worktree_stat_changes`로 구분합니다. 원본 파일의 부모는 관측된 디렉터리 ID와 다시 대조하며, 링크·placeholder·바뀐 부모를 따라가지 않습니다. 출력 형식·경로·숫자 필드가 맞지 않거나 한도를 넘으면 `worktree_stat_unknown`입니다. [Git ls-files 문서](https://git-scm.com/docs/git-ls-files#Documentation/git-ls-files.txt---debug)의 `--debug` 출력은 안정된 공개 스키마가 아니므로 엄격하게 파싱하고 지원하지 않는 출력은 미확인으로 남깁니다.
 
-`git ls-files --cached --stage -z --sparse`의 경로·stage를 같은 SQLite의 관측 경로와 대조합니다. 출력은 1MiB, entry는 10,000개까지이며 초과·조회 실패·모호한 경로는 `index_paths_unknown`입니다. 확인한 파일 경로가 인덱스에 없으면 `untracked_observed`, 충돌 stage가 있으면 `index_conflicts`를 표시합니다. 미추적 관측은 ignore 규칙을 적용하지 않은 부분 근거이므로 무시된 빌드 파일도 포함될 수 있습니다. `.git` 메타데이터와 gitlink·sparse 디렉터리 아래는 제외하고, Windows 경로의 대소문자는 정규화하되 인덱스에서 모호하게 충돌하면 미확인으로 남깁니다. 이 대조는 원본 트리를 다시 순회하지 않습니다.
+stat 대조는 최대 10,000개 entry, Git 출력 1MiB, 메타데이터 대조 3초 범위입니다. 충돌 stage는 별도 근거를 유지하고, gitlink·sparse·symlink, assume-unchanged·skip-worktree·intent-to-add 항목을 사라진 일반 파일로 오인하지 않습니다. 시각이나 크기만 변해도 검토 근거가 되지만 본문 변경 확정은 아닙니다. 반대로 stat이 같아도 내용 동일성을 증명하지 못하므로 `status_unknown`을 유지합니다. `git status`·`diff-files`의 본문 확인, clean filter·external diff·textconv 실행을 추가하지 않습니다.
+
+cached index 경로를 같은 SQLite의 관측 파일과 대조합니다. `.git` 메타데이터와 gitlink·sparse 하위 경로를 제외하며, 충돌 stage는 `index_conflicts`입니다. 인덱스 경로 조회 실패·상한 초과·모호한 Windows 대소문자 충돌은 `index_paths_unknown`입니다.
+
+인덱스 밖 관측 파일에는 저장소 `.gitignore`와 common-dir의 `info/exclude`를 적용합니다. 후보 경로의 부모에 해당하는 제어 파일만 읽으며, 경로·파일 ID·일반 파일 여부·읽기 전후 크기와 수정 시각을 확인합니다. reparse·placeholder·미관측 파일·부모 변경은 거절합니다. 파일당 64KiB, 합계 1MiB, 제어 파일 256개, 후보 경로·부모 10,000개로 제한합니다. 검증한 규칙을 분석기 소유 임시 디렉터리에 복사하고 `git check-ignore --no-index --stdin -z --verbose --non-matching`을 실행합니다. 원본 트리를 Git으로 다시 순회하지 않고, 성공·종료 코드와 후보마다 정확히 하나의 완성된 NUL record를 확인합니다. negation·중첩·디렉터리 패턴은 Git이 평가하며 원본 규칙·파일 본문은 API에 반환하지 않습니다. 임시 복사본은 조회 종료 때 정리합니다.
+
+적용 뒤 남은 후보는 `untracked_files`, 적용한 범위는 `ignore_rules_observed`입니다. 사용자 전역 exclude는 읽지 않으며 저장소가 별도 `core.excludesFile`을 지정했거나 제어 파일 검증에 실패하면 `ignore_unknown`과 원래 `untracked_observed`를 함께 남깁니다. 무시된 경로나 조회 실패를 변경 없음으로 바꾸지 않습니다. 이 결과는 관측 파일과 저장소 규칙 범위이며 완전한 Git 상태 목록이나 삭제 권한이 아닙니다.
+
+Git의 `index.lock`, `HEAD.lock`, `packed-refs.lock`, `shallow.lock`은 내용을 열지 않고 존재를 관측하여 `git_operation_locked`로 표시합니다. 확인하지 못한 잠금 경로는 `git_lock_unknown`이고, 잠금 시각이나 이름만으로 소유자·비활성을 추론하지 않습니다.
 
 로컬 upstream 참조와의 ahead 여부는 기록할 수 있지만 fetch를 수행하지 않으므로 원격 최신 게시 상태를 보장하지 않습니다. Akra 런타임은 이미 열린 커널에만 읽기 조회를 보냅니다. 조회를 위해 attach·세션·슬롯을 새로 만들지 않으며, 응답 실패나 관측 부재를 inactive로 바꾸지 않습니다. 이미 열린 커널의 알려진 root도 최대 256개·목록 조회 1초 범위에서 수집하여 선택 볼륨의 관측 디렉터리 ID와 대조합니다. `.git` 발견에 실패해도 확인한 runtime 보호 근거를 유지합니다. 범위 밖 경로는 관측 노드에 연결하지 않으며, 목록 상한·timeout 등은 `runtime_candidates_partial`로 남깁니다.
 

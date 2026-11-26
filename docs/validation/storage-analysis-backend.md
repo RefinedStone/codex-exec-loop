@@ -71,10 +71,21 @@ git diff --exit-code c690571b HEAD -- src/domain/storage_analysis src/applicatio
 | --- | --- | --- |
 | [G #2611](https://github.com/RefinedStone/codex-exec-loop/issues/2611) | 여러 보호 사유와 관측 시각을 유지하고 unknown을 inactive로 바꾸지 않습니다. | 보호 정보는 삭제 허가 또는 회수 가능량이 아닙니다. |
 | [G1 #2613](https://github.com/RefinedStone/codex-exec-loop/issues/2613) | 관측한 Git 메타데이터를 확인하고 common-dir당 porcelain-z 목록을 한 번 읽어 SQLite에 캐시합니다. main/linked/bare/detached/locked/prunable를 보존합니다. 분리된 Git 디렉터리의 main 경로는 고정한 local config의 core.worktree와 관측한 디렉터리 ID도 대조합니다. 서브모듈은 부모의 검증한 cached index stage 0·mode `160000` gitlink와 등록이 확인된 관측 자식의 경로·파일 ID를 전체 후보 관측 후 SQLite에서 대조합니다. `.git/modules` 경로 모양만으로 확정하지 않습니다. 기존 커널 root도 최대 256개·1초의 목록으로 받아 관측 디렉터리 ID와 대조하므로 Git 발견 실패에도 runtime 근거를 붙입니다. | 외부·미관측 common-dir, placeholder/reparse, config include, alternates는 unknown입니다. 런타임 후보 상한·조회 실패는 별도 미확인 근거를 남깁니다. 후보 수에 비례한 메모리 캐시가 없고 Git 단일 출력/record 상한이 있습니다. |
-| [G2 #2614](https://github.com/RefinedStone/codex-exec-loop/issues/2614) | `--no-optional-locks`, 공통 Git 강화, cached index-vs-HEAD, 로컬 upstream 및 현존 커널의 실행·승인·슬롯 근거를 조합합니다. bounded cached ls-files를 SQLite 관측 경로와 대조해 미추적 관측·충돌 stage를 표시합니다. 검증한 기존 config/포인터 handle 유지, Git 명령 사이 취소 검사를 추가했습니다. | **본문 기반 working tree 수정 판정과 ignore 적용 미추적 전체 상태는 미확인입니다.** 미추적 관측은 ignore 미적용이며 gitlink/sparse/.git를 제외합니다. `status_unknown`을 유지하고 `index_unchanged`를 clean으로 바꾸지 않습니다. 부재 optional 파일 생성 등 모든 동시 metadata 변경을 고정하는 보장은 아닙니다. 이 제한을 남긴 채 G2 전체 완료로 표시하지 않습니다. |
+| [G2 #2614](https://github.com/RefinedStone/codex-exec-loop/issues/2614) | 기존 cached index/HEAD·로컬 upstream·활성 세션/슬롯 보호 근거에, cached stat과 안전한 파일 메타데이터의 없음·크기·유형·시각 차이, Git 작업 잠금 경로, 저장소 ignore 규칙 적용 미추적 관측을 추가했습니다. 검증한 제어 파일의 제한된 복사본을 Git check-ignore로 평가하며 일반 작업 파일의 본문은 대조하지 않습니다. | 같은 stat은 내용 동일성·clean을 증명하지 않습니다. 특수 인덱스 항목·링크·placeholder·조회 한도는 unknown이며, 사용자 전역 exclude와 스캔 후 변경은 전체 검증 범위가 아닙니다. 기존 보호 근거와 status_unknown을 함께 유지하고 삭제 가능 boolean을 만들지 않습니다. |
 | [G3 #2615](https://github.com/RefinedStone/codex-exec-loop/issues/2615) | `target/Cargo.toml`, `node_modules/package.json`, `Library/ProjectSettings`의 이름·표식 분류를 원래 노드에 부착합니다. 동일 바이트를 별도 회수량으로 합산하지 않습니다. | 이름·표식만으로 안전한 삭제를 판단하지 않습니다. 빌드 명령, dependency manager, 외부 tree 스캔을 실행하지 않습니다. |
 
 소스: [Git 관측](../../src/adapter/outbound/storage_analysis/worktree.rs), [Git metadata 가드](../../src/adapter/outbound/storage_analysis/worktree/git_metadata.rs), [cached 인덱스 대조](../../src/adapter/outbound/storage_analysis/worktree/tracked.rs), [런타임 관찰](../../src/composition/repository_kernel/storage.rs).
+
+#### G2의 추가 관측과 회귀 범위
+
+- 인덱스의 stat 필드는 엄격하게 파싱합니다. 공개된 안정 스키마가 아닌 `ls-files --debug` 출력이 바뀌거나 잘리면 미확인으로 반환합니다. 경로는 NUL 구분을 유지하고 경로 이탈·플랫폼에서 모호한 이름을 거절합니다.
+- stat 대조는 읽기 전용 attributes 조회입니다. missing/size/mode/time 차이와 특수 인덱스·접근·경로 검증 실패를 구분합니다. 일반 작업 파일의 본문 hash, clean filter, fsmonitor, hook을 실행하는 변경은 추가하지 않았습니다.
+- ignore 제어 파일은 파일당 64KiB·합계 1MiB·256개, 후보 경로와 부모는 10,000개로 제한합니다. 파일 ID·부모 ID·일반 파일 여부·읽기 전후 크기와 시각, reparse/placeholder를 확인합니다. 원본 규칙을 Git으로 재탐색하지 않고 분석기 소유 복사본에서만 평가하며 결과에는 사유와 건수만 남깁니다.
+- 실제 Git fixture는 중첩 규칙·negation·디렉터리 패턴·공백 경로를 `ls-files --others --exclude-standard -z`와 대조합니다. Unix fixture는 개행 경로도 포함합니다. 범위 밖 `core.excludesFile`, 큰 규칙 파일, 잘린 출력은 규칙 적용 완료로 표시하지 않습니다.
+- 기존 index 바이트·config·다른 작업의 index.lock을 보존하는지 확인합니다. assume-unchanged/skip-worktree를 삭제로 오인하지 않고, upstream 누락·로컬 ahead·detached·외부 런타임 소유 미확인이 확인된 보호 사유와 함께 남는지 검증합니다.
+- Windows에서는 작업 파일의 데이터 읽기를 공유 잠금으로 거절한 상태에서도 attributes만으로 크기 변화를 관측하는 회귀를 추가했습니다. 이 시험은 내용 읽기에 성공한 뒤 결과만 숨기는 구현을 허용하지 않습니다.
+
+소스와 재현 대상: [stat 관측](../../src/adapter/outbound/storage_analysis/worktree/stat.rs), [ignore 복사본](../../src/adapter/outbound/storage_analysis/worktree/ignore.rs), [실제 Git/native 회귀](../../src/adapter/outbound/storage_analysis/worktree/g2_tests.rs). 이 절은 추가된 검증 범위이며 실행 결과와 환경은 해당 PR의 로컬 검증 기록으로 연결합니다.
 
 ### A — 공동 탐색
 

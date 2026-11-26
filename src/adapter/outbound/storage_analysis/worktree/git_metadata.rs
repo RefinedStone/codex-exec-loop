@@ -141,13 +141,157 @@ fn observed(
     Ok((path, metadata))
 }
 
-fn optional_file(
+pub(super) fn validate_relative(relative: &str) -> Result<()> {
+    ensure!(
+        !relative.is_empty()
+            && relative.len() <= 32768
+            && !relative.contains(['\\', ':', '\0'])
+            && relative.split('/').all(|part| !part.is_empty()
+                && !matches!(part, "." | "..")
+                && !part
+                    .trim_end_matches(['.', ' '])
+                    .eq_ignore_ascii_case(".git")),
+        "storage_git_index_path"
+    );
+    #[cfg(windows)]
+    for part in relative.split('/') {
+        let name = part
+            .split('.')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_uppercase();
+        ensure!(
+            !part.ends_with(['.', ' '])
+                && !matches!(name.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+                && !(name.len() == 4
+                    && (name.starts_with("COM") || name.starts_with("LPT"))
+                    && matches!(name.as_bytes()[3], b'1'..=b'9')),
+            "storage_git_index_path"
+        );
+    }
+    Ok(())
+}
+
+/// Pin every observed parent before inspecting a leaf. A missing parent establishes
+/// an absent tracked path; an existing but unobserved/replaced/link parent is unknown.
+fn guard_parents(
+    db: &StorageIndex,
+    path: &Path,
+    root: &Path,
+) -> Result<Option<Vec<native::NativeMetadata>>> {
+    let mut parents = Vec::new();
+    let mut parent = path.parent().context("storage_git_parent")?;
+    while key(parent) != key(root) {
+        ensure!(parents.len() < 256, "storage_git_parent_limit");
+        parents.push(parent);
+        parent = parent.parent().context("storage_git_outside_root")?;
+    }
+    parents.push(root);
+    let mut guards = Vec::new();
+    for parent in parents.into_iter().rev() {
+        match fs::symlink_metadata(parent) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+            Ok(_) => {}
+        }
+        let identity: Option<String> = db.conn.query_row(
+            "SELECT n.object_key FROM git_observed_paths p JOIN nodes n ON n.id=p.node WHERE p.path_key=?1 AND n.kind='directory'",
+            [key(parent)], |row| row.get(0)
+        ).optional()?.flatten();
+        let metadata = native::metadata(parent, root, None)?;
+        ensure!(
+            metadata.directory
+                && metadata.issue.is_none()
+                && identity.is_some()
+                && metadata.identity == identity,
+            "storage_git_parent_unverified"
+        );
+        guards.push(metadata);
+    }
+    Ok(Some(guards))
+}
+
+pub(super) fn worktree_entry(
+    db: &StorageIndex,
+    repository: &Path,
+    relative: &str,
+) -> Result<Option<fs::Metadata>> {
+    validate_relative(relative)?;
+    let root = fs::canonicalize(db.path("n1")?)?;
+    let path = repository.join(relative);
+    let Some(_parents) = guard_parents(db, &path, &root)? else {
+        return Ok(None);
+    };
+    let metadata = match native::metadata(&path, &root, None) {
+        Err(error)
+            if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            return Ok(None);
+        }
+        other => other?,
+    };
+    ensure!(metadata.issue.is_none(), "storage_git_stat_unverified");
+    #[cfg(windows)]
+    let current = metadata
+        ._handle
+        .as_ref()
+        .context("storage_git_stat_handle")?
+        .metadata()?;
+    #[cfg(not(windows))]
+    let current = fs::symlink_metadata(&path)?;
+    ensure!(
+        current.is_file() || current.is_dir(),
+        "storage_git_stat_special_file"
+    );
+    Ok(Some(current))
+}
+
+pub(super) fn lock_observations(db: &StorageIndex, metadata: &GitMetadata) -> (usize, bool) {
+    let Ok(root_path) = db.path("n1") else {
+        return (0, true);
+    };
+    let Ok(root) = fs::canonicalize(root_path) else {
+        return (0, true);
+    };
+    let paths = [
+        metadata.git_dir.join("index.lock"),
+        metadata.git_dir.join("HEAD.lock"),
+        metadata.common_dir.join("packed-refs.lock"),
+        metadata.common_dir.join("shallow.lock"),
+    ];
+    let mut count = 0;
+    let mut unknown = false;
+    for path in paths {
+        let parents = match guard_parents(db, &path, &root) {
+            Ok(Some(parents)) => parents,
+            Ok(None) => continue,
+            Err(_) => {
+                unknown = true;
+                continue;
+            }
+        };
+        match fs::symlink_metadata(&path) {
+            Ok(_) => count += 1,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => unknown = true,
+        }
+        drop(parents);
+    }
+    (count, unknown)
+}
+
+pub(super) fn optional_file(
     db: &StorageIndex,
     path: &Path,
     root: &Path,
     maximum: usize,
     file_guards: &mut Vec<fs::File>,
 ) -> Result<Option<Vec<u8>>> {
+    let Some(_parents) = guard_parents(db, path, root)? else {
+        return Ok(None);
+    };
     // Attribute inspection of an absent optional metadata file does not read its contents.
     match fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -175,14 +319,39 @@ fn optional_file(
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
     let mut file = options.open(&path)?;
+    let before = file.metadata()?;
+    ensure!(
+        before.is_file(),
+        "storage_git_metadata_expected_regular_file"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        ensure!(
+            metadata.identity.as_deref()
+                == Some(format!("{}:{}", before.dev(), before.ino()).as_str()),
+            "storage_git_metadata_changed"
+        );
+    }
+    ensure!(
+        before.len() == metadata.logical,
+        "storage_git_metadata_changed"
+    );
     let mut bytes = Vec::new();
     (&mut file)
         .take((maximum + 1) as u64)
         .read_to_end(&mut bytes)?;
     ensure!(bytes.len() <= maximum, "storage_git_metadata_too_large");
+    let after = file.metadata()?;
+    ensure!(
+        before.len() == after.len()
+            && before.modified()? == after.modified()?
+            && bytes.len() as u64 == after.len(),
+        "storage_git_metadata_changed"
+    );
     file_guards.push(file);
     Ok(Some(bytes))
 }
