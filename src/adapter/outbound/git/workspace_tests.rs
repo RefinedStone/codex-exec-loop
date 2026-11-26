@@ -111,6 +111,7 @@ fn engine() -> GitOperationService {
         Arc::new(GitWorkspaceAdapter),
         Arc::new(MemoryJournal::default()),
         Arc::new(move || (1_795_000_000, nonce.fetch_add(1, Ordering::SeqCst))),
+        Arc::default(),
     )
 }
 

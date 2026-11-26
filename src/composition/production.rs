@@ -435,6 +435,9 @@ pub(crate) struct GatewayBackend {
     /// git 작업 엔진이다 (plan 27 G3).
     pub(crate) git_operations:
         Arc<dyn crate::application::port::inbound::git_operation_port::GitOperationPort>,
+    /// Gateway 가 넘기는 턴의 기록이다. git 작업 엔진이 읽는다 (#2850).
+    pub(crate) turn_activity:
+        Arc<crate::application::service::turn_activity::TurnActivityRegistry>,
     pub(crate) conversation_workspaces:
         Arc<dyn crate::application::port::inbound::conversation_workspace_port::ConversationWorkspacePort>,
     /// 이슈 인계의 공유본이다 (#2428).
@@ -514,6 +517,8 @@ pub(crate) fn build_gateway_backend(
             crate::adapter::outbound::db::planning_repository_identity::PlanningRepositoryIdentityAdapter,
         )),
     );
+    let turn_activity =
+        Arc::new(crate::application::service::turn_activity::TurnActivityRegistry::default());
     Ok(GatewayBackend {
         upstream,
         other_hosts: build_other_hosts()?,
@@ -522,7 +527,8 @@ pub(crate) fn build_gateway_backend(
         work_context,
         providers,
         git_graph: Arc::new(GitGraphService::new(Arc::new(GitHistoryAdapter))),
-        git_operations: build_git_operations(),
+        git_operations: build_git_operations(turn_activity.clone()),
+        turn_activity,
         conversation_workspaces: crate::composition::conversation_workspace::build(),
         issue_handoff: Arc::new(
             crate::application::service::issue_handoff::IssueHandoffService::new(
@@ -648,8 +654,9 @@ fn build_issue_drafts()
 
 /// git 작업 엔진을 조립한다 (plan 27 G3). 일지는 planning 기준 데이터와 같은 저장소 runtime 디렉터리에 둔다. 그
 /// 디렉터리는 현재 사용자 전용이고 저장소 밖에 있다.
-fn build_git_operations()
--> Arc<dyn crate::application::port::inbound::git_operation_port::GitOperationPort> {
+fn build_git_operations(
+    turns: Arc<crate::application::service::turn_activity::TurnActivityRegistry>,
+) -> Arc<dyn crate::application::port::inbound::git_operation_port::GitOperationPort> {
     use crate::adapter::outbound::filesystem::git_operation_journal::GitOperationJournalAdapter;
     use crate::adapter::outbound::git::workspace::GitWorkspaceAdapter;
     use crate::application::service::git_operation::GitOperationService;
@@ -664,6 +671,7 @@ fn build_git_operations()
         Arc::new(GitWorkspaceAdapter),
         Arc::new(journal),
         Arc::new(|| (chrono::Utc::now().timestamp(), rand::random::<u32>())),
+        turns,
     ))
 }
 
