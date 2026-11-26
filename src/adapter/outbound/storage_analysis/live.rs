@@ -18,6 +18,35 @@ pub(super) const CHILDREN_SQL: &str = "SELECT id,parent,name,pending FROM nodes 
 pub(super) struct ScanSchedulingState {
     nodes: VecDeque<i64>,
     priority_streak: usize,
+    #[cfg(test)]
+    pub measurement: SchedulingMeasurement,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Default)]
+pub(super) struct SchedulingMeasurement {
+    pub dispatches: u64,
+    pub dispatches_after_cancel: u64,
+    pub last_dispatch: Option<std::time::Instant>,
+    pub cancel_observed: Option<std::time::Instant>,
+}
+
+#[cfg(test)]
+pub(super) fn record_dispatch(state: &Mutex<ScanSchedulingState>, cancelled: bool) {
+    let mut state = state.lock().expect("scheduling measurement");
+    state.measurement.dispatches += 1;
+    state.measurement.dispatches_after_cancel += u64::from(cancelled);
+    state.measurement.last_dispatch = Some(std::time::Instant::now());
+}
+
+#[cfg(test)]
+pub(super) fn record_cancel(state: &Mutex<ScanSchedulingState>) {
+    state
+        .lock()
+        .expect("scheduling measurement")
+        .measurement
+        .cancel_observed
+        .get_or_insert_with(std::time::Instant::now);
 }
 impl ScanSchedulingState {
     pub fn enqueue(&mut self, id: i64) -> Result<(bool, usize)> {

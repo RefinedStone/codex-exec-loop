@@ -95,7 +95,7 @@ git diff --exit-code c690571b HEAD -- src/domain/storage_analysis src/applicatio
 | [V #2621](https://github.com/RefinedStone/codex-exec-loop/issues/2621) | 결정적·native·통합 증거 층, 재현 명령, 이슈별 제한을 문서화했습니다. | 최종 SHA·환경·실행 결과를 같은 기록으로 묶어야 합니다. |
 | [V1 #2622](https://github.com/RefinedStone/codex-exec-loop/issues/2622) | 독립 기대값의 설계 예시, LCA 순열, 0/unknown/부분 집계, 실제 작은 하드링크·정션, 재열거 없는 페이지를 검사합니다. | 실제 파일 크기를 지정한 것을 실제 할당량 기대값으로 간주하지 않습니다. ACL·압축·sparse·cloud별 native 범위는 실행 여부를 구분합니다. |
 | [V2 #2623](https://github.com/RefinedStone/codex-exec-loop/issues/2623) | 등록 호스트+실제 SQLite 경로, idempotency/dedupe, 취소·disable·정리, grant 경합 barrier, 대화 epoch, 근거 복귀 계약을 검사합니다. | 객체 복원·자식 호스트 프로세스 종료·실제 native 스캐너 crash·Desktop E2E의 강도를 혼동하지 않습니다. 상세 호스트 시험은 별도 문서와 연결합니다. |
-| [V3 #2624](https://github.com/RefinedStone/codex-exec-loop/issues/2624) | 세 독립 fixture, concurrency 1/4 각각 3회, 정확성 동일 조건, 최초 progress/파일 관측/전체/페이지/필터/색인/취소 로그를 출력하는 ignored benchmark를 준비했습니다. | **NVMe SSD의 세 fixture 반복과 native 시험 프로세스 peak working set을 측정했습니다. HDD, 통제한 cold cache, 실제 native 부하 중 대화 UI 반응은 미측정입니다.** 배정 중지는 terminal 시각의 상한만 기록합니다. |
+| [V3 #2624](https://github.com/RefinedStone/codex-exec-loop/issues/2624) | 기존 NVMe 기록에 이어 [후속 SSD/HDD 측정](storage-analysis-performance.md)에서 순차/병렬 첫·재실행, 실제 배정 중지, native/Electron 메모리, native 부하 중 입력, 계층형 threshold를 기록했습니다. 기본1/최대4·표시 임계값 유지 근거를 명시합니다. | OS cold cache·전체 볼륨·visible paint는 미측정입니다. HDD 첫 native progress는 일부1초 목표를 넘었고, queued DOM과 실제 진행 DOM을 구별합니다. 취소 후 새 배정과 terminal 대기도 별도 기록합니다. |
 
 ## 3. 회귀 시험과 기대 경계
 
@@ -155,6 +155,8 @@ cargo test --locked --lib storage_analysis_bounded_fixture_benchmark -- --ignore
 ignored benchmark는 일반 단위 시험 성공 개수에 포함하지 않습니다. Windows 전용 fixture가 다른 OS에서 컴파일되지 않았거나 실행되지 않은 경우 “통과”로 합산하지 않습니다. 최종 검증은 해당 커밋에서 실행한 명령·종료 코드·검사 개수와 함께 기록합니다.
 
 ## 5. V3 성능 측정 범위
+
+2026-11-26의 후속 [SSD/HDD 성능·초기 기본값 검증](storage-analysis-performance.md)에는 정상36개·취소12개, 실제 native 부하 중 Desktop4개, 계층형 threshold6개 실행과 별도 source/executable 해시를 기록했습니다. 아래 하위절은 2026-11-23 `c690571b` 실행 당시의 이력이며, 당시 미측정 범위를 후속 실행 결과로 소급 변경하지 않습니다.
 
 새 기준은 [comparison benchmark](../../src/adapter/outbound/storage_analysis/benchmark.rs)의 세 독립 데이터셋입니다. 각 데이터셋에서 concurrency 1과 4를 각각 3회 실행하고, 같은 파일 수·논리량·할당량·완전성·오류 수를 확인한 실행끼리 비교합니다.
 

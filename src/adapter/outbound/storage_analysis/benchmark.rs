@@ -1,5 +1,20 @@
 //! Reproducible fixture comparison. This never enumerates a user's volume.
 use super::*;
+mod performance;
+mod thresholds;
+
+#[test]
+#[ignore = "explicit nested native threshold fixture; never a user volume"]
+fn storage_analysis_threshold_performance_worker() {
+    thresholds::run().expect("storage threshold performance worker");
+}
+
+#[test]
+#[ignore = "explicit fixed-fixture performance worker; never a user volume"]
+fn storage_analysis_performance_worker() {
+    performance::run().expect("storage performance worker");
+}
+
 use std::fs;
 use std::sync::Mutex;
 use std::sync::atomic::Ordering;

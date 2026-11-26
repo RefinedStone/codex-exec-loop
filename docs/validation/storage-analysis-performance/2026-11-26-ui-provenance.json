@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-11-26T02:23:09.479Z",
+  "base_head": "39ac5b9c1f5d8a0d65ad50f367d461c25d9d2ece",
+  "sources": [
+    {
+      "path": "desktop/test/storage-performance-ui.mjs",
+      "sha256": "87b123dcaa340ad2a04ec3cfd7951efbdbec88fb01e200d7e7b50c144ec739d7"
+    },
+    {
+      "path": "desktop/test/storage-performance/native-worker.mjs",
+      "sha256": "a77fa7ac40c1ce3c9dd13abe069a96fa9cfeb2ad16b63a75bb88dc209a1621cd"
+    }
+  ],
+  "source_hash_method": "SHA-256 collected after all four runs from the unchanged two probe sources; these sources were not committed at measurement time.",
+  "native_executable": {
+    "name": "codex_exec_loop_native-138a415bbcec7578.exe",
+    "sha256": "6f9d94a48e71a06c89e27e4751250e0615e3e229c32cac640b46b796f9b36549",
+    "reference": "2026-11-26-ssd-native.json#/provenance/executable_sha256",
+    "method": "Matched by the same executable path and the coordinated absence of Rust rebuilds between the native matrix and all four UI runs. The UI probe did not hash the executable during its runs; a later threshold rebuild may replace that path."
+  },
+  "run_window": {
+    "started_at": "2026-11-26T02:17:53.102Z",
+    "finished_at": "2026-11-26T02:19:25.796Z"
+  },
+  "reports": [
+    {
+      "path": "docs/validation/storage-analysis-performance/2026-11-26-ssd-ui-c1.json",
+      "sha256": "617828d8b2f8c3ad5e2f03abccb7b5b6b9f648ad68e944f3027389757c562827",
+      "run_id": "ui-ssd-small-many-c1",
+      "measured_at": "2026-11-26T02:18:10.740Z"
+    },
+    {
+      "path": "docs/validation/storage-analysis-performance/2026-11-26-ssd-ui-c4.json",
+      "sha256": "8749ecc6b0835047067aa9afb4e2e09976f8b94f9b0b5bbfcbce339c96e684ed",
+      "run_id": "ui-ssd-small-many-c4",
+      "measured_at": "2026-11-26T02:18:19.463Z"
+    },
+    {
+      "path": "docs/validation/storage-analysis-performance/2026-11-26-hdd-ui-c1.json",
+      "sha256": "e10d42964196038b257a644dd73ae927739d634e02000d588cba6c5768c0409a",
+      "run_id": "ui-hdd-small-many-c1",
+      "measured_at": "2026-11-26T02:18:55.151Z"
+    },
+    {
+      "path": "docs/validation/storage-analysis-performance/2026-11-26-hdd-ui-c4.json",
+      "sha256": "3ab402c4c147f16f70a97f16dd583f37472d3eae7e4e68ff0b53084293da6613",
+      "run_id": "ui-hdd-small-many-c4",
+      "measured_at": "2026-11-26T02:19:25.702Z"
+    }
+  ]
+}
