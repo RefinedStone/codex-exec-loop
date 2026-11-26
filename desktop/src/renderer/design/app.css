@@ -190,6 +190,12 @@ kbd {
   color: var(--bad);
 }
 
+.badge-fork {
+  margin-right: 5px;
+  background: var(--bg-active);
+  color: var(--text-2);
+}
+
 .badge-ok {
   background: var(--add-bg);
   color: var(--ok);

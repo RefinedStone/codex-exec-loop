@@ -23,7 +23,7 @@ import { KernelPanel } from "./kernel/KernelPanel";
 import { TaskEditor, type TaskDraftSource } from "./kernel/TaskEditor";
 import { IssuePanel } from "./kernel/IssuePanel";
 import type { IssueDecisionAttention, KernelInterest } from "./kernel/kernelConnection";
-import { DesktopSession, remoteHostBridge } from "./session/desktopSession";
+import { DesktopSession, type ForkThreadOutcome, remoteHostBridge } from "./session/desktopSession";
 import { ConversationStoreContext, desktopSessionStore, openThreadCwd, remoteHostKey, remoteHostStore, useDesktopStore } from "./session/desktopStore";
 import { ATTENTION_TEXT, attentionEvents, isCurrentIssueDecisionAttention, issueDecisionAttentionEvents } from "./session/attention";
 import { type NavEntry, stepNav } from "./session/navHistory";
@@ -78,7 +78,49 @@ function navEntryExists(entry: NavEntry): boolean {
   return true;
 }
 
-function TopBar({ tree, documentCount, changedDocumentCount, onNavigate, delegationEnabled, enabledExtensions, blog }: { tree: WorkingTree; documentCount: number | null; changedDocumentCount: number; onNavigate(delta: -1 | 1): void; enabledExtensions: string[]; delegationEnabled: boolean; blog: BlogActivity }) {
+/** 대화 분기 단추의 설명이다 (#2625). 대화 분기는 Git worktree 복제가 아니다. */
+const FORK_HINT = "대화 맥락만 새 대화로 복제합니다. Git 작업 파일과 브랜치는 나뉘지 않고 같은 작업 폴더를 씁니다. 원본 대화는 바뀌지 않습니다.";
+const FORK_RETRY_WARNING = "지난 분기 결과를 확인하지 못했습니다. 사이드바에서 '분기' 표시가 있는 대화를 먼저 확인하세요. 그래도 다시 분기합니까? 같은 대화가 하나 더 생길 수 있습니다.";
+
+function forkOutcomeText(outcome: ForkThreadOutcome): string {
+  if (outcome.kind === "opened") return "새 대화로 분기했습니다. 같은 작업 폴더를 쓰므로 두 대화가 동시에 파일을 고치지 않게 하세요.";
+  if (outcome.kind === "created") return "새 대화로 분기했습니다. 다른 화면으로 이동해서 사이드바에만 넣었습니다.";
+  return outcome.reason;
+}
+
+/** 열린 로컬 대화를 분기하는 단추이다. 누르면 끝날 때까지 다시 누를 수 없다. */
+function ThreadForkButton({ label, onFork, testId }: { label: string; onFork(): Promise<void>; testId: string }) {
+  const [forking, setForking] = useState(false);
+  const connected = useDesktopStore((state) => state.connection?.phase === "connected");
+  const loaded = useDesktopStore((state) => state.transcript !== null && state.transcript.threadId === state.openThreadId);
+  const fork = () => {
+    setForking(true);
+    void onFork().catch((error: unknown) => toast(errorText(error))).finally(() => setForking(false));
+  };
+  return (
+    <button type="button" className="chip-button" onClick={fork} disabled={forking || !connected || !loaded} title={FORK_HINT} aria-label={`${label}. ${FORK_HINT}`} data-testid={testId}>
+      <Icon name="branch" size={12} />
+      {forking ? "분기하는 중…" : label}
+    </button>
+  );
+}
+
+/** 분기한 대화에서 보인다. 원본으로 돌아가는 단추와 같은 작업 폴더를 쓰는 위험을 알린다. */
+function ForkedFromBanner({ onOpenThread }: { onOpenThread(threadId: string): void }) {
+  const sourceId = useDesktopStore((state) => state.folders.flatMap((folder) => folder.threads).find((thread) => thread.id === state.openThreadId)?.forkedFromId ?? null);
+  const sourceListed = useDesktopStore((state) => sourceId !== null && state.folders.some((folder) => folder.threads.some((thread) => thread.id === sourceId)));
+  if (!sourceId) return null;
+  return (
+    <div className="banner" data-testid="forked-from-banner">
+      <span>분기한 대화입니다. Git worktree 를 따로 만들지 않았습니다: 원본과 같은 작업 폴더를 쓰므로 두 대화가 동시에 파일을 고치면 충돌할 수 있습니다.</span>
+      {sourceListed && (
+        <button type="button" className="chip-button" onClick={() => onOpenThread(sourceId)} data-testid="forked-from-open">원본 열기</button>
+      )}
+    </div>
+  );
+}
+
+function TopBar({ tree, documentCount, changedDocumentCount, onNavigate, onFork, delegationEnabled, enabledExtensions, blog }: { tree: WorkingTree; documentCount: number | null; changedDocumentCount: number; onNavigate(delta: -1 | 1): void; onFork(): Promise<void>; enabledExtensions: string[]; delegationEnabled: boolean; blog: BlogActivity }) {
   // 스레드 목록이 바뀌면 갈 수 있는 곳도 바뀐다.
   useDesktopStore((state) => state.folders);
   const canGoBack = useUiStore((state) => stepNav(state.nav, -1, navEntryExists) !== null);
@@ -88,6 +130,7 @@ function TopBar({ tree, documentCount, changedDocumentCount, onNavigate, delegat
   const terminalOpen = useUiStore((state) => state.terminalOpen);
   const inThread = useUiStore((state) => state.view === "thread");
   const title = useDesktopStore((state) => state.transcript?.title ?? null);
+  const writerElsewhere = useDesktopStore((state) => state.writerElsewhere);
   const cwd = useDesktopStore(openThreadCwd);
   const counts = workingTreeCounts(tree);
   const pullRequest = tree.branch.phase === "loaded" && tree.branch.summary.ok ? tree.branch.summary.pullRequest : null;
@@ -123,6 +166,8 @@ function TopBar({ tree, documentCount, changedDocumentCount, onNavigate, delegat
               PR #{pullRequest.number}
             </span>
           )}
+          {/* 잠긴 대화는 배너의 "채팅 포크" 가 같은 일을 한다. */}
+          {!writerElsewhere && <ThreadForkButton label="대화 분기" onFork={onFork} testId="thread-fork" />}
         </div>
       )}
       <span className="bar-spacer" />
@@ -196,7 +241,7 @@ function SessionBanner() {
  * 다른 Codex 앱이 열린 스레드의 쓰기 잠금을 가지고 있어서 읽기만 했을 때 보인다. "다시 연결"은 다시 구독을
  * 시도하고, 잠금이 아직 있으면 최신 기록을 다시 읽는다.
  */
-function WriterElsewhereBanner({ onReconnect }: { onReconnect(): Promise<void> }) {
+function WriterElsewhereBanner({ onReconnect, onFork }: { onReconnect(): Promise<void>; onFork(): Promise<void> }) {
   const writerElsewhere = useDesktopStore((state) => state.writerElsewhere);
   const [reconnecting, setReconnecting] = useState(false);
   if (!writerElsewhere) return null;
@@ -210,6 +255,7 @@ function WriterElsewhereBanner({ onReconnect }: { onReconnect(): Promise<void> }
       <button type="button" className="chip-button" onClick={reconnect} disabled={reconnecting} data-testid="writer-elsewhere-reconnect">
         {reconnecting ? "연결하는 중…" : "다시 연결"}
       </button>
+      <ThreadForkButton label="채팅 포크" onFork={onFork} testId="writer-elsewhere-fork" />
     </div>
   );
 }
@@ -572,6 +618,22 @@ export function App() {
     [loadThread],
   );
 
+  // 열린 로컬 대화를 분기한다 (#2625). 응답이 왔을 때 사용자가 그 사이 화면을 옮겼으면 새 대화를 열지 않는다.
+  const forkOpenThread = useCallback(async () => {
+    const current = session.current;
+    const sourceThreadId = useDesktopStore.getState().openThreadId;
+    if (!current || !sourceThreadId) return;
+    if (current.forkOutcomeUnknown(sourceThreadId) && !window.confirm(FORK_RETRY_WARNING)) return;
+    const revision = useUiStore.getState().navigationRevision;
+    const outcome = await current.forkThread(sourceThreadId, (threadId) => {
+      const ui = useUiStore.getState();
+      if (ui.view !== "thread" || ui.navigationRevision !== revision) return false;
+      visit({ view: "thread", threadId });
+      return true;
+    });
+    toast(forkOutcomeText(outcome));
+  }, []);
+
   // 이동 기록에서 뒤나 앞으로 간다 (plan 26 N1). 기록의 자리만 옮기고, 그 항목의 스레드를 연다.
   const navigate = useCallback(
     (delta: -1 | 1) => {
@@ -789,7 +851,7 @@ export function App() {
     <div className="shell">
       {sidebarOpen && <Sidebar onOpenThread={openThread} onOpenRemoteThread={openRemoteThread} onReloadChats={reloadChats} />}
       <div className="workspace">
-        <TopBar onNavigate={navigate} tree={tree} documentCount={documents.phase === "loaded" ? documents.documents.length : null} changedDocumentCount={documents.phase === "loaded" ? changedCount(documents.documents) : 0} delegationEnabled={delegationEnabled} enabledExtensions={enabledExtensions} blog={blog} />
+        <TopBar onNavigate={navigate} onFork={forkOpenThread} tree={tree} documentCount={documents.phase === "loaded" ? documents.documents.length : null} changedDocumentCount={documents.phase === "loaded" ? changedCount(documents.documents) : 0} delegationEnabled={delegationEnabled} enabledExtensions={enabledExtensions} blog={blog} />
         <SessionBanner />
         <div className={panelMaximized ? "workspace-body with-maximized-panel" : "workspace-body"}>
           <main className="main">
@@ -799,7 +861,8 @@ export function App() {
             {view === "fleet" && <Fleet onOpenThread={openThread} />}
             {view === "thread" && (
               <>
-                <WriterElsewhereBanner onReconnect={async () => session.current?.reopenThread()} />
+                <WriterElsewhereBanner onReconnect={async () => session.current?.reopenThread()} onFork={forkOpenThread} />
+                <ForkedFromBanner onOpenThread={openThread} />
                 <ConversationView onLoadOlder={async () => session.current?.loadOlderTurns()}
                   onDraftTask={kernelPhase === "attached" && attachedWorkspace === openCwd ? openTaskEditor : undefined} />
                 {/* 스레드마다 새로 만든다. 전송 중 표시와 오류가 다른 스레드의 입력창으로 넘어가지 않는다. 초안은 `uiStore` 에 남는다. */}
