@@ -40,7 +40,7 @@ import { KERNEL_METHOD, type IssueAutomationModeRecord, type IssueEventReference
 import { JsonRpcClient, JsonRpcError, type JsonRpcId, NO_RESPONSE } from "../rpc/jsonRpcClient";
 import { checkCodexVersion } from "./codexVersion";
 import { ChatHistory } from "./chatHistory";
-import { ACCOUNT_LIMITS_READ, applyAccountLimitsNotification, applyAccountLimitsRead, setAccountLimitsStatus } from "./accountLimits";
+import { ACCOUNT_LIMITS_READ, applyAccountLimitsNotification, applyAccountLimitsRead, setAccountLimitsStatus, useAccountLimits } from "./accountLimits";
 import { NextTurnQueue } from "./nextTurnQueue";
 import { NextTurnSettingsController } from "./nextTurnSettings";
 import { ThreadCompactionController } from "./threadCompaction";
@@ -882,12 +882,17 @@ export class DesktopSession {
     }
   }
 
+  private accountLimitsReading = false;
+
   /** 계정 사용 한도를 읽는다 (#2821). 지원하지 않는 app-server 이면 표시하지 않는다. 읽기 실패는 "알 수 없음" 이다. */
   private async readAccountLimits(): Promise<void> {
+    this.accountLimitsReading = true;
     try {
       applyAccountLimitsRead(await this.client.request(ACCOUNT_LIMITS_READ, { excludeResetCreditDetails: true }));
     } catch (error) {
       setAccountLimitsStatus(error instanceof JsonRpcError && error.code === -32601 ? "unsupported" : "unavailable");
+    } finally {
+      this.accountLimitsReading = false;
     }
   }
 
@@ -1092,7 +1097,11 @@ export class DesktopSession {
   private handleNotification(method: string, params: unknown): void {
     // 압축 턴의 최종 결과를 먼저 반영한 뒤 예약 입력의 다음 dispatch 여부를 판단한다.
     this.compaction.observe(method, params);
-    if (!this.readOnly && applyAccountLimitsNotification(method, params)) return;
+    if (!this.readOnly && applyAccountLimitsNotification(method, params)) {
+      // 처음 읽기가 실패했으면 알림이 올 때 기본 버킷을 다시 읽는다. 알림의 버킷을 임의로 보이지 않는다.
+      if (useAccountLimits.getState().status === "unavailable" && !this.accountLimitsReading) void this.readAccountLimits();
+      return;
+    }
     if (method === "akra/providerCredentials/changed") {
       if (!this.readOnly && params && typeof params === "object") {
         const change = params as { provider?: unknown; profileId?: unknown; revision?: unknown; lagged?: unknown };

@@ -837,11 +837,12 @@ describe("account usage limits (#2821)", () => {
     secondary: null,
   };
 
-  async function connectWithLimits(reply: { result?: unknown; error?: { code: number; message: string } }) {
+  type LimitsReply = { result?: unknown; error?: { code: number; message: string } };
+  async function connectWithLimits(reply: LimitsReply | (() => LimitsReply)) {
     const { useAccountLimits } = await import("../src/renderer/session/accountLimits");
     useAccountLimits.setState({ status: "unknown", snapshot: null });
     const fake = await startFakeGateway(uniqueTestEndpoint(), BASIC_RECORDING, {
-      appServer: (method) => (method === "account/rateLimits/read" ? reply : undefined),
+      appServer: (method) => (method === "account/rateLimits/read" ? (typeof reply === "function" ? reply() : reply) : undefined),
     });
     cleanups.push(() => fake.close());
     const { connection, bridge } = connectBridge(fake.endpoint);
@@ -851,7 +852,7 @@ describe("account usage limits (#2821)", () => {
     cleanups.push(() => session.stop());
     connection.start();
     await waitFor(() => useAccountLimits.getState().status !== "unknown");
-    return { fake, useAccountLimits };
+    return { fake, session, useAccountLimits };
   }
 
   it("shows the server's windows and follows updates", async () => {
@@ -861,6 +862,17 @@ describe("account usage limits (#2821)", () => {
     const { applyAccountLimitsNotification } = await import("../src/renderer/session/accountLimits");
     applyAccountLimitsNotification("account/rateLimits/updated", { rateLimits: { ...snapshot, primary: { ...snapshot.primary, usedPercent: 91 } } });
     expect(useAccountLimits.getState().snapshot?.primary?.usedPercent).toBe(91);
+  });
+
+  it("reads the default bucket again on an update after a failed first read", async () => {
+    const replies: LimitsReply[] = [{ error: { code: -32000, message: "temporary" } }, { result: { rateLimits: snapshot } }];
+    const { fake, session, useAccountLimits } = await connectWithLimits(() => replies.shift() ?? { result: { rateLimits: snapshot } });
+    expect(useAccountLimits.getState()).toEqual({ status: "unavailable", snapshot: null });
+    const otherBucket = { ...snapshot, limitId: "codex_other", primary: { ...snapshot.primary, usedPercent: 99 } };
+    (session as unknown as { handleNotification(method: string, params: unknown): void }).handleNotification("account/rateLimits/updated", { rateLimits: otherBucket });
+    await waitFor(() => useAccountLimits.getState().status === "ready");
+    expect(useAccountLimits.getState().snapshot).toMatchObject({ limitId: "codex", primary: { usedPercent: 42.4 } });
+    expect(fake.receivedMethods.filter((method) => method === "account/rateLimits/read")).toHaveLength(2);
   });
 
   it("applies only updates for the displayed bucket and merges sparse values", async () => {
