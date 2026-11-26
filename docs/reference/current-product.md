@@ -1081,7 +1081,8 @@ call tools on demand.
   every tool is a read. A write call runs only after approval in Akra Desktop: the Gateway shows a card
   (`akra/mcp/writeApproval/requested`) in every local Desktop window, the first answer decides, and the
   call fails without running when the answer is decline, when no answer comes in 120 seconds, or when no
-  Desktop is connected. A late answer is ignored, and a retry asks again. Without a Gateway, `akra mcp
+  Desktop is connected. Only a connection that sends `akra/mcp/writeApproval/subscribe` (Desktop does
+  after `initialize`) is an approver, so the `akra mcp` connection that makes the call never counts. A late answer is ignored, and a retry asks again. Without a Gateway, `akra mcp
   call` refuses write tools. When the file cannot be read or parsed, no tool call runs.
 - `call` opens an ephemeral thread with only the target server enabled. `servers`
   connects every enabled server. Requests that app-server sends to the hub (MCP elicitation and others)

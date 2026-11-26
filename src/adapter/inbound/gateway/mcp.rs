@@ -21,6 +21,7 @@ use crate::domain::mcp_hub::{
 };
 
 pub(super) use crate::domain::mcp_hub::MCP_HUB_GATEWAY_METHOD_PREFIX as MCP_METHOD_PREFIX;
+pub(super) use crate::domain::mcp_hub::MCP_HUB_GATEWAY_WRITE_APPROVAL_SUBSCRIBE as MCP_WRITE_APPROVAL_SUBSCRIBE;
 
 const JSON_RPC_METHOD_NOT_FOUND: i64 = -32601;
 const JSON_RPC_INVALID_PARAMS: i64 = -32602;
@@ -51,7 +52,7 @@ impl GatewayMcpHub {
     }
 
     /// local 접속 하나가 쓰기 승인 요청을 받는다. 돌려준 값을 버리면(접속이 끝나면) 받지 않는다.
-    pub(super) fn subscribe_write_approvals(
+    fn subscribe_write_approvals(
         &self,
         outbox: mpsc::Sender<Message>,
     ) -> Option<McpWriteApprovalSubscription> {
@@ -77,6 +78,19 @@ impl GatewayMcpHub {
             // A full outbox drops this notice; the request then times out and the tool does not run.
             let _ = outbox.try_send(Message::text(notification.to_string()));
         })))
+    }
+
+    /// `akra/mcp/writeApproval/subscribe` 의 답이다. 승인 카드를 띄우는 Desktop 만 이 요청을 보낸다. 쓰기 도구를
+    /// 부르는 `akra mcp` 접속은 보내지 않으므로 승인자로 세지 않는다. 접속이 끝나면 `subscription` 도 끝난다.
+    pub(super) fn subscribe_response(
+        hub: Option<&Self>,
+        id: Value,
+        outbox: &mpsc::Sender<Message>,
+        subscription: &mut Option<McpWriteApprovalSubscription>,
+    ) -> String {
+        *subscription = hub.and_then(|hub| hub.subscribe_write_approvals(outbox.clone()));
+        json!({ "jsonrpc": "2.0", "id": id, "result": { "subscribed": subscription.is_some() } })
+            .to_string()
     }
 
     /// Gateway 의 한가한 커널 정리 주기에 함께 부른다.

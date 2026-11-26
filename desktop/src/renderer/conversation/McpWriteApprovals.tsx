@@ -7,9 +7,19 @@ import { useMcpWriteApprovals } from "../session/mcpWriteApprovals";
 
 const ARGUMENT_PREVIEW_CHARS = 600;
 
-function preview(value: unknown): string {
+/** 짧은 미리보기를 보이고, 길면 허용하기 전에 전체 인수를 펼쳐 볼 수 있게 한다. */
+export function ArgumentsView({ value }: { value: unknown }) {
   const text = JSON.stringify(value, null, 2) ?? "";
-  return text.length > ARGUMENT_PREVIEW_CHARS ? `${text.slice(0, ARGUMENT_PREVIEW_CHARS)}…` : text;
+  if (text.length <= ARGUMENT_PREVIEW_CHARS) return <pre className="approval-command">{text}</pre>;
+  return (
+    <>
+      <pre className="approval-command">{`${text.slice(0, ARGUMENT_PREVIEW_CHARS)}…`}</pre>
+      <details className="mcp-write-arguments" data-testid="mcp-write-arguments">
+        <summary>전체 인수 보기 ({text.length.toLocaleString()}자)</summary>
+        <pre className="approval-command">{text}</pre>
+      </details>
+    </>
+  );
 }
 
 export function McpWriteApprovals({ onAnswer }: { onAnswer(id: string, approve: boolean): Promise<void> }) {
@@ -30,7 +40,7 @@ export function McpWriteApprovals({ onAnswer }: { onAnswer(id: string, approve: 
             <span className="approval-cwd">{request.server} / {request.tool}</span>
           </header>
           <p>에이전트가 외부 서비스에 쓰는 도구를 부르려 합니다. 허용하면 이 호출 한 번만 실행합니다.</p>
-          <pre className="approval-command">{preview(request.arguments)}</pre>
+          <ArgumentsView value={request.arguments} />
           <div className="approval-buttons">
             <button type="button" className="button primary" onClick={() => answer(request.id, true)} data-testid="mcp-write-approve">허용</button>
             <button type="button" className="button" onClick={() => answer(request.id, false)} data-testid="mcp-write-decline">거부</button>

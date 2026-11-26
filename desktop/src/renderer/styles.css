@@ -2544,3 +2544,6 @@ button.issues-title:hover {
   overflow: auto;
   white-space: pre-wrap;
 }
+
+.mcp-write-arguments > summary { color: var(--text-2); cursor: pointer; }
+.mcp-write-arguments .approval-command { max-height: 40vh; }

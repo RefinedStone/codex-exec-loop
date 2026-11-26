@@ -842,6 +842,8 @@ describe("MCP hub write approvals (#2830)", () => {
     bridge.ready();
     await waitFor(() => store.snapshot.connection?.phase === "connected");
     await new Promise((resolve) => setTimeout(resolve, 0));
+    // Only a window that shows approval cards declares itself; the Gateway does not count the `akra mcp` caller.
+    expect(pending("akra/mcp/writeApproval/subscribe")).toHaveLength(1);
 
     emit({ method: "akra/mcp/writeApproval/requested", params: { id: "w1", server: "notion", tool: "update", arguments: { page: "p1" } } });
     emit({ method: "akra/mcp/writeApproval/requested", params: { id: "w2", server: "notion", tool: "update", arguments: {} } });

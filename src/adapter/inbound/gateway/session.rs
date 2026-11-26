@@ -27,7 +27,10 @@ use super::hosts::{GatewayHosts, LOCAL_HOST_ID, host_id_from_path};
 use super::issue::{ISSUE_METHOD_PREFIX, spawn_request as spawn_issue_request};
 use super::issue_draft::{is_issue_draft_method, spawn_request as spawn_issue_draft_request};
 use super::kernel::{KERNEL_METHOD_PREFIX, KernelRequests, is_sensitive_issue_command};
-use super::mcp::{GatewayMcpHub, MCP_METHOD_PREFIX, spawn_request as spawn_mcp_request};
+use super::mcp::{
+    GatewayMcpHub, MCP_METHOD_PREFIX, MCP_WRITE_APPROVAL_SUBSCRIBE,
+    spawn_request as spawn_mcp_request,
+};
 use super::provider_credentials::{self, ProviderSession as CredentialSession};
 use super::recorder::{GatewayRecorder, RecordDirection, SessionRecording};
 use super::resource_version::{self, ProviderSession};
@@ -190,12 +193,6 @@ where
         .map(|registry| {
             super::turn_activity::TurnActivityTracker::new(registry.clone().observe_connection())
         });
-    // Desktop 이 MCP hub 쓰기 도구의 승인 요청을 받는다 (#2830). 접속이 끝나면 구독도 끝난다.
-    let _mcp_write_approvals = services
-        .mcp_hub
-        .as_ref()
-        .filter(|_| is_local)
-        .and_then(|hub| hub.subscribe_write_approvals(outbox.clone()));
     let provider_session = if is_local {
         services
             .resource_versions
@@ -215,6 +212,8 @@ where
     let client_to_upstream = async {
         // 이 접속이 보는 dot 방들이다. 접속이 끝나면 함께 멈춘다.
         let mut dot_watches = DotWatches::default();
+        // 이 접속이 밝힌 MCP hub 쓰기 승인 구독이다 (#2830). Desktop 만 밝힌다. 접속이 끝나면 함께 끝난다.
+        let mut mcp_write_approvals = None;
         while let Some(result) = client_stream.next().await {
             let message = match result {
                 Ok(message) => message,
@@ -396,6 +395,13 @@ where
                                     outbox.clone(),
                                 );
                                 None
+                            } else if method == MCP_WRITE_APPROVAL_SUBSCRIBE {
+                                Some(GatewayMcpHub::subscribe_response(
+                                    services.mcp_hub.as_deref().filter(|_| is_local),
+                                    id,
+                                    &outbox,
+                                    &mut mcp_write_approvals,
+                                ))
                             } else if let Some(hub) = mcp_hub_for_method {
                                 spawn_mcp_request(
                                     hub.clone(),

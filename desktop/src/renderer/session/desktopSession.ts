@@ -43,7 +43,7 @@ import { JsonRpcClient, JsonRpcError, type JsonRpcId, NO_RESPONSE } from "../rpc
 import { checkCodexVersion } from "./codexVersion";
 import { ChatHistory } from "./chatHistory";
 import { ACCOUNT_LIMITS_READ, applyAccountLimitsNotification, applyAccountLimitsRead, setAccountLimitsStatus, useAccountLimits } from "./accountLimits";
-import { applyMcpWriteApprovalNotification, clearMcpWriteApprovals, MCP_WRITE_APPROVAL_ANSWER, removeMcpWriteApproval } from "./mcpWriteApprovals";
+import { applyMcpWriteApprovalNotification, clearMcpWriteApprovals, MCP_WRITE_APPROVAL_ANSWER, MCP_WRITE_APPROVAL_SUBSCRIBE, removeMcpWriteApproval } from "./mcpWriteApprovals";
 import { NextTurnQueue } from "./nextTurnQueue";
 import { NextTurnSettingsController } from "./nextTurnSettings";
 import { ThreadCompactionController } from "./threadCompaction";
@@ -893,6 +893,8 @@ export class DesktopSession {
     try {
       await this.client.request("initialize", initializeParams(this.clientVersion));
       this.client.notify("initialized");
+      // 승인 카드를 띄우는 이 창만 MCP hub 쓰기 승인을 받겠다고 밝힌다 (#2830). 이전 Gateway 는 모르는 method 로 답한다.
+      if (!this.readOnly) void this.client.request(MCP_WRITE_APPROVAL_SUBSCRIBE).catch(() => undefined);
       this.nextTurnSettings.connectionChanged(true, settingsEpoch);
       const gateway = await this.client.request<GatewayInfo>("akra/gateway/info");
       // 목록을 읽는 동안 온 상태 변경은 목록의 상태보다 새롭다. 따로 모았다가 목록 결과 위에 덮는다.
