@@ -41,6 +41,7 @@ import { JsonRpcClient, JsonRpcError, type JsonRpcId, NO_RESPONSE } from "../rpc
 import { checkCodexVersion } from "./codexVersion";
 import { ChatHistory } from "./chatHistory";
 import { NextTurnQueue } from "./nextTurnQueue";
+import { ThreadCompactionController } from "./threadCompaction";
 import { type DotLiveState, type DotSummary, type GatewayInfo, type SessionStore, sortFolders, type WorkspaceFolder, type WorkspaceThread } from "./desktopStore";
 
 const THREAD_LIST_LIMIT = 100;
@@ -199,6 +200,7 @@ interface OpenedThread {
 
 export class DesktopSession {
   readonly nextTurnQueue: NextTurnQueue;
+  readonly compaction: ThreadCompactionController;
   private readonly pendingTurnStarts = new Set<string>();
   private readonly acknowledgedTurnStarts = new Map<string, string>();
   private readonly versionProviderListeners = new Set<() => void>();
@@ -265,8 +267,33 @@ export class DesktopSession {
       if (this.store.getOpenThreadId() !== threadId || this.loading) throw new Error("예약한 대화가 현재 열려 있지 않습니다.");
       const response = await this.startTextTurn(threadId, text);
       return response?.turn?.id ?? "";
-    }, (threadId) => this.connected && this.canSend() && !this.loading && !this.pendingTurnStarts.has(threadId)
+    }, (threadId) => this.connected && this.canSend() && !this.loading && !this.pendingTurnStarts.has(threadId) && !this.compaction.isBlocking(threadId)
       && this.store.getOpenThreadId() === threadId && this.writerElsewhereThreadId !== threadId);
+    this.compaction = new ThreadCompactionController({
+      request: (method, params) => this.client.request(method, params),
+      reload: async (threadId, turnId, status) => {
+        if (!this.connected || this.store.getOpenThreadId() !== threadId) return false;
+        const generation = this.conversationGeneration + 1;
+        await this.reopenThread();
+        if (!this.connected || this.conversationGeneration !== generation || this.loading || this.store.getOpenThreadId() !== threadId) return false;
+        const transcript = this.store.getTranscript();
+        const turn = transcript?.threadId === threadId ? transcript.turns.find(turn => turn.id === turnId) : undefined;
+        return turn?.status === status && (status !== "completed" || turn.items.some(item => item.type === "contextCompaction"));
+      },
+      context: () => {
+        const threadId = this.store.getOpenThreadId();
+        const transcript = this.store.getTranscript();
+        const queued = threadId ? this.nextTurnQueue.snapshot(threadId) : null;
+        return {
+          threadId, connected: this.connected, writable: this.canSend() && this.writerElsewhereThreadId !== threadId,
+          loaded: !this.loading && !!threadId && transcript?.threadId === threadId,
+          // status/active 알림은 controller가 즉시 추적하고 terminal로 해제한다.
+          turnInProgress: isTurnInProgress(transcript),
+          submissionInFlight: !!threadId && (this.isTurnSubmissionPending(threadId) || this.acknowledgedTurnStarts.has(threadId) || !!queued?.items.some(item => item.state === "unknown")),
+          knownTurnIds: transcript?.turns.map(turn => turn.id) ?? [],
+        };
+      },
+    });
     this.taskAuthoring = new TaskAuthoringController(this.client, () => {
       const kernel = this.store.getKernel();
       return { workspace: kernel.workspace, kernel: kernel.kernel,
@@ -292,6 +319,7 @@ export class DesktopSession {
         this.providerVersionScope = "";
         this.store.setConnection(state);
         this.connected = state.phase === "connected";
+        this.compaction.connectionChanged(this.connected);
         if (this.connected) {
           void this.initialize();
         } else {
@@ -310,6 +338,7 @@ export class DesktopSession {
   }
 
   stop(): void {
+    this.compaction.dispose();
     this.nextTurnQueue.dispose();
     this.providerVersionScope = "";
     for (const unsubscribe of this.unsubscribers.splice(0)) {
@@ -480,6 +509,7 @@ export class DesktopSession {
     const threadId = this.store.getOpenThreadId();
     this.assertSubscribed(threadId);
     if (!threadId || !this.connected) throw new Error("연결된 대화에서 입력을 예약하세요.");
+    if (this.compaction.isBlocking(threadId)) throw new Error("문맥 압축의 결과를 확인한 뒤 입력을 예약하세요.");
     if (this.pendingTurnStarts.has(threadId) && !this.nextTurnQueue.hasInFlight(threadId)) throw new Error("새 턴의 접수 확인 후 예약하세요.");
     const transcript = this.store.getTranscript();
     const turnId = isTurnInProgress(transcript) ? transcript?.turns.at(-1)?.id ?? null : null;
@@ -497,6 +527,7 @@ export class DesktopSession {
   }
 
   private assertTurnSubmissionAvailable(threadId: string, fromQueue = false): void {
+    if (this.compaction.isBlocking(threadId)) throw new Error("문맥 압축의 결과를 확인한 뒤 입력을 보내세요.");
     if (this.pendingTurnStarts.has(threadId) || (!fromQueue && this.nextTurnQueue.hasInFlight(threadId))) {
       throw new Error("새 턴의 접수를 확인하는 중입니다. 확인 후 다시 보내세요.");
     }
@@ -1020,6 +1051,8 @@ export class DesktopSession {
   }
 
   private handleNotification(method: string, params: unknown): void {
+    // 압축 턴의 최종 결과를 먼저 반영한 뒤 예약 입력의 다음 dispatch 여부를 판단한다.
+    this.compaction.observe(method, params);
     if (method === "akra/providerCredentials/changed") {
       if (!this.readOnly && params && typeof params === "object") {
         const change = params as { provider?: unknown; profileId?: unknown; revision?: unknown; lagged?: unknown };
