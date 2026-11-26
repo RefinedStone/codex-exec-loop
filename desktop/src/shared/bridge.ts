@@ -7,6 +7,7 @@ import type { SkillsBridge } from "./skills";
 import type { VaultApprovedMapping, VaultRestoreTarget, VaultRestoreViewState } from "./vaultRestore";
 import type { ZoomDirection, ZoomFactors, ZoomScope } from "./zoom";
 import type { ConfirmTaskCriterionWaiverRequest, ConfirmIssueBindingResumeRequest, ConfirmIssueAutonomyRequest, ConfirmIssueAutomationModeRequest, ConfirmIssueDecisionRequest, IssueConfirmationResponse } from "./issueConfirmation";
+import type { DiagnosticsBridge } from "./diagnostics";
 
 export type ConnectionPhase = "connecting" | "connected" | "disconnected";
 
@@ -25,6 +26,9 @@ export const IPC_CHANNELS = {
   message: "akra:message",
   connectionState: "akra:connection-state",
   ready: "akra:ready",
+  diagnosticsPreview: "akra:diagnostics-preview",
+  diagnosticsSave: "akra:diagnostics-save",
+  diagnosticsDiscard: "akra:diagnostics-discard",
   remoteOpen: "akra:remote-open",
   remoteClose: "akra:remote-close",
   remoteSend: "akra:remote-send",
@@ -405,6 +409,7 @@ export interface IssueAutomationPolicyFileRequest {
 }
 
 export interface AkraBridge {
+  readonly diagnostics: DiagnosticsBridge;
   revealStoragePath(request: { path: string; host: "local" }): Promise<void>;
   /** JSON-RPC 메시지 한 개를 Gateway 로 보낸다. */
   send(text: string): void;
