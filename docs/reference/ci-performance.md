@@ -2,6 +2,10 @@
 
 관련: [#2690](https://github.com/RefinedStone/codex-exec-loop/issues/2690).
 
+선머지 CI 실패 다섯 종류의 수정·검증 근거와 #2749 종료 판정은
+[2026-11-26 실패 후속 인수](../validation/ci-failure-followup-2026-11-26.md)에 따로 기록한다.
+그 회귀·진단 보강의 완료를 아래 성능 개선의 측정 결과로 간주하지 않는다.
+
 ## 수집 범위
 
 `Native PR Checks`는 기존 검사 명령을 `scripts/ci-performance.mjs run`으로 감싼다.
