@@ -1,5 +1,5 @@
 {"at":"2026-11-05T12:50:37+00:00","direction":"client","text":"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"akra/gateway/info\",\"params\":{}}"}
-{"at":"2026-11-05T12:50:37+00:00","direction":"gateway","text":"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"codexVersion\":\"codex-cli 0.159.0\",\"gatewayVersion\":\"1.3.5\",\"startedAt\":\"2026-11-05T12:50:30+00:00\",\"upstreamRestarts\":0}}"}
+{"at":"2026-11-05T12:50:37+00:00","direction":"gateway","text":"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"codexVersion\":\"codex-cli 0.171.0\",\"gatewayVersion\":\"1.3.5\",\"startedAt\":\"2026-11-05T12:50:30+00:00\",\"upstreamRestarts\":0}}"}
 {"at":"2026-11-05T12:50:37+00:00","direction":"client","text":"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"fixture\",\"version\":\"0\"},\"capabilities\":{\"experimentalApi\":false}}}"}
 {"at":"2026-11-05T12:50:37+00:00","direction":"gateway","text":"{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"codexHome\":\"/home/example/.codex\",\"platformFamily\":\"unix\",\"platformOs\":\"linux\",\"userAgent\":\"codex_cli_rs/0.159.0\"}}"}
 {"at":"2026-11-05T12:50:37+00:00","direction":"client","text":"{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"thread/list\",\"params\":{\"limit\":3}}"}

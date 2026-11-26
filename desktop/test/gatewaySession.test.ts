@@ -233,7 +233,7 @@ describe("desktop session over the fake gateway", () => {
     connection.start();
 
     await waitFor(() => (store.snapshot.folders?.length ?? 0) > 0);
-    expect(store.snapshot.gateway?.codexVersion).toBe("codex-cli 0.159.0");
+    expect(store.snapshot.gateway?.codexVersion).toBe("codex-cli 0.171.0");
     expect(store.snapshot.versionCheck?.matches).toBe(true);
     expect(store.snapshot.folders?.map((folder) => folder.cwd)).toEqual(["/work/example-app", "/work/other-lib"]);
     expect(fake.receivedMethods.slice(0, 2)).toEqual(["initialize", "initialized"]);
