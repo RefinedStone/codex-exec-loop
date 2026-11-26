@@ -807,6 +807,13 @@ impl Simulation {
     fn new(seed: u64) -> Self {
         let mut rng = SimRng::new(seed);
         let settings = ScenarioSettings::from_rng(&mut rng);
+        let mut simulation = Self::with_settings(rng, settings);
+        simulation.record(format!("seed {seed}, {settings:?}"));
+        simulation
+    }
+
+    /// 고정 재생은 난수를 거치지 않고 명시한 설정으로 같은 하네스를 조립한다.
+    fn with_settings(rng: SimRng, settings: ScenarioSettings) -> Self {
         let SimKernel {
             mut host,
             inbox,
@@ -816,7 +823,7 @@ impl Simulation {
         let kernel_log = Arc::new(SimKernelLog::default());
         host.runtime
             .attach_kernel_event_log(kernel_log.clone(), "/sim");
-        let mut simulation = Self {
+        Self {
             rng,
             settings,
             host,
@@ -850,9 +857,7 @@ impl Simulation {
             prompt_prepared_behind_turn: false,
             prompt_probably_queued: false,
             ledger: InvariantLedger::default(),
-        };
-        simulation.record(format!("seed {seed}, {settings:?}"));
-        simulation
+        }
     }
 
     /*
@@ -1228,8 +1233,13 @@ impl Simulation {
      * 새 대화는 중지가 끝나기 전에도 연다. 그 session 은 뒤에서 턴을 이어 간다.
      */
     fn submit_manual_turn(&mut self) {
-        self.manual_turns_sent += 1;
         let continues_viewed = self.viewed_thread.is_some() && self.rng.percent(50);
+        let prompt = format!("task {}", self.manual_turns_sent + 1);
+        self.submit_manual_turn_with(prompt, continues_viewed);
+    }
+
+    fn submit_manual_turn_with(&mut self, prompt: String, continues_viewed: bool) {
+        self.manual_turns_sent += 1;
         if !continues_viewed && self.viewed_thread.take().is_some() {
             self.record("client: open a new conversation".to_string());
             // TUI 는 새 대화를 열 때 자기 프롬프트 준비를 먼저 취소한다. thread 지정 준비는 취소되면 안 된다.
@@ -1237,7 +1247,6 @@ impl Simulation {
             self.send_command(AppCommand::InvalidateConversationLoad);
         }
         let thread_id = self.viewed_thread.clone();
-        let prompt = format!("task {}", self.manual_turns_sent);
         self.record(format!("client: submit '{prompt}' to {thread_id:?}"));
         self.send_command(AppCommand::SubmitTurn(Box::new(TurnSubmissionRequest {
             workspace_directory: WORKSPACE.to_string(),
@@ -1733,8 +1742,17 @@ impl Simulation {
      * 가짜는 한도와 상관없이 프롬프트를 답할 수 있으므로, 호스트와 core 의 두 번째 방어를 시험한다.
      */
     fn complete_evaluation(&mut self, correlation: PostTurnEvaluationCorrelation) {
+        let skip_auto_follow = self.rng.percent(30);
+        self.complete_evaluation_with(correlation, skip_auto_follow);
+    }
+
+    fn complete_evaluation_with(
+        &mut self,
+        correlation: PostTurnEvaluationCorrelation,
+        skip_auto_follow: bool,
+    ) {
         let mut execution = post_turn_execution(&correlation);
-        if self.rng.percent(30) {
+        if skip_auto_follow {
             execution.evaluation.action = PostTurnContinuationAction::SkipAutoFollow {
                 reason: PostTurnAutoFollowSkipReason::StopKeywordMatched,
             };
@@ -2168,3 +2186,5 @@ const FIXED_SEED_7_VALUES: [u64; 3] = [487, 804, 346];
 mod issue_collection;
 mod issue_decision;
 mod issue_triage;
+
+mod replay;

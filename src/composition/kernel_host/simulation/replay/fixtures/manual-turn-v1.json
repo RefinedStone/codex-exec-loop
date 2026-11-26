@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "name": "manual turn with an explicit evaluator stop",
+  "max_auto_turns": 1,
+  "steps": [
+    { "kind": "command", "command": { "kind": "open_client" } },
+    { "kind": "advance_time", "milliseconds": 0 },
+    { "kind": "effect_response", "response": { "kind": "session_catalog", "generation": 1 } },
+    { "kind": "advance_time", "milliseconds": 0 },
+    { "kind": "command", "command": { "kind": "submit_turn", "prompt": "fixed local simulation", "continue_viewed": false } },
+    { "kind": "advance_time", "milliseconds": 0 },
+    { "kind": "effect_response", "response": { "kind": "turn_started", "submission": 1 } },
+    { "kind": "advance_time", "milliseconds": 10 },
+    { "kind": "effect_response", "response": { "kind": "turn_completed", "submission": 1 } },
+    { "kind": "advance_time", "milliseconds": 10 },
+    { "kind": "effect_response", "response": { "kind": "evaluation", "generation": 1, "thread_id": "thread-1", "completed_turn_id": "turn-1", "skip_auto_follow": true } },
+    { "kind": "advance_time", "milliseconds": 10 }
+  ],
+  "expected": {
+    "elapsed_ms": 30,
+    "quiet": true,
+    "events": [
+      { "kind": "auto_follow_configured", "max_auto_turns": 1, "continuation_paused": false },
+      { "kind": "turn_submitted", "thread_id": "", "submission": 1, "origin": "manual" },
+      { "kind": "turn_started", "thread_id": "thread-1", "turn_id": "turn-1" },
+      { "kind": "turn_ended", "thread_id": "thread-1", "turn_id": "turn-1", "outcome": "completed" },
+      { "kind": "post_turn_routed", "thread_id": "thread-1", "completed_turn_id": "turn-1", "route": "no_continuation" }
+    ]
+  }
+}
