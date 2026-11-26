@@ -6,6 +6,10 @@
 #[path = "turn_submission_runtime/post_turn_execution.rs"]
 mod post_turn_execution;
 
+#[cfg(test)]
+#[path = "turn_submission_runtime/manual_preparation_test_fixture.rs"]
+mod manual_preparation_test_fixture;
+
 use crate::core::app::{
     AppCommand, AppEvent, CoreInput, CorePromptOrigin, ManualPromptPreparationAdmission,
     ManualPromptPreparationIntent, TurnSubmissionAdmission, TurnSubmissionRequest,
@@ -992,6 +996,7 @@ mod prompt_submit_diagnostics_tests {
 
 #[cfg(test)]
 mod tests {
+    use super::manual_preparation_test_fixture::controlled_workspace;
     use super::*;
     use crate::adapter::inbound::tui::app::test_helpers;
     use crate::adapter::inbound::tui::app::{
@@ -1002,6 +1007,7 @@ mod tests {
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
     use crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort;
+    use crate::application::port::outbound::planning_workspace_port::PlanningWorkspacePort;
     use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
     use crate::application::port::outbound::startup_probe_port::{
         AppServerStartupContext, StartupProbePort,
@@ -1018,6 +1024,7 @@ mod tests {
     use crate::application::service::session_service::SessionService;
     use crate::application::service::startup_service::StartupService;
     use crate::core::app::{CoreInput, CorePromptOrigin, StartupReadySnapshot, TurnStreamEvent};
+    use crate::core::native_client_port::NativeClientDispatchOutcome;
     use crate::domain::conversation::{
         ConversationReasoningEffort, ConversationRuntimeControlTruth, ConversationSnapshot,
         ConversationTurnOptions,
@@ -1141,10 +1148,18 @@ mod tests {
     }
 
     fn make_test_app(workspace: &TempWorkspace) -> NativeTuiApp {
+        make_test_app_with_planning_workspace(
+            workspace,
+            Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+        )
+    }
+
+    fn make_test_app_with_planning_workspace(
+        workspace: &TempWorkspace,
+        planning_workspace: Arc<dyn PlanningWorkspacePort>,
+    ) -> NativeTuiApp {
         let codex_port = Arc::new(FakeAppServerPort);
-        let planning = test_helpers::test_planning_services(Arc::new(
-            FilesystemPlanningWorkspaceAdapter::new(),
-        ));
+        let planning = test_helpers::test_planning_services(planning_workspace);
         let parallel_mode_control_plane_composition =
             test_helpers::test_parallel_mode_control_plane_composition_with_worker(
                 test_helpers::test_parallel_mode_service(),
@@ -1261,17 +1276,81 @@ mod tests {
     }
 
     fn poll_manual_prompt_preparation_completion(app: &mut NativeTuiApp) {
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while app.conversation.pending_manual_prompt_preparation.is_some()
-            && Instant::now() < deadline
-        {
-            app.poll_client_runtime_events(16);
-            std::thread::yield_now();
+        wait_manual_prompt_preparation_completion(app, Duration::from_secs(2), || {
+            "workspace_phase=filesystem_adapter".to_string()
+        })
+        .unwrap_or_else(|diagnostic| panic!("{diagnostic}"));
+    }
+
+    fn wait_manual_prompt_preparation_completion(
+        app: &mut NativeTuiApp,
+        timeout: Duration,
+        workspace_progress: impl Fn() -> String,
+    ) -> std::result::Result<(), String> {
+        let started = Instant::now();
+        let mut last_progress = started;
+        let mut last_event = "none".to_string();
+        let mut processed_events = 0;
+        while let Some(pending) = &app.conversation.pending_manual_prompt_preparation {
+            let remaining = timeout.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                return Err(format!(
+                    "manual prompt preparation timed out: request_id={} generation={} \
+                     phase=awaiting_core_completion elapsed_ms={} \
+                     last_progress_ago_ms={} processed_events={} last_event={}; {}",
+                    pending.correlation.request_id,
+                    pending.correlation.generation,
+                    started.elapsed().as_millis(),
+                    last_progress.elapsed().as_millis(),
+                    processed_events,
+                    last_event,
+                    workspace_progress(),
+                ));
+            }
+
+            // Use the real host's mailbox wait, so an idle test yields its CPU
+            // until a completion arrives. The existing two-second watchdog stays.
+            let outcomes = app.runtime.client_runtime.run_host_cycle(
+                Instant::now(),
+                remaining.min(Duration::from_millis(10)),
+                16,
+            );
+            for outcome in outcomes {
+                let (core_events, parallel_event_count) = match &outcome {
+                    NativeClientDispatchOutcome::Core(core) => (core.events.as_slice(), 0),
+                    NativeClientDispatchOutcome::Parallel(parallel) => {
+                        (&[][..], parallel.presentation_events.len())
+                    }
+                    NativeClientDispatchOutcome::Combined { core, parallel } => {
+                        (core.events.as_slice(), parallel.presentation_events.len())
+                    }
+                };
+                for event in core_events {
+                    last_event = match event {
+                        AppEvent::ManualPromptPrepared(result) => format!(
+                            "ManualPromptPrepared(request_id={},generation={})",
+                            result.correlation().request_id,
+                            result.correlation().generation,
+                        ),
+                        AppEvent::ManualPromptPreparationAdmissionResolved(_) => {
+                            "ManualPromptPreparationAdmissionResolved".to_string()
+                        }
+                        // Discriminants identify unrelated progress without
+                        // printing prompt text, workspace paths or error payloads.
+                        _ => format!("core::{:?}", std::mem::discriminant(event)),
+                    };
+                }
+                if !core_events.is_empty() || parallel_event_count > 0 {
+                    processed_events += core_events.len() + parallel_event_count;
+                    last_progress = Instant::now();
+                    if core_events.is_empty() {
+                        last_event = "parallel_presentation".to_string();
+                    }
+                }
+                app.apply_native_client_dispatch_outcome(outcome);
+            }
         }
-        assert!(
-            app.conversation.pending_manual_prompt_preparation.is_none(),
-            "manual prompt preparation should complete through the Core mailbox"
-        );
+        Ok(())
     }
 
     fn arm_manual_prompt_preparation(
@@ -1463,7 +1542,9 @@ mod tests {
     #[test]
     fn manual_preparation_waits_for_startup_before_planning_side_effects() {
         let workspace = TempWorkspace::new("turn-submit-manual-startup-gate");
-        let mut pending_app = make_test_app(&workspace);
+        let (planning_workspace, mut gate) = controlled_workspace();
+        let mut pending_app =
+            make_test_app_with_planning_workspace(&workspace, planning_workspace.clone());
         pending_app.shell.chrome.startup_state = StartupState::Loading;
         set_input(&mut pending_app, "ship it");
 
@@ -1485,11 +1566,35 @@ mod tests {
             "ship it"
         );
         assert!(ready_conversation(&pending_app).messages.is_empty());
+        assert_eq!(planning_workspace.write_attempts(), 0);
+        assert_eq!(planning_workspace.active_writes(), 0);
 
         pending_app.shell.chrome.startup_state =
             StartupState::Ready(startup_ready_snapshot(workspace.path_str(), true));
         pending_app.resolve_startup_submit_queue();
-        poll_manual_prompt_preparation_completion(&mut pending_app);
+        gate.wait_until_blocked(
+            &pending_app
+                .conversation
+                .pending_manual_prompt_preparation
+                .as_ref()
+                .expect("startup should start preparation")
+                .correlation,
+        );
+        assert!(
+            pending_app
+                .conversation
+                .pending_manual_prompt_preparation
+                .is_some()
+        );
+        assert!(ready_conversation(&pending_app).messages.is_empty());
+        assert_eq!(planning_workspace.write_attempts(), 1);
+        assert_eq!(planning_workspace.active_writes(), 0);
+
+        gate.release();
+        wait_manual_prompt_preparation_completion(&mut pending_app, Duration::from_secs(2), || {
+            planning_workspace.progress()
+        })
+        .unwrap_or_else(|diagnostic| panic!("{diagnostic}"));
 
         assert!(
             !ready_conversation(&pending_app)
@@ -1498,6 +1603,49 @@ mod tests {
         );
         assert_eq!(ready_conversation(&pending_app).composer.input_buffer, "");
         assert_eq!(ready_conversation(&pending_app).messages.len(), 1);
+        assert!(planning_workspace.active_writes() > 0);
+    }
+
+    #[test]
+    fn blocked_manual_preparation_reports_request_and_stage_without_prompt_text() {
+        let workspace = TempWorkspace::new("turn-submit-manual-blocked");
+        let (planning_workspace, mut gate) = controlled_workspace();
+        let mut app = make_test_app_with_planning_workspace(&workspace, planning_workspace.clone());
+        let sensitive_prompt = "test-only-private-prompt-must-not-be-in-diagnostics";
+        set_input(&mut app, sensitive_prompt);
+        app.submit_manual_prompt_from_text(sensitive_prompt.to_string());
+        let correlation = app
+            .conversation
+            .pending_manual_prompt_preparation
+            .as_ref()
+            .expect("worker should be pending")
+            .correlation
+            .clone();
+        gate.wait_until_blocked(&correlation);
+
+        let diagnostic =
+            wait_manual_prompt_preparation_completion(&mut app, Duration::from_millis(10), || {
+                planning_workspace.progress()
+            })
+            .expect_err("a held stage cannot complete through the Core mailbox");
+
+        assert!(diagnostic.contains(&format!("request_id={}", correlation.request_id)));
+        assert!(diagnostic.contains(&format!("generation={}", correlation.generation)));
+        assert!(diagnostic.contains("phase=awaiting_core_completion"));
+        assert!(diagnostic.contains("workspace_phase=write_blocked"));
+        assert!(diagnostic.contains("last_event="));
+        assert!(diagnostic.contains("last_progress_ago_ms="));
+        assert!(!diagnostic.contains(sensitive_prompt));
+        assert!(ready_conversation(&app).messages.is_empty());
+        assert_eq!(planning_workspace.active_writes(), 0);
+
+        gate.release();
+        wait_manual_prompt_preparation_completion(&mut app, Duration::from_secs(2), || {
+            planning_workspace.progress()
+        })
+        .unwrap_or_else(|diagnostic| panic!("{diagnostic}"));
+        assert_eq!(ready_conversation(&app).messages.len(), 1);
+        assert!(planning_workspace.active_writes() > 0);
     }
 
     #[test]
@@ -1634,18 +1782,35 @@ mod tests {
     #[test]
     fn resolve_startup_submit_queue_replays_ready_buffered_prompt() {
         let workspace = TempWorkspace::new("turn-submit-startup-replay");
-        let mut app = make_test_app(&workspace);
+        let (planning_workspace, mut gate) = controlled_workspace();
+        let mut app = make_test_app_with_planning_workspace(&workspace, planning_workspace.clone());
         set_input(&mut app, "  queued prompt  ");
         app.dispatch_conversation_input(ConversationComposerEvent::StartupSubmitArmed {
             status_text: "queued".to_string(),
         });
 
         app.resolve_startup_submit_queue();
-        poll_manual_prompt_preparation_completion(&mut app);
+        gate.wait_until_blocked(
+            &app.conversation
+                .pending_manual_prompt_preparation
+                .as_ref()
+                .expect("buffered prompt should start preparation")
+                .correlation,
+        );
+        assert_eq!(planning_workspace.write_attempts(), 1);
+        assert_eq!(planning_workspace.active_writes(), 0);
+        assert!(ready_conversation(&app).messages.is_empty());
+
+        gate.release();
+        wait_manual_prompt_preparation_completion(&mut app, Duration::from_secs(2), || {
+            planning_workspace.progress()
+        })
+        .unwrap_or_else(|diagnostic| panic!("{diagnostic}"));
 
         let conversation = ready_conversation(&app);
         assert!(app.conversation.pending_manual_prompt_preparation.is_none());
         assert_eq!(conversation.composer.input_buffer, "");
+        assert_eq!(conversation.messages.len(), 1);
         assert_eq!(
             conversation
                 .messages
@@ -1866,16 +2031,49 @@ mod tests {
     #[test]
     fn rapid_double_enter_after_serial_preparation_does_not_duplicate_submission() {
         let workspace = TempWorkspace::new("turn-submit-double-enter");
-        let mut app = make_test_app(&workspace);
+        let (planning_workspace, mut gate) = controlled_workspace();
+        let mut app = make_test_app_with_planning_workspace(&workspace, planning_workspace.clone());
         set_input(&mut app, "ship it");
 
         app.submit_manual_prompt_from_text("ship it".to_string());
-        poll_manual_prompt_preparation_completion(&mut app);
+        let correlation = app
+            .conversation
+            .pending_manual_prompt_preparation
+            .as_ref()
+            .expect("worker should be pending")
+            .correlation
+            .clone();
+        gate.wait_until_blocked(&correlation);
+
+        app.start_turn_submission();
+        assert_eq!(
+            app.conversation
+                .pending_manual_prompt_preparation
+                .as_ref()
+                .expect("same preparation should remain pending")
+                .correlation,
+            correlation,
+        );
+        assert_eq!(planning_workspace.write_attempts(), 1);
+        assert_eq!(planning_workspace.active_writes(), 0);
+        assert!(ready_conversation(&app).messages.is_empty());
+
+        gate.release();
+        wait_manual_prompt_preparation_completion(&mut app, Duration::from_secs(2), || {
+            planning_workspace.progress()
+        })
+        .unwrap_or_else(|diagnostic| panic!("{diagnostic}"));
+        let write_attempts = planning_workspace.write_attempts();
+        let active_writes = planning_workspace.active_writes();
+        assert!(active_writes > 0);
 
         app.start_turn_submission();
 
         assert!(app.conversation.pending_manual_prompt_preparation.is_none());
         assert_eq!(ready_conversation(&app).status_text, "starting turn");
+        assert_eq!(ready_conversation(&app).messages.len(), 1);
+        assert_eq!(planning_workspace.write_attempts(), write_attempts);
+        assert_eq!(planning_workspace.active_writes(), active_writes);
     }
 
     #[test]
