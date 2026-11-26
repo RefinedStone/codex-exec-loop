@@ -23,7 +23,7 @@ import type { ThreadStatus } from "../../shared/protocol/generated/v2/ThreadStat
 import type { ThreadTurnsListResponse } from "../../shared/protocol/generated/v2/ThreadTurnsListResponse";
 import type { UserInput } from "../../shared/protocol/generated/v2/UserInput";
 import { GENERATED_CODEX_VERSION } from "../../shared/protocol/version";
-import { type ApprovalDecision, approvalKey, toPendingApproval } from "../conversation/approvals";
+import { type ApprovalDecision, approvalKey, type PendingApproval, permissionsResponse, toPendingApproval } from "../conversation/approvals";
 import { FrameBatcher, type FrameScheduler } from "../conversation/frameBatcher";
 import {
   applyNotifications,
@@ -248,7 +248,7 @@ export class DesktopSession {
   /** 분기 결과를 모르는 원본이다. 다시 분기하기 전에 사용자에게 묻는다. */
   private readonly unknownForkSources = new Set<string>();
   /** 사용자의 답을 기다리는 승인 요청의 응답 함수이다. 키는 요청 id 이다. */
-  private readonly approvalAnswers = new Map<string, (answer: unknown) => void>();
+  private readonly approvalAnswers = new Map<string, { approval: PendingApproval; answer: (answer: unknown) => void }>();
   /** 커널 패널의 연결이다 (plan 18 K3-6). 같은 Gateway 접속을 쓴다. */
   private readonly kernel: KernelConnection;
   readonly taskAuthoring: TaskAuthoringController;
@@ -741,11 +741,18 @@ export class DesktopSession {
 
   /** 승인 요청에 답한다. 다른 창이 먼저 답했으면 이미 닫혀 있으므로 아무것도 하지 않는다. */
   answerApproval(requestId: JsonRpcId, decision: ApprovalDecision): void {
+    const pending = this.approvalAnswers.get(approvalKey(requestId));
+    const permissions = pending?.approval.permissions;
+    this.answerServerRequest(requestId, permissions ? permissionsResponse(permissions, decision) : { decision });
+  }
+
+  /** 서버 요청에 그 요청의 응답 형식으로 답한다 (#2836). 이미 닫힌 요청이면 아무것도 하지 않는다. */
+  answerServerRequest(requestId: JsonRpcId, result: unknown): void {
     const key = approvalKey(requestId);
-    const answer = this.approvalAnswers.get(key);
+    const pending = this.approvalAnswers.get(key);
     this.approvalAnswers.delete(key);
     this.store.removeApproval(requestId);
-    answer?.({ decision });
+    pending?.answer(result);
   }
 
   /** 이 세션에서 지금 보낼 수 있는지이다. 로컬은 늘 보낼 수 있고, 원격은 사용자가 허락한 뒤에만 보낸다. */
@@ -786,24 +793,28 @@ export class DesktopSession {
   private handleServerRequest(method: string, params: unknown, id: JsonRpcId): Promise<unknown> {
     const approval = this.canSend() ? toPendingApproval(method, params, id) : null;
     if (!approval) {
+      // 조용히 실패하지 않는다: 거절한 요청과 이유를 사용자에게 알린다.
+      this.store.notice?.(this.canSend()
+        ? `Akra Desktop 이 처리하지 않는 서버 요청을 거절했습니다: ${method}`
+        : `보내기를 허락하지 않은 원격 세션이라 서버 요청을 거절했습니다: ${method}`);
       return Promise.reject(new JsonRpcError(-32601, `Akra Desktop does not handle ${method} yet`));
     }
     this.store.addApproval(approval);
-    return new Promise((resolve) => this.approvalAnswers.set(approvalKey(id), resolve));
+    return new Promise((resolve) => this.approvalAnswers.set(approvalKey(id), { approval, answer: resolve }));
   }
 
   /** 승인 요청이 다른 곳에서 닫혔다. 화면에서 지우고 응답은 보내지 않는다 (Q-03). */
   private resolveApprovalElsewhere(requestId: JsonRpcId): void {
     const key = approvalKey(requestId);
-    const answer = this.approvalAnswers.get(key);
+    const pending = this.approvalAnswers.get(key);
     this.approvalAnswers.delete(key);
     this.store.removeApproval(requestId);
-    answer?.(NO_RESPONSE);
+    pending?.answer(NO_RESPONSE);
   }
 
   private dropPendingApprovals(): void {
-    for (const answer of this.approvalAnswers.values()) {
-      answer(NO_RESPONSE);
+    for (const pending of this.approvalAnswers.values()) {
+      pending.answer(NO_RESPONSE);
     }
     this.approvalAnswers.clear();
     this.store.clearApprovals();

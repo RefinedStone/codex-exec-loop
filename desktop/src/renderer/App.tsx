@@ -435,7 +435,7 @@ export function App() {
   }, [theme]);
 
   useEffect(() => {
-    const created = new DesktopSession(window.akra, desktopSessionStore(), CLIENT_VERSION);
+    const created = new DesktopSession(window.akra, { ...desktopSessionStore(), notice: toast }, CLIENT_VERSION);
     const unsubscribe = created.onVersionProviderReady(() => setDocumentsRefresh((value) => value + 1));
     created.start();
     session.current = created;
@@ -872,7 +872,8 @@ export function App() {
                   onDraftTask={kernelPhase === "attached" && attachedWorkspace === openCwd ? openTaskEditor : undefined} />
                 {session.current && <ThreadCompactionControl key={openThreadId ?? ""} controller={session.current.compaction} />}
                 {/* 스레드마다 새로 만든다. 전송 중 표시와 오류가 다른 스레드의 입력창으로 넘어가지 않는다. 초안은 `uiStore` 에 남는다. */}
-                <Composer key={openThreadId ?? ""} actions={composerActions} above={<ApprovalPrompt onAnswer={(requestId, decision) => session.current?.answerApproval(requestId, decision)} />} />
+                <Composer key={openThreadId ?? ""} actions={composerActions} above={<ApprovalPrompt onAnswer={(requestId, decision) => session.current?.answerApproval(requestId, decision)}
+                  onRespond={(requestId, result) => session.current?.answerServerRequest(requestId, result)} />} />
               </>
             )}
             {view === "remote" && remoteHost && remoteVisible && (

@@ -919,6 +919,13 @@ Akra Desktop (`desktop/`) runs from source as a development build; it has no pac
   retried; the section shows a login message when the reason is `cloud login rejected`. The command and
   the section appear only when the Gateway registers a remote host
   (`desktop/src/main/gatewayConnection.ts`, `desktop/src/renderer/session/`).
+- Desktop server requests (#2836): above the composer, Desktop shows a card for command and file-change
+  approvals, extra-permission approvals (`item/permissions/requestApproval`; accept grants the requested
+  profile for the turn or session, decline grants nothing), tool questions (`item/tool/requestUserInput`),
+  and MCP elicitation (`mcpServer/elicitation/request`; form fields of string, number, integer, boolean,
+  and enum types, or a URL to visit). A form with a field type Desktop cannot draw offers only decline and
+  cancel. `serverRequest/resolved` removes a card that another connection answered. Any other server
+  request is refused with `-32601`, and Desktop shows a notice that names the method.
 - Desktop installed skills (#2383): the "스킬" panel lists installed skills, one row per runtime, host
   (`local` only), install scope, and install path. Codex rows come from `skills/list`; Claude Code rows
   come from `~/.claude/skills` and `<work folder>/.claude/skills` on disk (install state only). Only a
