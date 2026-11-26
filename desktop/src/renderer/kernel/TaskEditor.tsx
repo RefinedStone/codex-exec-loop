@@ -66,8 +66,10 @@ export function TaskEditor({ workspace, source, controller, onClose, onSaved }: 
     try {
       const answer = await controller.read(workspace);
       if (!alive.current) return;
+      // 편집 대상 ID는 조회가 성공한 뒤에만 snapshot revision·필드와 함께 바꾼다.
       setSnapshot(answer);
       if (id) {
+        setTaskId(id);
         const task = answer.tasks.find((candidate) => candidate.task_id === id);
         if (!task) throw new Error("이 작업을 현재 원본에서 찾을 수 없습니다. 작업 ID: " + id);
         setFields(structuredClone(task.fields));
@@ -142,7 +144,7 @@ export function TaskEditor({ workspace, source, controller, onClose, onSaved }: 
       <form className="task-editor-id-lookup" onSubmit={(event) => {
         event.preventDefault();
         if (!lookupId.trim() || busy || reading || uncertain) return;
-        const id = lookupId.trim(); setTaskId(id); void readTask(id);
+        void readTask(lookupId.trim());
       }}>
         <label htmlFor="task-editor-lookup">작업 ID로 열기</label>
         <input id="task-editor-lookup" value={lookupId} onChange={(event) => setLookupId(event.target.value)} disabled={busy || reading || uncertain} />
@@ -182,7 +184,7 @@ export function TaskEditor({ workspace, source, controller, onClose, onSaved }: 
         </footer>
       </form>
       {taskId && <TaskResultView workspace={workspace} taskId={taskId} revision={snapshot?.planning_revision} controller={controller}
-        onOpenTask={busy || reading || uncertain ? undefined : (id) => { setTaskId(id); void readTask(id); }} />}
+        onOpenTask={busy || reading || uncertain ? undefined : (id) => void readTask(id)} />}
     </dialog>
   );
 }
