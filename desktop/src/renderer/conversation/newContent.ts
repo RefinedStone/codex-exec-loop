@@ -21,3 +21,8 @@ export function restoreStep(turnIds: readonly string[], targetTurnId: string | n
   if (index >= 0) return { kind: "scroll", index };
   return hasOlder && olderPagesRead < RESTORE_MAX_OLDER_PAGES ? { kind: "loadOlder" } : { kind: "bottom" };
 }
+
+/** 떠날 때 남길 기억이다. 대화를 읽어 복원을 마치기 전에 떠났으면 이전 기억을 지우지 않는다. */
+export function memoryOnLeave<T>(previous: T | undefined, restored: boolean, next: T): T | undefined {
+  return restored ? next : previous;
+}

@@ -11,7 +11,7 @@ import type { TaskDraftSource } from "../kernel/TaskEditor";
 import { ConversationStoreContext, useConversationStore } from "../session/desktopStore";
 import { openPanel, useUiStore } from "../session/uiStore";
 import { copyText } from "./copyText";
-import { newContentTurnId, restoreStep } from "./newContent";
+import { memoryOnLeave, newContentTurnId, restoreStep } from "./newContent";
 import { diffFileFromChange, totalCounts, turnDiffFiles, type DiffFile } from "./diff";
 import { DiffCounts, DiffFileList } from "./DiffView";
 import { findTurns, matchRanges } from "./find";
@@ -346,7 +346,8 @@ function ThreadConversation({ threadId, onLoadOlder, onDraftTask }: Conversation
   const latestTurnId = useRef<string | null>(null);
   latestTurnId.current = turns.at(-1)?.id ?? null;
   useEffect(() => () => {
-    threadViewMemory.set(threadId, { position: position.current, lastSeenTurnId: latestTurnId.current });
+    const memory = memoryOnLeave(threadViewMemory.get(threadId), restored.current, { position: position.current, lastSeenTurnId: latestTurnId.current });
+    if (memory) threadViewMemory.set(threadId, memory);
   }, [threadId]);
 
   // 내용이 바뀔 때마다, 맨 아래를 보고 있었으면 맨 아래로 간다. 이전 턴을 붙였으면 보던 턴으로 돌아간다.
