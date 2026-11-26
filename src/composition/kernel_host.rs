@@ -211,6 +211,11 @@ enum KernelHostInput {
     },
     #[cfg(test)]
     Inputs(Vec<CoreInput>),
+    #[cfg(test)]
+    PauseForTest {
+        entered: Sender<()>,
+        release: Receiver<()>,
+    },
     Query {
         reply: Sender<KernelHostView>,
     },
@@ -293,6 +298,16 @@ impl KernelHost {
         let (reply, answer) = mpsc::channel();
         self.inbox.send(KernelHostInput::Query { reply })?;
         wait_reply(&answer, timeout)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pause_for_test(
+        &self,
+        entered: Sender<()>,
+        release: Receiver<()>,
+    ) -> Result<(), KernelCallError> {
+        self.inbox
+            .send(KernelHostInput::PauseForTest { entered, release })
     }
 
     pub(crate) fn start(runtime: NativeClientRuntime) -> std::io::Result<Self> {
@@ -870,6 +885,14 @@ impl KernelHostLoop {
                     .kernel_operation(op_id)
                     .map_err(|error| format!("{error:#}"));
                 let _ = reply.send(status);
+            }
+            #[cfg(test)]
+            KernelHostInput::PauseForTest { entered, release } => {
+                let _ = entered.send(());
+                assert!(
+                    release.recv_timeout(Duration::from_secs(10)).is_ok(),
+                    "host test barrier release missing"
+                );
             }
             KernelHostInput::Query { reply } => {
                 let _ = reply.send(KernelHostView {

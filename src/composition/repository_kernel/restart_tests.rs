@@ -11,10 +11,14 @@ use crate::domain::issue_automation::intervention::{
 use std::path::Path;
 use std::sync::atomic::AtomicUsize;
 
+mod delays;
 mod fixture;
 mod integration;
+mod observation;
 mod process;
+mod progress;
 use fixture::*;
+use progress::{HOST_WAIT, Phase, Progress, RESTART_WAIT};
 
 #[test]
 fn discovery_reads_existing_identity_without_initializing_missing_or_replaced_repositories() {
@@ -104,19 +108,21 @@ fn no_client_boot_collects_and_coordinates_once_across_restart_without_model_tur
         f.registry.list().unwrap(),
         std::slice::from_ref(&f.candidate)
     );
+    let pause = f.progress.pause(Phase::DiscoveryStarted);
     let first = f.kernels();
     assert_eq!(
         f.restore(&first).unwrap(),
         RepositoryRestartOutcome::Started
     );
-    wait_until(|| {
-        f.work().is_some_and(|work| {
-            work.task_ids == ["restart-task"]
-                && work.blocked_reason == Some(IssueWorkBlockReason::ExecutionDisabled)
-                && work.permit_source == Some("a".repeat(40))
-        })
+    f.wait_pause(&pause);
+    assert!(f.work().is_none());
+    assert_eq!(f.execution.0.lock().unwrap().submissions, 0);
+    pause.release();
+    let before = f.wait_restart_work("initial durable work", |work| {
+        work.task_ids == ["restart-task"]
+            && work.blocked_reason == Some(IssueWorkBlockReason::ExecutionDisabled)
+            && work.permit_source == Some("a".repeat(40))
     });
-    let before = f.work().unwrap();
     assert_eq!(
         before.blocked_reason,
         Some(IssueWorkBlockReason::ExecutionDisabled)
@@ -126,19 +132,7 @@ fn no_client_boot_collects_and_coordinates_once_across_restart_without_model_tur
     assert_eq!(f.execution.0.lock().unwrap().submissions, 1);
     let permits = f.execution.0.lock().unwrap().grants.clone();
     assert_eq!(permits.len(), 1);
-    assert!(
-        !first
-            .entry(&f.candidate.repository_key)
-            .unwrap()
-            .lock()
-            .as_ref()
-            .unwrap()
-            .host
-            .observe(Duration::from_secs(5))
-            .unwrap()
-            .parallel
-            .enabled
-    );
+    assert!(!f.observe_host(&first).parallel.enabled);
     first.shutdown();
 
     // New adapters and services read the persisted registry and ledger. Only the fake
@@ -158,11 +152,8 @@ fn no_client_boot_collects_and_coordinates_once_across_restart_without_model_tur
             .unwrap(),
         RepositoryRestartOutcome::Started,
     );
-    wait_until(|| reopened.source.discoveries.load(Ordering::SeqCst) > 0);
-    wait_until(|| {
-        reopened
-            .work()
-            .is_some_and(|work| work.task_ids == before.task_ids)
+    reopened.wait_restart_work("reopened durable work", |work| {
+        work.task_ids == before.task_ids
     });
     let (client, key, root) = second
         .attach_with_workspace_root(&reopened.workspace, false)
