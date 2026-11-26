@@ -8,7 +8,9 @@ use rand::{RngCore, rngs::OsRng};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-use crate::application::port::outbound::delegation_store_port::{DelegationStorePort, Job};
+use crate::application::port::outbound::delegation_store_port::{
+    DelegationStorePort, DelegationUsageProjection, Job, SubmissionContext,
+};
 use crate::domain::delegation::policy::{DEFAULT_DEADLINE_MS, Route};
 use crate::domain::delegation::{
     ChatSession, Delegation, Delivery, EndReason, Evidence, EvidenceSource, MyTurn, Phase, State,
@@ -168,15 +170,23 @@ impl DelegationStore {
 }
 
 impl DelegationStorePort for DelegationStore {
-    fn submit_session(
+    fn submit_task_session(
         &self,
         key: &str,
         instruction: &str,
         caller: &str,
         route: Result<Route>,
         session: ChatSession,
-        account_digest: Option<&[u8]>,
+        context: SubmissionContext<'_>,
     ) -> Result<Delegation> {
+        let SubmissionContext {
+            account_digest,
+            task_id,
+        } = context;
+        if let Some(task_id) = task_id {
+            crate::domain::planning::evidence::validate_evidence_identifier(task_id)
+                .map_err(anyhow::Error::msg)?;
+        }
         if key.trim().is_empty() || key.len() > 128 {
             bail!("idempotency_key must contain 1 to 128 bytes");
         }
@@ -194,7 +204,10 @@ impl DelegationStorePort for DelegationStore {
             .optional()?;
         if let Some((original, view)) = existing {
             let existing: Delegation = serde_json::from_str(&view)?;
-            if original != instruction || existing.session != session {
+            if original != instruction
+                || existing.session != session
+                || existing.task_id.as_deref() != task_id
+            {
                 bail!("idempotency_key already belongs to another delegation request");
             }
             return Ok(existing);
@@ -219,10 +232,48 @@ impl DelegationStorePort for DelegationStore {
             caller,
             &route,
             session,
-            account_digest,
+            SubmissionContext {
+                account_digest,
+                task_id,
+            },
         )?;
         tx.commit()?;
         Ok(view)
+    }
+
+    fn task_usage(&self, task_id: &str) -> Result<DelegationUsageProjection> {
+        if !self.exists() {
+            return Ok(DelegationUsageProjection {
+                delegations: Vec::new(),
+                unlinked: 0,
+                truncated: false,
+            });
+        }
+        let db = Connection::open_with_flags(
+            &self.0,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )?;
+        db.busy_timeout(Duration::from_secs(2))?;
+        let unlinked: u64 = db.query_row(
+            "SELECT count(*) FROM delegation WHERE json_extract(view,'$.task_id') IS NULL",
+            [],
+            |row| row.get(0),
+        )?;
+        let mut statement = db.prepare(
+            "SELECT view FROM delegation
+            WHERE json_extract(view,'$.task_id')=?1 ORDER BY rowid LIMIT 4097",
+        )?;
+        let mut delegations = statement
+            .query_map([task_id], |row| row.get::<_, String>(0))?
+            .map(|row| Ok(serde_json::from_str::<Delegation>(&row?)?))
+            .collect::<Result<Vec<_>>>()?;
+        let truncated = delegations.len() > 4096;
+        delegations.truncate(4096);
+        Ok(DelegationUsageProjection {
+            delegations,
+            unlinked,
+            truncated,
+        })
     }
 
     fn find(&self, id: &str) -> Result<Option<Delegation>> {
@@ -335,6 +386,10 @@ impl DelegationStorePort for DelegationStore {
     ) -> Result<bool> {
         let mut db = self.open()?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure!(
+            next.task_id == old.task_id,
+            "delegation task identity cannot change"
+        );
         let stored_view: Option<String> = tx
             .query_row(
                 "SELECT view FROM delegation WHERE id = ?1",
@@ -567,7 +622,10 @@ impl DelegationStorePort for DelegationStore {
             &view.caller,
             &route,
             view.session,
-            account_digest.as_deref(),
+            SubmissionContext {
+                account_digest: account_digest.as_deref(),
+                task_id: view.task_id.as_deref(),
+            },
         )?;
         tx.execute(
             "INSERT INTO delegation_retry VALUES (?1, ?2, ?3)",
@@ -663,8 +721,12 @@ fn insert(
     caller: &str,
     route: &Route,
     session: ChatSession,
-    account_digest: Option<&[u8]>,
+    context: SubmissionContext<'_>,
 ) -> Result<Delegation> {
+    let SubmissionContext {
+        account_digest,
+        task_id,
+    } = context;
     let now = now_ms();
     let (running, started): (u32, u32) = db.query_row(
         "SELECT coalesce(sum(active = 1 OR stop_pending = 1), 0),
@@ -680,6 +742,7 @@ fn insert(
     let view = Delegation {
         id,
         caller: caller.to_owned(),
+        task_id: task_id.map(str::to_owned),
         state: State::Queued,
         delivery: Delivery::NotSent,
         phase: Phase::Unknown,
@@ -744,6 +807,40 @@ mod tests {
         std::fs::create_dir(&directory).unwrap();
         let store = DelegationStore::new(directory.clone());
         (TestDirectory(directory), store)
+    }
+
+    #[test]
+    fn task_usage_delegation_scope_is_idempotent_and_retry_keeps_it() {
+        let (_directory, store) = ledger();
+        let submit = |task_id| {
+            store.submit_task_session(
+                "task-key",
+                "explain",
+                "Desktop",
+                Ok(Route::default()),
+                ChatSession::New,
+                SubmissionContext {
+                    account_digest: None,
+                    task_id,
+                },
+            )
+        };
+        let original = submit(Some("task-a")).unwrap();
+        assert_eq!(submit(Some("task-a")).unwrap().id, original.id);
+        assert!(submit(Some("task-b")).is_err());
+        assert!(submit(None).is_err());
+        assert_eq!(store.task_usage("task-a").unwrap().delegations.len(), 1);
+        let mut rebound = original.clone();
+        rebound.task_id = Some("task-b".into());
+        assert!(store.update(&original, &mut rebound, None, false).is_err());
+        store.cancel(&original.id).unwrap();
+        let retried = store.retry(&original.id, "retry-task").unwrap().unwrap();
+        assert_eq!(retried.task_id.as_deref(), Some("task-a"));
+        store.submit("old", "unlinked", "Desktop").unwrap();
+        let projection = store.task_usage("task-a").unwrap();
+        assert_eq!(projection.delegations.len(), 2);
+        assert_eq!(projection.unlinked, 1);
+        assert!(store.task_usage("task-b").unwrap().delegations.is_empty());
     }
 
     fn insert_prerelease_active_row(store: &DelegationStore) -> Delegation {

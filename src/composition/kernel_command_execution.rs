@@ -505,6 +505,11 @@ impl CommandOnlyKernel {
                 Box::new(super::task_result::query(&self.workspace, task_id)?),
             ))?);
         }
+        if let Some(task_id) = query.task_usage_id().map_err(protocol_error)? {
+            return Ok(serde_json::to_value(KernelQueryAnswer::TaskUsage(
+                super::task_usage::query(&self.workspace, task_id)?,
+            ))?);
+        }
         if let Some(evidence_query) = query.task_evidence_request().map_err(protocol_error)? {
             return Ok(serde_json::to_value(KernelQueryAnswer::TaskEvidence(
                 super::task_evidence::query(&self.workspace, &evidence_query)?,
@@ -811,6 +816,7 @@ mod tests {
     mod issue_decision;
     mod issue_intervention;
     mod issue_queries;
+    mod task_usage;
     mod task_verification;
     mod telegram_issue;
     use super::*;

@@ -346,6 +346,20 @@ pub enum KernelEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         op_id: Option<i64>,
     },
+    /// A prepared task owns this exact operation; never infer ownership from a thread title.
+    TaskExecutionLinked {
+        task_id: String,
+        thread_id: String,
+        op_id: i64,
+    },
+    /// Accepted app-server usage; numeric counters only, no prompt or result content.
+    TurnUsageObserved {
+        thread_id: String,
+        turn_id: String,
+        op_id: Option<i64>,
+        last: crate::domain::conversation_progressive_activity::ConversationProgressiveTokenUsageBreakdown,
+        total: crate::domain::conversation_progressive_activity::ConversationProgressiveTokenUsageBreakdown,
+    },
     /// app-server 가 턴을 시작했다.
     TurnStarted {
         thread_id: String,
@@ -916,6 +930,8 @@ impl KernelEvent {
             Self::ThreadPromptSettled { .. } => KernelRecordKind::ThreadPromptSettled,
             Self::ThreadPromptRejected { .. } => KernelRecordKind::ThreadPromptRejected,
             Self::TurnSubmitted { .. } => KernelRecordKind::TurnSubmitted,
+            Self::TaskExecutionLinked { .. } => KernelRecordKind::TaskExecutionLinked,
+            Self::TurnUsageObserved { .. } => KernelRecordKind::TurnUsageObserved,
             Self::TurnStarted { .. } => KernelRecordKind::TurnStarted,
             Self::TurnEnded { .. } => KernelRecordKind::TurnEnded,
             Self::PostTurnRouted { .. } => KernelRecordKind::PostTurnRouted,
@@ -962,6 +978,8 @@ impl KernelEvent {
             | Self::ThreadPromptSettled { thread_id, .. }
             | Self::ThreadPromptRejected { thread_id, .. }
             | Self::TurnSubmitted { thread_id, .. }
+            | Self::TaskExecutionLinked { thread_id, .. }
+            | Self::TurnUsageObserved { thread_id, .. }
             | Self::TurnStarted { thread_id, .. }
             | Self::TurnEnded { thread_id, .. }
             | Self::PostTurnRouted { thread_id, .. } => thread_id,
@@ -975,10 +993,12 @@ impl KernelEvent {
         match self {
             Self::CommandReceived { op_id, .. }
             | Self::CommandRejected { op_id, .. }
-            | Self::CommandCompleted { op_id, .. } => Some(*op_id),
+            | Self::CommandCompleted { op_id, .. }
+            | Self::TaskExecutionLinked { op_id, .. } => Some(*op_id),
             Self::ThreadPromptQueued(prompt) => prompt.op_id,
             Self::ThreadPromptSettled { op_id, .. }
             | Self::TurnSubmitted { op_id, .. }
+            | Self::TurnUsageObserved { op_id, .. }
             | Self::TurnStarted { op_id, .. }
             | Self::TurnEnded { op_id, .. } => *op_id,
             Self::ThreadPromptRejected { .. }
@@ -1045,7 +1065,9 @@ impl KernelEvent {
                 OperationEnd::Failed => OperationState::Failed,
                 OperationEnd::Lost => OperationState::Lost,
             },
-            Self::ThreadPromptRejected { .. }
+            Self::TaskExecutionLinked { .. }
+            | Self::TurnUsageObserved { .. }
+            | Self::ThreadPromptRejected { .. }
             | Self::TaskVerificationFinished { .. }
             | Self::CriterionEvidenceRecorded { .. }
             | Self::CriterionWaived { .. }

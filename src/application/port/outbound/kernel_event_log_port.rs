@@ -7,6 +7,15 @@ use crate::domain::kernel_event::{KernelEvent, KernelEventPage, RecordedKernelEv
  * 읽을 때는 기록 순서를 지킨다. 이 binary 가 모르는 사건(더 새 binary 가 쓴 것)은 건너뛴다.
  */
 pub trait KernelEventLogPort: Send + Sync {
+    /// Read the durable usage projection without starting work or creating a store.
+    fn load_task_usage(
+        &self,
+        _workspace: &str,
+        _task_id: &str,
+    ) -> Result<Option<crate::domain::task_usage::UsageProjection>> {
+        Ok(None)
+    }
+
     /// 증거 outbox의 ID와 공개 payload를 함께 확인한다. 실제 저장 adapter는 history retention과
     /// 독립된 영속 receipt를 사용한다. 같은 ID의 다른 payload는 존재하는 것으로 처리하지 않는다.
     fn has_task_evidence_event(&self, workspace_dir: &str, expected: &KernelEvent) -> Result<bool> {

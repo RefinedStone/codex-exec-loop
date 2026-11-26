@@ -9,13 +9,16 @@ use rusqlite::{Connection, OpenFlags};
 use super::super::super as authority;
 use crate::domain::planning::PlanningAuthorityLocation;
 
-pub(super) struct ReadOnlyStore {
+pub(in crate::adapter::outbound::db::sqlite_planning_authority_adapter::kernel_events) struct ReadOnlyStore
+{
     pub connection: Connection,
     // SQLite를 먼저 닫은 뒤 파일과 디렉터리 identity anchor를 해제한다.
     _anchors: Vec<File>,
 }
 
-pub(super) fn open(location: &PlanningAuthorityLocation) -> Result<Option<ReadOnlyStore>> {
+pub(in crate::adapter::outbound::db::sqlite_planning_authority_adapter::kernel_events) fn open(
+    location: &PlanningAuthorityLocation,
+) -> Result<Option<ReadOnlyStore>> {
     let path = Path::new(&location.authority_store_path);
     match fs::symlink_metadata(path) {
         Ok(_) => {}

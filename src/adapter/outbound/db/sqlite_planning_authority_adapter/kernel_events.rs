@@ -43,10 +43,19 @@ fn ensure_kernel_event_table(connection: &Connection) -> Result<()> {
 }
 
 mod issue_timeline;
+mod task_usage;
 #[cfg(test)]
 mod tests;
 
 impl KernelEventLogPort for SqlitePlanningAuthorityAdapter {
+    fn load_task_usage(
+        &self,
+        workspace: &str,
+        task_id: &str,
+    ) -> Result<Option<crate::domain::task_usage::UsageProjection>> {
+        task_usage::load(workspace, task_id)
+    }
+
     fn has_issue_binding_pause_event(
         &self,
         workspace_dir: &str,
@@ -130,6 +139,7 @@ impl KernelEventLogPort for SqlitePlanningAuthorityAdapter {
         let location = Self::resolve_authority_location_from_workspace(workspace_dir)?;
         let mut connection = open_authority_connection(&location)?;
         ensure_kernel_event_table(&connection)?;
+        task_usage::ensure_tables(&connection)?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("failed to open the kernel event append transaction")?;
@@ -186,6 +196,7 @@ impl KernelEventLogPort for SqlitePlanningAuthorityAdapter {
                     "INSERT INTO kernel_issue_work_event_receipts(event_id,payload_json,sequence) VALUES (?1,?2,?3)",
                     params![event_id,payload,record.sequence])?;
             }
+            task_usage::record(&transaction, record)?;
             transaction
                 .execute(
                     "INSERT INTO kernel_events (sequence, kind, thread_id, payload_json, recorded_at)

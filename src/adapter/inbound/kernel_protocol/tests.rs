@@ -161,6 +161,7 @@ fn sample_commands() -> Vec<KernelCommand> {
             instruction: "Explain the test result.".into(),
             idempotency_key: "delegation-request-1".into(),
             session: Default::default(),
+            task_id: None,
         },
         KernelCommand::CancelDelegation { id: "job-1".into() },
         KernelCommand::CheckpointDelegation {
@@ -859,6 +860,9 @@ fn events_and_description_have_stable_wire_shapes() {
         KernelQuery::Planning {},
         KernelQuery::ListTasks {},
         KernelQuery::TaskResult {
+            task_id: "task-1".into(),
+        },
+        KernelQuery::TaskUsage {
             task_id: "task-1".into(),
         },
         KernelQuery::TaskEvidence {
@@ -2390,6 +2394,13 @@ fn sample_records() -> Vec<crate::domain::kernel_event::KernelEvent> {
             thread_id: "thread-1".to_string(),
             reason: ReasonCode::ParallelMode,
         },
+        Record::TaskExecutionLinked {
+            task_id: "task-1".into(), thread_id: "thread-1".into(), op_id: 7,
+        },
+        Record::TurnUsageObserved {
+            thread_id: "thread-1".into(), turn_id: "turn-1".into(), op_id: Some(7),
+            last: Default::default(), total: Default::default(),
+        },
         Record::TurnSubmitted {
             thread_id: String::new(),
             submission: 3,
@@ -2627,6 +2638,9 @@ fn real_wire_values_match_the_schemas_of_the_spec() {
         KernelQuery::Planning {},
         KernelQuery::ListTasks {},
         KernelQuery::TaskResult {
+            task_id: "task-1".into(),
+        },
+        KernelQuery::TaskUsage {
             task_id: "task-1".into(),
         },
         KernelQuery::TaskEvidence {
@@ -2883,4 +2897,24 @@ fn sample_issue_decision_fact() -> crate::domain::issue_automation::decision::Is
         answer_by: None,
         option: None,
     }
+}
+
+#[test]
+fn task_usage_query_validates_identity_and_keeps_missing_usage_null() {
+    let query: KernelQuery =
+        serde_json::from_value(json!({"type":"task_usage","task_id":"task-1"})).unwrap();
+    assert_eq!(query.task_usage_id().unwrap(), Some("task-1"));
+    assert!(
+        KernelQuery::TaskUsage {
+            task_id: " ".into()
+        }
+        .task_usage_id()
+        .is_err()
+    );
+    let answer = KernelQueryAnswer::TaskUsage(
+        crate::domain::task_usage::TaskUsageState::unavailable("task-1".into()),
+    );
+    let json = serde_json::to_value(answer).unwrap();
+    assert!(json["observed_tokens"].is_null());
+    assert_eq!(json["status"], "unavailable");
 }

@@ -679,6 +679,10 @@ spec_names! {
             "The kernel rejected a thread prompt before preparation. No planning task was made.";
         TurnSubmitted => "turn_submitted",
             "The kernel accepted a turn submission (manual, prepared, or automatic follow-up).";
+        TaskExecutionLinked => "task_execution_linked",
+            "A prepared task is linked to one exact thread operation for observed usage accounting.";
+        TurnUsageObserved => "turn_usage_observed",
+            "Validated numeric app-server usage for one thread turn. Cumulative snapshots are not additive charges.";
         TurnStarted => "turn_started",
             "The app-server started a turn.";
         TurnEnded => "turn_ended",

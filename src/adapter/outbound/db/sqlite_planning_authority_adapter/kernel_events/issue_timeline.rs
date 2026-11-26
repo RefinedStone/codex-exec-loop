@@ -7,7 +7,7 @@ use crate::domain::kernel_event::{IssueEventReference, KernelEvent, RecordedKern
 
 use super::super::SqlitePlanningAuthorityAdapter;
 
-mod read_only;
+pub(super) mod read_only;
 
 pub(super) fn load_recent(
     workspace_dir: &str,

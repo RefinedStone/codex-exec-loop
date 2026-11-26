@@ -472,6 +472,7 @@ impl KernelSession {
                 instruction,
                 idempotency_key,
                 session,
+                task_id,
             } => {
                 let store = self.delegation_store(&attached.issue_workspace).await?;
                 let caller = if attached.client_name
@@ -494,13 +495,18 @@ impl KernelSession {
                 let outcome = delegation::db(store, move |store| {
                     let route =
                         crate::composition::production::delegation_route(&workspace, "manual");
-                    store.submit_session(
+                    if let Some(task_id) = &task_id {
+                        crate::composition::task_usage::validate_task(&workspace, task_id)?;
+                    }
+                    store.submit_task_session(
                         &idempotency_key,
                         &instruction,
                         &caller,
                         route,
                         session,
-                        digest.as_ref().map(|value| value.as_slice()),
+                        crate::application::port::outbound::delegation_store_port::SubmissionContext {
+                            account_digest: digest.as_ref().map(|value| value.as_slice()), task_id: task_id.as_deref(),
+                        },
                     )
                 })
                 .await;
@@ -620,6 +626,15 @@ impl KernelSession {
                     .await?
                     .map_err(|_| unavailable("task result authority is unavailable".into()))?;
             return to_result(KernelQueryAnswer::TaskResult(Box::new(result)));
+        }
+        if let Some(task_id) = request.query.task_usage_id()? {
+            let workspace = attached.issue_workspace.clone();
+            let task_id = task_id.to_owned();
+            let usage =
+                blocking(move || crate::composition::task_usage::query(&workspace, &task_id))
+                    .await?
+                    .map_err(|_| unavailable("task usage is unavailable".into()))?;
+            return to_result(KernelQueryAnswer::TaskUsage(usage));
         }
         if let Some(query) = request.query.task_evidence_request()? {
             let workspace = attached.issue_workspace.clone();

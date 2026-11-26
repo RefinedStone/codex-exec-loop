@@ -37,3 +37,5 @@ pub(crate) mod task_evidence;
 mod task_evidence_outbox;
 pub(crate) mod task_verification;
 pub(crate) mod telegram_issue;
+
+pub(crate) mod task_usage;

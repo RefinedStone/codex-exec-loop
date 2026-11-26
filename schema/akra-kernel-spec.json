@@ -2279,6 +2279,12 @@
               "mode": "new"
             }
           },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "type": {
             "const": "submit_delegation",
             "type": "string"
@@ -2992,6 +2998,43 @@
         "properties": {
           "type": {
             "const": "task_result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "task_usage",
+      "summary": "Read one task's observed token lower bound, exact operation/thread links and unobserved executions. Repeated cumulative snapshots are deduplicated. Missing usage is null; old unlinked delegations are repository-scoped gaps, not zero-cost task executions. This is not billing or a complete cost estimate.",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "type": {
+            "const": "task_usage",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "task_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/TaskUsageState",
+        "properties": {
+          "type": {
+            "const": "task_usage",
             "type": "string"
           }
         },
@@ -4251,6 +4294,74 @@
           "thread_id",
           "submission",
           "origin"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "task_execution_linked",
+      "summary": "A prepared task is linked to one exact thread operation for observed usage accounting.",
+      "payload": {
+        "properties": {
+          "kind": {
+            "const": "task_execution_linked",
+            "type": "string"
+          },
+          "op_id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "task_id",
+          "thread_id",
+          "op_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "turn_usage_observed",
+      "summary": "Validated numeric app-server usage for one thread turn. Cumulative snapshots are not additive charges.",
+      "payload": {
+        "properties": {
+          "kind": {
+            "const": "turn_usage_observed",
+            "type": "string"
+          },
+          "last": {
+            "$ref": "#/$defs/ConversationProgressiveTokenUsageBreakdown"
+          },
+          "op_id": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "total": {
+            "$ref": "#/$defs/ConversationProgressiveTokenUsageBreakdown"
+          },
+          "turn_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "thread_id",
+          "turn_id",
+          "last",
+          "total"
         ],
         "type": "object"
       }
@@ -7066,6 +7177,43 @@
       ],
       "type": "object"
     },
+    "ConversationProgressiveTokenUsageBreakdown": {
+      "properties": {
+        "cached_input_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "input_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "output_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reasoning_output_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cached_input_tokens",
+        "input_tokens",
+        "output_tokens",
+        "reasoning_output_tokens",
+        "total_tokens"
+      ],
+      "type": "object"
+    },
     "Delegation": {
       "properties": {
         "attempts": {
@@ -7153,6 +7301,12 @@
         },
         "state": {
           "$ref": "#/$defs/State"
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "updated_at": {
           "format": "int64",
@@ -11874,6 +12028,12 @@
                 "mode": "new"
               }
             },
+            "task_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "type": {
               "const": "submit_delegation",
               "type": "string"
@@ -12475,6 +12635,26 @@
         {
           "additionalProperties": false,
           "properties": {
+            "task_id": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "type": {
+              "const": "task_usage",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "after_task_id": {
               "maxLength": 4096,
               "minLength": 1,
@@ -12894,6 +13074,19 @@
           "properties": {
             "type": {
               "const": "task_result",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TaskUsageState",
+          "properties": {
+            "type": {
+              "const": "task_usage",
               "type": "string"
             }
           },
@@ -13594,6 +13787,66 @@
             "thread_id",
             "submission",
             "origin"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "task_execution_linked",
+              "type": "string"
+            },
+            "op_id": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "task_id": {
+              "type": "string"
+            },
+            "thread_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "task_id",
+            "thread_id",
+            "op_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "turn_usage_observed",
+              "type": "string"
+            },
+            "last": {
+              "$ref": "#/$defs/ConversationProgressiveTokenUsageBreakdown"
+            },
+            "op_id": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "thread_id": {
+              "type": "string"
+            },
+            "total": {
+              "$ref": "#/$defs/ConversationProgressiveTokenUsageBreakdown"
+            },
+            "turn_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "thread_id",
+            "turn_id",
+            "last",
+            "total"
           ],
           "type": "object"
         },
@@ -16940,6 +17193,126 @@
       ],
       "type": "object"
     },
+    "TaskUsageExecution": {
+      "properties": {
+        "execution_id": {
+          "type": "string"
+        },
+        "gaps": {
+          "items": {
+            "$ref": "#/$defs/UsageGap"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "observed_tokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConversationProgressiveTokenUsageBreakdown"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "op_id": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "thread_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "execution_id",
+        "kind",
+        "gaps"
+      ],
+      "type": "object"
+    },
+    "TaskUsageState": {
+      "properties": {
+        "delegations_available": {
+          "type": "boolean"
+        },
+        "executions": {
+          "items": {
+            "$ref": "#/$defs/TaskUsageExecution"
+          },
+          "type": "array"
+        },
+        "gaps": {
+          "items": {
+            "$ref": "#/$defs/UsageGap"
+          },
+          "type": "array"
+        },
+        "observed_tokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConversationProgressiveTokenUsageBreakdown"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runtime_available": {
+          "type": "boolean"
+        },
+        "status": {
+          "$ref": "#/$defs/TaskUsageStatus"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "unlinked_repository_delegations": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "usage_available": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "task_id",
+        "status",
+        "executions",
+        "gaps",
+        "runtime_available",
+        "usage_available",
+        "delegations_available",
+        "unlinked_repository_delegations",
+        "truncated"
+      ],
+      "type": "object"
+    },
+    "TaskUsageStatus": {
+      "enum": [
+        "available",
+        "missing",
+        "unavailable"
+      ],
+      "type": "string"
+    },
     "TaskVerificationAttemptRecord": {
       "additionalProperties": false,
       "properties": {
@@ -17518,6 +17891,18 @@
           "type": "string"
         }
       ]
+    },
+    "UsageGap": {
+      "enum": [
+        "usage_not_observed",
+        "prefix_not_observed",
+        "counter_discontinuity",
+        "arithmetic_overflow",
+        "task_link_missing",
+        "backend_usage_unavailable",
+        "source_unavailable"
+      ],
+      "type": "string"
     }
   }
 }
