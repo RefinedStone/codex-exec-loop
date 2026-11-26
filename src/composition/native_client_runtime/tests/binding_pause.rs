@@ -339,7 +339,7 @@ fn tui_kernel_owner_binds_host_verification_to_the_parallel_completion_handle() 
     let parallel_clone = handle.clone();
     let service = fixture.service.clone();
     let bound = tui_application_for_verification_test()
-        .with_task_verification(handle, move |_wake| Ok(service))
+        .with_task_verification(handle, fixture.evidence.clone(), move |_wake| Ok(service))
         .bind_client_runtime();
 
     assert!(Arc::ptr_eq(
@@ -358,20 +358,68 @@ fn tui_kernel_owner_binds_host_verification_to_the_parallel_completion_handle() 
 
 #[test]
 fn tui_without_a_verification_owner_stays_fail_closed() {
+    let fixture = crate::application::service::task_verification::tests::Fixture::new();
     let handle = TaskVerificationHandle::default();
     let parallel_clone = handle.clone();
     let bound = tui_application_for_verification_test()
-        .with_task_verification(handle, |_wake| {
+        .with_task_verification(handle, fixture.evidence.clone(), |_wake| {
             anyhow::bail!("private owner is unavailable")
         })
         .bind_client_runtime();
     assert!(bound.client_runtime.task_verification.is_none());
 
     // No owner was bound: a later live owner can still claim the shared handle.
-    let fixture = crate::application::service::task_verification::tests::Fixture::new();
     fixture
         .service
         .initialize_live_owner("2026-11-23T12:00:00Z")
         .unwrap();
     parallel_clone.attach(&fixture.service).unwrap();
+}
+
+#[test]
+fn tui_verification_completion_publishes_and_acknowledges_its_outbox() {
+    let fixture = crate::application::service::task_verification::tests::Fixture::new();
+    let log = Arc::new(crate::composition::task_evidence_outbox::tests::Log::default());
+    let service = fixture.service.clone();
+    let mut bound = tui_application_for_verification_test()
+        .with_task_verification(
+            TaskVerificationHandle::default(),
+            fixture.evidence.clone(),
+            move |_wake| Ok(service),
+        )
+        .bind_client_runtime();
+    let runtime = &mut bound.client_runtime;
+    runtime.attach_kernel_event_log(log.clone(), "/repo");
+
+    let claim = fixture.start();
+    fixture.deliver_executed(&claim);
+    let finished = fixture.service.next_deadline().unwrap();
+    runtime.run_host_cycle(finished, Duration::ZERO, 32);
+
+    assert!(!fixture.service.has_pending());
+    assert_eq!(
+        log.load_kernel_events("/repo", &["task_verification_finished"])
+            .unwrap()
+            .len(),
+        1,
+        "TUI verification completion must reach the kernel event log",
+    );
+    assert!(fixture.repository.outbox.lock().unwrap().is_empty());
+    assert_eq!(
+        fixture.repository.acknowledgements.load(Ordering::SeqCst),
+        1
+    );
+    assert_eq!(fixture.spawn_calls.load(Ordering::SeqCst), 1);
+
+    runtime.run_host_cycle(finished + Duration::from_secs(2), Duration::ZERO, 32);
+    assert_eq!(
+        log.load_kernel_events("/repo", &["task_verification_finished"])
+            .unwrap()
+            .len(),
+        1,
+    );
+    assert_eq!(
+        fixture.repository.acknowledgements.load(Ordering::SeqCst),
+        1
+    );
 }

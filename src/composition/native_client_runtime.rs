@@ -231,6 +231,7 @@ struct NativeBindingPauseAttachment {
 /// TUI 가 저장소 커널 owner 일 때 붙이는 호스트 검증이다. 런타임의 waker 가 있어야 만들 수 있어서 bind 때 만든다.
 struct NativeTaskVerificationAttachment {
     handle: TaskVerificationHandle,
+    evidence: Arc<TaskEvidenceService>,
     build: Box<dyn FnOnce(VerificationWake) -> anyhow::Result<Arc<TaskVerificationService>>>,
 }
 
@@ -584,14 +585,16 @@ impl NativeTuiApplicationComposition {
         self
     }
 
-    /// 병렬 완료가 쓰는 `handle` 과 같은 것을 받아야 한다. 그래야 recipe 가 있는 완료가 이 owner 로 검증된다.
+    /// 병렬 완료와 같은 handle 및 workspace의 증거 서비스를 받아 완료 outbox도 전달한다.
     pub(in crate::composition) fn with_task_verification(
         mut self,
         handle: TaskVerificationHandle,
+        evidence: Arc<TaskEvidenceService>,
         build: impl FnOnce(VerificationWake) -> anyhow::Result<Arc<TaskVerificationService>> + 'static,
     ) -> Self {
         self.task_verification_attachment = Some(NativeTaskVerificationAttachment {
             handle,
+            evidence,
             build: Box::new(build),
         });
         self
@@ -609,6 +612,7 @@ impl NativeTuiApplicationComposition {
         }
         if let Some(verification) = self.task_verification_attachment {
             client_runtime.attach_owned_task_verification(&verification.handle, verification.build);
+            client_runtime.attach_task_evidence(verification.evidence);
         }
         BoundNativeTuiApplication {
             client_runtime,

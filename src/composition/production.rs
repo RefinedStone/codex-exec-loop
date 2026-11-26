@@ -991,14 +991,18 @@ pub(crate) fn build_native_tui_application(
                 kernel_event_log_port(),
             )
             // 병렬 완료는 이 화면의 `workspace` 로 검증을 부른다. 검증도 같은 문자열로 만든다.
-            .with_task_verification(verification_handle, move |wake| {
-                super::task_verification::build(
-                    &workspace,
-                    wake,
-                    admission,
-                    issues.automation_store(),
-                )
-            }),
+            .with_task_verification(
+                verification_handle,
+                super::task_evidence::build(&workspace),
+                move |wake| {
+                    super::task_verification::build(
+                        &workspace,
+                        wake,
+                        admission,
+                        issues.automation_store(),
+                    )
+                },
+            ),
         // An unowned fallback keeps durable pause facts for the next owner. It neither
         // polls pending commands nor appends/acknowledges their completion outbox.
         _ => application,
