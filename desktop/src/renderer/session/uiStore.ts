@@ -4,6 +4,8 @@ export type { PanelId } from "../extensions/panelDefinitions";
 import { create } from "zustand";
 
 import { INITIAL_NAV, type NavEntry, type NavHistory, pushNav } from "./navHistory";
+import { saveDraft, storedDrafts } from "./draftStorage";
+export { storedDrafts } from "./draftStorage";
 import type { ZoomFactors } from "../../shared/zoom";
 
 export type View = "home" | "thread" | "fleet" | "remote";
@@ -84,34 +86,6 @@ export function chosenTheme(): Theme {
     // 저장소를 읽지 못하면 운영체제의 설정을 따른다.
   }
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-}
-
-const DRAFTS_KEY = "akra.drafts";
-/** 오래된 초안부터 버린다. 저장소를 끝없이 키우지 않는다. */
-const MAX_SAVED_DRAFTS = 50;
-const MAX_SAVED_DRAFT_CHARS = 20_000;
-
-/** 앱을 다시 열어도 남는 입력창 초안이다 (#2839). 입력창의 글만 담는다. Vault·자격 증명 화면의 값은 이 길을 쓰지 않는다. */
-export function storedDrafts(): Record<string, string> {
-  try {
-    const parsed: unknown = JSON.parse(window.localStorage.getItem(DRAFTS_KEY) ?? "{}");
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].length > 0));
-  } catch {
-    return {};
-  }
-}
-
-/** 바뀐 초안 하나만 쓴다. 다른 창(dot 창)이 저장한 초안을 덮지 않는다. 빈 초안(보낸 글)은 지운다. */
-function saveDraft(key: string, text: string): void {
-  try {
-    const stored = storedDrafts();
-    delete stored[key];
-    if (text.trim().length > 0 && text.length <= MAX_SAVED_DRAFT_CHARS) stored[key] = text;
-    window.localStorage.setItem(DRAFTS_KEY, JSON.stringify(Object.fromEntries(Object.entries(stored).slice(-MAX_SAVED_DRAFTS))));
-  } catch {
-    // 저장소가 가득 찼거나 막혔다. 초안은 이 창의 메모리에 남는다.
-  }
 }
 
 export const useUiStore = create<UiState>(() => ({
