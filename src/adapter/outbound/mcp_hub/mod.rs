@@ -351,38 +351,9 @@ impl McpHubBackendPort for CodexMcpHubBackend {
     /// 로그인은 사용자를 오래 기다리므로 상주 엔진을 쓰지 않고 따로 연다. 끝나면 상주 엔진을 내린다.
     fn login(&self, server: &str, on_authorization_url: &mut dyn FnMut(&str)) -> Result<()> {
         self.invalidate_tool_catalogs()?;
-        let result = (|| {
-            let mut session = self.open_session()?;
-            let (response, completed) = session.request_with_notification(
-                "mcpServer/oauth/login",
-                json!({ "name": server }),
-                REQUEST_TIMEOUT,
-                "mcpServer/oauthLogin/completed",
-                |params| params.get("name").and_then(Value::as_str) == Some(server),
-            )?;
-            let url = response
-                .get("authorizationUrl")
-                .and_then(Value::as_str)
-                .context("mcpServer/oauth/login returned no authorization URL")?;
-            on_authorization_url(url);
-            let completed = match completed {
-                Some(completed) => completed,
-                None => session.wait_for_notification(
-                    "mcpServer/oauthLogin/completed",
-                    LOGIN_TIMEOUT,
-                    |params| params.get("name").and_then(Value::as_str) == Some(server),
-                )?,
-            };
-            drop(session);
-            if completed.get("success").and_then(Value::as_bool) == Some(true) {
-                return Ok(());
-            }
-            let detail = completed
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("the login did not finish");
-            bail!("MCP server `{server}` login failed: {detail}")
-        })();
+        let result = self
+            .open_session()
+            .and_then(|mut session| oauth_login(&mut session, server, on_authorization_url));
         self.reload()?;
         self.invalidate_tool_catalogs()?;
         result
@@ -632,6 +603,42 @@ fn server_status_from_wire(entry: &Value) -> McpHubServerStatus {
     }
 }
 
+/// app-server 의 로그인 대기를 Akra 의 대기(`LOGIN_TIMEOUT`)와 맞춘다. 빠지면 app-server 가 먼저 끝난다.
+fn oauth_login(
+    session: &mut HubAppServerSession,
+    server: &str,
+    on_authorization_url: &mut dyn FnMut(&str),
+) -> Result<()> {
+    let (response, completed) = session.request_with_notification(
+        "mcpServer/oauth/login",
+        json!({ "name": server, "timeoutSecs": LOGIN_TIMEOUT.as_secs() }),
+        REQUEST_TIMEOUT,
+        "mcpServer/oauthLogin/completed",
+        |params| params.get("name").and_then(Value::as_str) == Some(server),
+    )?;
+    let url = response
+        .get("authorizationUrl")
+        .and_then(Value::as_str)
+        .context("mcpServer/oauth/login returned no authorization URL")?;
+    on_authorization_url(url);
+    let completed = match completed {
+        Some(completed) => completed,
+        None => session.wait_for_notification(
+            "mcpServer/oauthLogin/completed",
+            LOGIN_TIMEOUT,
+            |params| params.get("name").and_then(Value::as_str) == Some(server),
+        )?,
+    };
+    if completed.get("success").and_then(Value::as_bool) == Some(true) {
+        return Ok(());
+    }
+    let detail = completed
+        .get("error")
+        .and_then(Value::as_str)
+        .unwrap_or("the login did not finish");
+    bail!("MCP server `{server}` login failed: {detail}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -641,6 +648,48 @@ mod tests {
             .join(format!("akra-mcp-hub-{label}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         home
+    }
+
+    #[test]
+    fn oauth_login_asks_app_server_to_wait_as_long_as_akra() {
+        let home = temp_home("oauth-login-timeout");
+        std::fs::create_dir_all(&home).unwrap();
+        let script = home.join("fake-app-server.cjs");
+        // 로그인 요청의 timeoutSecs 가 600 일 때만 성공을 알린다.
+        std::fs::write(
+            &script,
+            r#"
+const lines = require('node:readline').createInterface({input: process.stdin});
+const send = message => process.stdout.write(JSON.stringify(message) + '\n');
+lines.on('line', line => {
+  const message = JSON.parse(line);
+  if (message.id === undefined || !message.method) return;
+  if (message.method !== 'mcpServer/oauth/login') return send({id: message.id, result: {}});
+  send({id: message.id, result: {authorizationUrl: 'https://example.invalid/oauth'}});
+  const timeout = message.params.timeoutSecs;
+  send({method: 'mcpServer/oauthLogin/completed', params: {
+    name: message.params.name, success: timeout === 600, error: `timeoutSecs=${timeout}`
+  }});
+});
+"#,
+        )
+        .unwrap();
+        let node = which::which("node").unwrap();
+        let command = crate::trusted_executable::TrustedCommand {
+            program: node.clone(),
+            source_executable: node,
+            prefix_args: vec![script.into_os_string()],
+            trust_warning: None,
+        };
+        let mut session = HubAppServerSession::open(&command, &home).unwrap();
+        let mut urls = Vec::new();
+        let result = oauth_login(&mut session, "notion", &mut |url| urls.push(url.to_owned()));
+        drop(session);
+        let _ = std::fs::remove_dir_all(&home);
+
+        result.unwrap();
+        assert_eq!(LOGIN_TIMEOUT.as_secs(), 600);
+        assert_eq!(urls, ["https://example.invalid/oauth"]);
     }
 
     #[test]
