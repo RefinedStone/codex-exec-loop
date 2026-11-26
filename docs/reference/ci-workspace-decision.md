@@ -89,6 +89,9 @@ tests/architecture_boundaries.rs의 issue_automation_stays_independent_and_store
 
 ## 추출을 다시 검토할 때 수집할 증거
 
+2026-11-24~26 CI 표본의 본 crate 빌드 비용과 제안 판단(나중에 분리)은
+[CI 빌드 비용 비교](../validation/ci-build-cost.md#판단-제안)에 있다. 로컬 행은 아직 측정하지 않았다.
+
 먼저 동일 runner/OS/아키텍처, rustc, Cargo.lock, features, profile, RUSTFLAGS를 고정한다.
 CI의 증분 비활성 조건과 로컬 증분 활성 조건은 별도 표로 남긴다. 활성 worktree의 target은
 보존하고 측정용 target을 따로 쓴다. cargo clean이나 모든 worktree의 target 공유를 넣지 않는다.
