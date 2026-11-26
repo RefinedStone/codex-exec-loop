@@ -1,4 +1,4 @@
-# 새 GitHub 이슈 생성과 결과 확인 (#2436)
+# 새 GitHub 이슈 생성과 결과 확인 (#2436, #2702)
 
 새 이슈는 아직 안정 이슈 ID가 없으므로 기존 이슈 수정과 별도의 생성 의도를 사용한다. 저장소의 안정 ID와 로컬 의도 ID를 먼저 기록하고, 실제 이슈가 확인된 뒤 기존 게시·복원 서비스에 연결한다.
 
@@ -67,6 +67,62 @@ GitHub의 `clientMutationId`는 상관관계를 확인하는 값으로 사용한
 프로세스 통합 fixture는 기존 게시의 `issue_shared_copy_flow/delayed_workers.rs`와 같은 부모 소유 TCP 공급자·독립 worker 수명 패턴을 사용한다. 현재 Windows native/portable inventory의 `filesystem::issue_creation_journal::` 필터가 부모 회귀를 실행하고, ignored worker entry는 부모가 명시적으로 호출한다. 테스트 코드 존재와 실제 실행 결과는 구분해 PR에 기록한다.
 
 이 증거는 원격 적용 직후/응답 전의 프로세스 종료와 실제 Windows 생성·수정 경합을 다룬다. SQLite payload 커밋 도중 종료, 전원 단절, 실제 GitHub 네트워크 장애, OS 키 저장소 검증을 증명하지 않는다. 키·이슈·원문은 합성 데이터이며 실제 사용자 계정이나 모델을 호출하지 않는다.
+
+### #2702 완료 조건 대조 — 2026-11-26
+
+검토 기준은 `prerelease@d960d7d62e810f8cd94c7aa78918b0ba0104b6d6`이다. 이 절은 현재 소스와
+머지된 PR의 기존 실행 기록을 대조한 인수 기록이며, 이번에 Windows 시험이나 GitHub CI를
+다시 실행한 결과가 아니다.
+
+[#2702](https://github.com/RefinedStone/codex-exec-loop/issues/2702)의 배경에 적힌
+“`IssueCreationJournalAdapter::begin`은 non-Unix에서 거절한다”는 설명은
+[#2710](https://github.com/RefinedStone/codex-exec-loop/pull/2710) 이전 상태이다.
+현재 [플랫폼 분기](../../src/adapter/outbound/filesystem/issue_creation_journal.rs)는 Unix 파일 journal과
+Windows private SQLite journal을 각각 사용하고, 그 외 플랫폼만 거절한다.
+
+| #2702 완료 조건 | 현재 구현·회귀와 기존 실행 근거 | 판정 |
+| --- | --- | --- |
+| 실제 Windows에서 journal 저장·재시작·lease·provenance 동작 | [Windows journal](../../src/adapter/outbound/filesystem/issue_creation_journal/windows.rs)은 reservation DB와 payload DB를 분리하고 원격 생성 전에 `Sent`를 커밋한다. [저장소 회귀](../../src/adapter/outbound/filesystem/issue_creation_journal/windows/tests.rs)의 `absent_provenance_is_read_only_and_sent_is_visible_under_reservation`, `forced_process_exit_releases_lease_but_preserves_sent`가 읽기 전용 provenance, 동시 writer 거절, 새 adapter 재개와 자식 종료 뒤 lease 해제를 다룬다. #2710 및 #2725에 Windows 실행 기록이 있다. | 충족 |
+| 합성 GitHub로 승인 공유본 생성·안정 ID 재조회·Vault 재암호화/복원 연결·재시도 | 같은 저장소 회귀의 `lost_response_recovers_by_stable_id_with_real_windows_journal_and_vault`와 [프로세스 회귀](../../src/adapter/outbound/filesystem/issue_creation_journal/windows/tests/processes.rs)의 `remote_applied_creation_survives_worker_termination_without_duplicate_posts`가 실제 Windows journal/Vault, 합성 원격과 합성 키를 사용한다. 두 복구 worker가 같은 의도를 확인한 뒤 생성 횟수 1회, 안정 ID/provenance, 새 범위로 연결한 원문 복원을 확인한다. | 충족; 실제 GitHub·OS 키 저장소의 실행 증거는 아님 |
+| 응답 유실·강제 종료·동시 요청·오래된 승인·외부 수정·journal/ACL 변조에서 자동 중복 전송·평문 노출 방지 | #2725의 두 프로세스 회귀가 원격 적용 뒤 종료와 독립 수정 worker의 새 원문을 늦은 생성이 덮지 않는 경계를 다룬다. Windows 저장소의 `changed_approval_cannot_replace_durable_intent`, `corrupt_payload_schema_legacy_and_hardlink_fail_closed`, [공통 private SQLite 회귀](../../src/private_sqlite/tests.rs)의 ACL·junction·경로 고정 검사, [생성 서비스 회귀](../../src/application/service/issue_creation/tests.rs)와 [초안 facade 회귀](../../src/application/service/issue_draft/tests/creation.rs)의 승인/공유본 불일치 거절을 함께 대조했다. journal에 원문을 남기지 않는 검사와 화면 저장소·콘솔 비노출 검사는 아래 UI 근거에 있다. | 명시한 장애·경합 경계에서 충족; 모든 장애 조합이나 전원 단절의 보장은 아님 |
+| 결과 불명 상태의 명시적 복구 UX 및 실패·취소 정책 | [Desktop 화면 회귀](../../desktop/test/e2e/issue-create.mjs)는 잘못된 URL 거절, 정확한 URL 확인, 재조회 시 생성 횟수 유지, 응답 유실 뒤 기록 재개, 복원 연결만 재시도, 새 초안의 중복 위험 확인, 편집 시 승인 취소를 검증한다. #2572에 Windows 실행 기록이 있으며 현재 소스에 해당 검사가 유지된다. 아래 실패·취소 계약을 함께 적용한다. | 대역 Gateway를 사용하는 UI와 서비스 계약에서 충족 |
+| Windows 지정 CI에 회귀 포함, Unix 기존 생성 계약 유지 | [Windows native gate](../../scripts/check_native_pr.ps1)와 [Windows portable gate](../../scripts/check_windows_portable.sh)에 `filesystem::issue_creation_journal::`가 포함된다. [inventory 회귀](../../scripts/native-rust-contracts.test.mjs)는 portable 필터 누락을 거절한다. [PR workflow](../../.github/workflows/native-pr-checks.yml)는 portable gate와 Linux `cargo test --locked --timings`를 유지하고, [Unix journal 회귀](../../src/adapter/outbound/filesystem/issue_creation_journal/tests.rs)도 유지된다. | 소스상 포함·유지 확인; 이번 작업에서 CI 실행 상태는 조회하지 않음 |
+
+실행 기록의 출처와 범위는 다음과 같다. 과거 실행 성공을 현재 커밋에서 새로 실행한 성공으로
+바꾸어 기록하지 않는다.
+
+- [#2572](https://github.com/RefinedStone/codex-exec-loop/pull/2572), head `f7c7808e19438ac6655cec127890c3fbade9cfdf`:
+  Windows에서 신규 생성 Electron E2E 재실행 및 Full gate 통과를 기록했다. 이때 실제 생성
+  journal의 Windows 지원은 없었으므로, 이 기록은 복구 화면·공통 서비스의 근거로만 사용한다.
+- [#2710 통합 기록](https://github.com/RefinedStone/codex-exec-loop/pull/2710#issuecomment-7156950827),
+  head `53cd57cf01571ee6fe31dbc9e5806bcd516bc068`: Windows all-features 라이브러리 시험 빌드와
+  관련 회귀 39개 통과를 기록했다. 생성 서비스 28개, 인계 1개, journal 6개, 동시 편집·복원
+  취소·재연결 4개를 합친 수치이며, journal 자식 진입점 1개는 부모가 사용하는 fixture다.
+- [#2725](https://github.com/RefinedStone/codex-exec-loop/pull/2725),
+  head `fe872bed353da64201c8c0d601937f36ec624c49`: Windows x86_64 / Rust 1.95.0에서 Rust gate
+  통과와 journal 필터 `8 passed, 2 ignored`를 기록했다. 두 ignored 항목은 부모 회귀가
+  명시적으로 실행하는 worker 진입점이며, 새 부모 회귀 두 개 모두 통과한 기록이다.
+
+**인수 판정:** #2702가 정의한 Windows 신규 생성 journal·복구 연결 범위는 위 근거로 종료
+가능하다. 실제 OS 승인·Credential Manager와 원문 창의 제품 통합 검증
+([#2704](https://github.com/RefinedStone/codex-exec-loop/issues/2704),
+[#2724](https://github.com/RefinedStone/codex-exec-loop/issues/2724))이나 Issue/Vault 전체 장애 행렬
+([#2705](https://github.com/RefinedStone/codex-exec-loop/issues/2705))의 완료를 대신하지 않는다.
+
+### 실패·취소 계약
+
+- 전송 전 원문·정책·템플릿 변경은 승인을 무효화하며, 미리보기와 새 승인 없이 생성하지 않는다.
+  `Prepared`/`Held`/`Recorded`에서 명시적으로 새 초안을 시작하면 이전 의도를 `Abandoned`로
+  기록하고 이전 의도의 전송·URL 확정을 거절한다.
+- 패널의 **닫기**는 화면과 원문 메모리의 수명 종료이다. 이미 보낸 원격 요청을 취소하거나
+  생성된 이슈를 삭제하는 조작이 아니다. 다시 열면 저장된 의도로 돌아간다.
+- `Sent`/`NeedsConfirmation` 이후에는 실패·응답 유실을 미생성으로 간주하지 않는다.
+  재조회·정확한 URL 확인만 허용하고 자동 재전송하지 않는다. 별도 새 초안은 중복 위험의
+  명시적 확인과 새 승인이 필요하며, 이전 의도와의 관계를 보존한다.
+- 생성 확정 뒤 복원 연결에 실패하면 `Confirmed`를 유지하고 연결만 재시도한다.
+  지원하지 않는 필수 외부 검증기를 건너뛰지 않는다. 검증기 실행 중 사용자 취소는
+  [#2723](https://github.com/RefinedStone/codex-exec-loop/issues/2723)의 별도 계약이며,
+  여기서 원격 exactly-once나 이미 전송된 요청의 취소를 보장하지 않는다.
 
 ## 현재 한계
 
