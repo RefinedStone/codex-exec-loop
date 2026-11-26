@@ -12,6 +12,7 @@ pub(crate) mod conversation_progressive_activity;
 pub(crate) mod conversation_runtime_envelope;
 pub(crate) mod conversation_stream;
 pub(crate) mod delegation;
+pub(crate) mod runtime_capabilities;
 // kernel_event 는 커널의 판단 사건이다. 추가 전용 기록에 쓰고 재시작할 때 판단 상태를 되돌린다 (plan 19 Q3).
 pub(crate) mod kernel_event;
 // kernel_spec 은 커널 스펙의 domain 쪽 표이다: 명령의 종류와 성질, 기록의 종류 (plan 18 K4-1).

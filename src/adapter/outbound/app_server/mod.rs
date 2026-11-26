@@ -11,6 +11,7 @@
  * - 이 mod.rs: port trait 구현체로서 TUI/application service가 호출하는 공개 메서드를 조립한다.
  */
 mod approval;
+mod capabilities;
 // cloud_upstream.rs: dots 클라우드 app-server(`/host/cloud`) 로 잇는 두 번째 호스트 upstream (D-19).
 // cloud_dots.rs: dot 목록을 ChatGPT 백엔드 REST 로 읽는다 (D-19).
 pub(crate) mod cloud_dots;
@@ -1752,6 +1753,12 @@ impl SessionCatalogPort for CodexAppServerAdapter {
 }
 
 impl InteractiveTurnRuntimePort for CodexAppServerAdapter {
+    fn runtime_capabilities(
+        &self,
+    ) -> crate::domain::runtime_capabilities::ConversationRuntimeCapabilities {
+        capabilities::codex_runtime_capabilities()
+    }
+
     fn runtime_control_truth(&self) -> ConversationRuntimeControlTruth {
         ConversationRuntimeControlTruth::codex_app_server()
     }

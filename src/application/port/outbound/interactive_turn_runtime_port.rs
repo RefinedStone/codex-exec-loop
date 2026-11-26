@@ -11,6 +11,9 @@ use crate::domain::conversation::{
     ConversationApprovalDecision, ConversationRuntimeControlTruth, ConversationSnapshot,
     ConversationTurnOptions, ConversationTurnSteerReceipt, ConversationTurnSteerRequest,
 };
+pub use crate::domain::runtime_capabilities::{
+    ConversationRuntimeCapabilities, RuntimeFeatureSupport,
+};
 use crate::domain::turn_terminal::ConversationTurnTerminalReceipt;
 
 // `InteractiveTurnRuntimePort`는 `ConversationService`가 outbound runtime에 요구하는 대화 실행 계약이다.
@@ -20,6 +23,12 @@ use crate::domain::turn_terminal::ConversationTurnTerminalReceipt;
 // 이 trait가 `Send + Sync`인 이유는 TUI runtime이 background task와 UI event loop 사이에서 service를
 // 복제해 사용하기 때문이다. port 구현은 여러 thread에서 공유되어도 안전해야 한다.
 pub trait InteractiveTurnRuntimePort: Send + Sync {
+    /// Read-only adapter contract; this does not connect or start a model turn.
+    /// Implementors that omit it remain explicitly undeclared for compatibility.
+    fn runtime_capabilities(&self) -> ConversationRuntimeCapabilities {
+        ConversationRuntimeCapabilities::default()
+    }
+
     // runtime control truth는 "stop all sessions"나 실행 상태 판단을 실제로 어느 runtime이 담당하는지
     // TUI에 알려 주는 값이다. AppRuntime은 이 값을 초기화 시 읽어 중단 버튼과 상태 문구의 근거로 삼는다.
     fn runtime_control_truth(&self) -> ConversationRuntimeControlTruth;
