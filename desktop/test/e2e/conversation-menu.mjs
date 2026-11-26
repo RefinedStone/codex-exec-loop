@@ -51,6 +51,25 @@ try {
   const draft = await input.inputValue();
   check("the quote follows the existing draft", draft.startsWith("내 메모\n\n> ") && draft.includes(chosen.split("\n")[0]), JSON.stringify(draft));
 
+  // 링크 위의 메뉴는 운영체제 메뉴 대신 링크 주소 복사를 준다.
+  await message.locator("p").evaluate((element) => {
+    const link = document.createElement("a");
+    link.href = "https://example.com/akra";
+    link.textContent = "링크";
+    link.dataset.testid = "e2e-link";
+    element.append(link);
+  });
+  await page.getByTestId("e2e-link").click({ button: "right" });
+  await page.getByTestId("conversation-menu").waitFor({ timeout: 5_000 });
+  check("a link offers copy link address", (await page.getByTestId("conversation-menu-copy-link").count()) === 1);
+  const inside = await page.getByTestId("conversation-menu").evaluate((menu) => {
+    const box = menu.getBoundingClientRect();
+    return box.left >= 0 && box.top >= 0 && box.right <= window.innerWidth && box.bottom <= window.innerHeight;
+  });
+  check("the menu stays inside the window", inside);
+  await page.keyboard.press("Escape");
+  await page.getByTestId("e2e-link").evaluate((element) => element.remove());
+
   await message.locator("p").click({ button: "right" });
   await page.getByTestId("conversation-menu-find").click();
   await page.getByTestId("find-input").waitFor({ timeout: 5_000 });
