@@ -3812,9 +3812,10 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
     );
 
     // plan 18 K2-2: generations and the conversation load procedure span all threads; the
-    // per-thread turn state lives in one ThreadSession.
+    // per-thread turn state lives in one ThreadSession. plan 18 Q5-2c: the sessions live in one
+    // map, and the viewed slot is a key of that map.
     let reducer_authority_fields = [
-        "session",
+        "sessions",
         "next_conversation_load_generation",
         "in_flight_conversation_load",
         "deferred_conversation_load",
@@ -3823,8 +3824,7 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
         "next_stop_request_generation",
         "next_turn_steer_generation",
         "next_approval_decision_generation",
-        // plan 18 K2-3: busy sessions the client left, and the one serial review persistence queue.
-        "background_sessions",
+        // plan 18 K2-3: the one serial review persistence queue.
         "approval_review_persistence",
         // plan 18 K2-4: the background thread activity last published to the client.
         "published_thread_activity",
