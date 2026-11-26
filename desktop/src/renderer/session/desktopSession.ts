@@ -40,6 +40,7 @@ import { KERNEL_METHOD, type IssueAutomationModeRecord, type IssueEventReference
 import { JsonRpcClient, JsonRpcError, type JsonRpcId, NO_RESPONSE } from "../rpc/jsonRpcClient";
 import { checkCodexVersion } from "./codexVersion";
 import { ChatHistory } from "./chatHistory";
+import { ACCOUNT_LIMITS_READ, applyAccountLimitsNotification, applyAccountLimitsRead, setAccountLimitsStatus } from "./accountLimits";
 import { NextTurnQueue } from "./nextTurnQueue";
 import { NextTurnSettingsController } from "./nextTurnSettings";
 import { ThreadCompactionController } from "./threadCompaction";
@@ -868,6 +869,7 @@ export class DesktopSession {
       // 원격 호스트는 목록을 한 번만 읽는다 (plan 25 §8).
       if (!this.readOnly) {
         void this.addThreadsFromRolloutScan(generation);
+        void this.readAccountLimits();
       } else {
         void this.loadDots();
         this.chatHistory?.connected();
@@ -877,6 +879,15 @@ export class DesktopSession {
       }
     } catch (error) {
       this.store.setSessionError(errorMessage(error));
+    }
+  }
+
+  /** 계정 사용 한도를 읽는다 (#2821). 지원하지 않는 app-server 이면 표시하지 않는다. 읽기 실패는 "알 수 없음" 이다. */
+  private async readAccountLimits(): Promise<void> {
+    try {
+      applyAccountLimitsRead(await this.client.request(ACCOUNT_LIMITS_READ, { excludeResetCreditDetails: true }));
+    } catch (error) {
+      setAccountLimitsStatus(error instanceof JsonRpcError && error.code === -32601 ? "unsupported" : "unavailable");
     }
   }
 
@@ -1081,6 +1092,7 @@ export class DesktopSession {
   private handleNotification(method: string, params: unknown): void {
     // 압축 턴의 최종 결과를 먼저 반영한 뒤 예약 입력의 다음 dispatch 여부를 판단한다.
     this.compaction.observe(method, params);
+    if (!this.readOnly && applyAccountLimitsNotification(method, params)) return;
     if (method === "akra/providerCredentials/changed") {
       if (!this.readOnly && params && typeof params === "object") {
         const change = params as { provider?: unknown; profileId?: unknown; revision?: unknown; lagged?: unknown };

@@ -2382,3 +2382,18 @@ button.issues-title:hover {
   flex: 1;
   border-top: 1px solid var(--accent);
 }
+
+/* 계정 사용 한도 (#2821). */
+.account-limits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: 0;
+  padding: 4px 12px;
+  font-size: var(--text-xs, 11px);
+  color: var(--text-2);
+}
+
+.limit-high {
+  color: var(--danger, #c62828);
+}
