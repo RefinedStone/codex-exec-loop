@@ -51,6 +51,8 @@ dry-run은 OS SID·환경·checkout·빌드 파일을 읽고 해시만 확인합
 
 동일 폴더의 새 AKRA_HOME과 AKRA_DESKTOP_USER_DATA로 일반 visible Electron을 실행합니다. remote debugging, renderer 상태 주입, 메모리 transport, 승인 자동화는 없습니다. 앱 화면에서 sandbox checkout과 테스트 이슈를 선택합니다.
 
+Windows Gateway 접속 주소는 OS 사용자 SID만으로 정해지고, 이전 실행의 Gateway는 Electron 종료 뒤에도 남을 수 있습니다. 그래서 실행기는 Electron을 열기 전에 현재 사용자의 Gateway pipe를 확인합니다. pipe 소유 프로세스의 실행 파일이 이 실행 폴더의 helper가 아니거나, 이 실행 AKRA_HOME의 `run\gateway.lock`이 잠겨 있지 않거나, 확인 자체가 실패하면 제품을 시작하지 않습니다. 그 akra-gateway를 종료한 뒤 `--resume`으로 다시 시작합니다. `--resume`은 같은 실행의 Gateway만 다시 사용합니다.
+
 터미널에 표시한 이 실행 전용 합성 canary를 이슈 작성 화면의 **복원 가능한 가림 영역**으로 넣고, 공개 미리보기에서 가려졌음을 확인한 뒤 sandbox 이슈에 게시합니다. canary를 일반 공개문·대화·모델 입력으로 보내지 않습니다. 실행기는 게시를 자동 수행하지 않습니다.
 
 다음을 사람이 실제로 조작합니다. Windows native 확인은 기본 취소인 제품 대화상자이며, 실행기가 대신 승인하지 않습니다.
