@@ -13,6 +13,7 @@ import { STORAGE_EVIDENCE_EVENT, isStorageReference, queueStorageEvidence, clear
 import { BrowserPanel } from "./browser/BrowserPanel";
 import { ApprovalPrompt } from "./conversation/ApprovalPrompt";
 import { AreaBoundary } from "./views/AreaBoundary";
+import { appendQuote } from "./conversation/quote";
 import { pullRequestBadgeClass } from "./conversation/BranchCommits";
 import { Composer, type ComposerActions } from "./conversation/Composer";
 import { ConversationView } from "./conversation/ConversationView";
@@ -651,6 +652,14 @@ export function App() {
     toast(forkOutcomeText(outcome));
   }, []);
 
+  // 대화에서 고른 글을 열린 스레드의 초안 뒤에 인용으로 붙이고 입력창으로 간다 (#2842).
+  const quoteIntoDraft = useCallback((text: string) => {
+    const threadId = useDesktopStore.getState().openThreadId;
+    if (!threadId) return;
+    setDraft(threadId, appendQuote(useUiStore.getState().drafts[threadId] ?? "", text));
+    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('[data-testid="composer-input"]')?.focus());
+  }, []);
+
   // 이동 기록에서 뒤나 앞으로 간다 (plan 26 N1). 기록의 자리만 옮기고, 그 항목의 스레드를 연다.
   const navigate = useCallback(
     (delta: -1 | 1) => {
@@ -887,7 +896,8 @@ export function App() {
                 {/* 대화가 그리다 실패해도 입력창과 초안은 남는다. */}
                 <AreaBoundary resetKey={openThreadId ?? ""} area="대화">
                   <ConversationView onLoadOlder={async () => session.current?.loadOlderTurns()}
-                    onDraftTask={kernelPhase === "attached" && attachedWorkspace === openCwd ? openTaskEditor : undefined} />
+                    onDraftTask={kernelPhase === "attached" && attachedWorkspace === openCwd ? openTaskEditor : undefined}
+                    onQuote={quoteIntoDraft} onFork={() => void forkOpenThread()} />
                 </AreaBoundary>
                 {session.current && <ThreadCompactionControl key={openThreadId ?? ""} controller={session.current.compaction} />}
                 {/* 스레드마다 새로 만든다. 전송 중 표시와 오류가 다른 스레드의 입력창으로 넘어가지 않는다. 초안은 `uiStore` 에 남는다. */}
