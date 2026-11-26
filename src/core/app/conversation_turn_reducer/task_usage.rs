@@ -1,14 +1,14 @@
 //! Persist only usage from accepted, correctly correlated stream snapshots.
-use crate::core::app::{AppEvent, TurnStreamUpdate};
+use crate::core::app::{TurnStreamSnapshot, TurnStreamUpdate};
 use crate::domain::conversation_progressive_activity::ConversationProgressiveActivityPayload;
-use crate::domain::kernel_event::{KernelEvent, ThreadTurn};
+use crate::domain::kernel_event::KernelEvent;
 
-pub(super) fn usage_events(events: &[AppEvent], turns: &[ThreadTurn]) -> Vec<KernelEvent> {
+pub(super) fn usage_events(
+    snapshots: &[TurnStreamSnapshot],
+    op_id: Option<i64>,
+) -> Vec<KernelEvent> {
     let mut result = Vec::new();
-    for event in events {
-        let AppEvent::TurnStreamSnapshotChanged(snapshot) = event else {
-            continue;
-        };
+    for snapshot in snapshots {
         let TurnStreamUpdate::ProgressiveActivityObserved {
             activity,
             rejection: None,
@@ -36,13 +36,6 @@ pub(super) fn usage_events(events: &[AppEvent], turns: &[ThreadTurn]) -> Vec<Ker
             {
                 continue;
             }
-            let op_id = turns
-                .iter()
-                .find(|turn| {
-                    turn.thread_id == observation.thread_id
-                        && turn.turn_id.as_ref() == Some(turn_id)
-                })
-                .and_then(|turn| turn.op_id);
             result.push(KernelEvent::TurnUsageObserved {
                 thread_id: observation.thread_id.clone(),
                 turn_id: turn_id.clone(),
@@ -59,7 +52,7 @@ pub(super) fn usage_events(events: &[AppEvent], turns: &[ThreadTurn]) -> Vec<Ker
 mod tests {
     use super::usage_events;
     use crate::core::app::{
-        AppEvent, TurnStreamProgressiveActivityUpdate, TurnStreamSnapshot, TurnStreamUpdate,
+        TurnStreamProgressiveActivityUpdate, TurnStreamSnapshot, TurnStreamUpdate,
     };
     use crate::domain::conversation_progressive_activity::{
         ConversationProgressiveActivityBatch, ConversationProgressiveActivityKind,
@@ -67,7 +60,7 @@ mod tests {
         ConversationProgressiveActivityProjection, ConversationProgressiveActivityRejection,
         ConversationProgressiveTokenUsage, ConversationProgressiveTokenUsageBreakdown,
     };
-    use crate::domain::kernel_event::{KernelEvent, ThreadTurn};
+    use crate::domain::kernel_event::KernelEvent;
 
     #[test]
     fn task_usage_captures_only_accepted_current_turn_usage() {
@@ -123,15 +116,7 @@ mod tests {
                 rejection: None,
             },
         };
-        let turns = vec![ThreadTurn {
-            thread_id: "thread".into(),
-            turn_id: Some("turn".into()),
-            op_id: Some(7),
-        }];
-        let captured = usage_events(
-            &[AppEvent::turn_stream_snapshot_changed(snapshot.clone())],
-            &turns,
-        );
+        let captured = usage_events(std::slice::from_ref(&snapshot), Some(7));
         assert_eq!(
             captured,
             vec![KernelEvent::TurnUsageObserved {
@@ -146,20 +131,12 @@ mod tests {
             activity,
             rejection: Some(ConversationProgressiveActivityRejection::ThreadMismatch),
         };
-        assert!(
-            usage_events(
-                &[AppEvent::turn_stream_snapshot_changed(snapshot.clone())],
-                &turns
-            )
-            .is_empty()
-        );
+        assert!(usage_events(std::slice::from_ref(&snapshot), Some(7)).is_empty());
         snapshot.update = TurnStreamUpdate::ProgressiveActivityObserved {
             activity,
             rejection: None,
         };
         snapshot.active_turn_id = Some("other".into());
-        assert!(
-            usage_events(&[AppEvent::turn_stream_snapshot_changed(snapshot)], &turns).is_empty()
-        );
+        assert!(usage_events(&[snapshot], Some(7)).is_empty());
     }
 }

@@ -1,5 +1,4 @@
 mod state;
-mod task_usage;
 
 use self::state::AppState;
 use super::conversation_preferences::ConversationPreferenceFeatureReducer;
@@ -150,12 +149,6 @@ impl CoreController {
             self.record_command_end(&effect, failure);
         }
         self.record_turn_submissions(&outcome.effects);
-        for event in task_usage::usage_events(
-            &outcome.events,
-            &self.conversation_turn.published_thread_turns(),
-        ) {
-            self.conversation_turn.record_kernel_event(event);
-        }
         if let Some(activity) = self.conversation_turn.take_thread_activity_change() {
             // 턴의 시작과 끝은 thread 요약의 변화로 기록한다 (plan 19 Q3-2). 요약은 보지 않는 thread 도 담는다.
             for mut event in kernel_event::turn_events_between(
@@ -1697,6 +1690,9 @@ impl CoreController {
         else {
             return self.unchanged_outcome();
         };
+        for event in reduction.usage_records {
+            self.conversation_turn.record_kernel_event(event);
+        }
         let events = reduction
             .snapshots
             .into_iter()
@@ -10838,6 +10834,101 @@ mod tests {
         let next = start_test_turn(&mut controller, "thread-beta", "turn-10");
         end_test_turn(&mut controller, next);
         assert!(operation_records(&mut controller, 7).0.is_empty());
+    }
+
+    #[test]
+    fn task_usage_records_are_independent_of_the_viewed_conversation() {
+        use crate::domain::conversation_progressive_activity::{
+            ConversationProgressiveActivityBatch, ConversationProgressiveActivityKind,
+            ConversationProgressiveActivityObservation, ConversationProgressiveActivityPayload,
+            ConversationProgressiveTokenUsage, ConversationProgressiveTokenUsageBreakdown,
+        };
+        let tokens = ConversationProgressiveTokenUsageBreakdown {
+            input_tokens: 10,
+            total_tokens: 10,
+            ..Default::default()
+        };
+        for background in [false, true] {
+            let mut controller = hosted_controller(false);
+            load_test_session_catalog(&mut controller);
+            load_test_conversation(
+                &mut controller,
+                if background {
+                    "thread-alpha"
+                } else {
+                    "thread-beta"
+                },
+            );
+            controller.handle_input(operation_prompt("thread-beta", "fix the test", 7));
+            let prepared = controller.handle_input(prepared_thread_prompt(
+                1,
+                "fix the test",
+                "planned prompt",
+            ));
+            let turn = submitted_turn(&prepared);
+            controller.handle_input(test_turn_stream_input(
+                turn,
+                TurnStreamEvent::ThreadPrepared {
+                    thread_id: "thread-beta".into(),
+                    title: "Task usage".into(),
+                    cwd: "/tmp/workspace".into(),
+                    runtime_envelope: Box::default(),
+                },
+            ));
+            controller.handle_input(test_turn_stream_input(
+                turn,
+                TurnStreamEvent::TurnStarted {
+                    turn_id: "turn-9".into(),
+                    runtime_request: Box::default(),
+                },
+            ));
+            if background {
+                assert_eq!(controller.conversation_turn.background_session_count(), 1);
+            }
+            controller.take_kernel_records();
+            let batch = ConversationProgressiveActivityBatch::single(
+                ConversationProgressiveActivityObservation {
+                    sequence: 1,
+                    thread_id: "thread-beta".into(),
+                    turn_id: Some("turn-9".into()),
+                    item_id: None,
+                    kind: ConversationProgressiveActivityKind::TokenUsage,
+                    payload: ConversationProgressiveActivityPayload::TokenUsage {
+                        usage: ConversationProgressiveTokenUsage {
+                            last: tokens,
+                            total: tokens,
+                            model_context_window: None,
+                        },
+                    },
+                },
+            )
+            .unwrap();
+            let outcome = controller.handle_input(test_turn_stream_input(
+                turn,
+                TurnStreamEvent::ProgressiveActivityObserved {
+                    batch: Box::new(batch),
+                },
+            ));
+            assert_eq!(
+                controller.take_kernel_records(),
+                vec![KernelEvent::TurnUsageObserved {
+                    thread_id: "thread-beta".into(),
+                    turn_id: "turn-9".into(),
+                    op_id: Some(7),
+                    last: tokens,
+                    total: tokens,
+                }],
+                "accepted usage must be recorded exactly once (background={background})",
+            );
+            assert_eq!(
+                outcome
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, AppEvent::TurnStreamSnapshotChanged(_))),
+                !background,
+                "background usage must not expose that thread's screen projection",
+            );
+        }
     }
 
     #[test]

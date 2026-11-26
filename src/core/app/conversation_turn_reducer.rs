@@ -1,3 +1,5 @@
+mod task_usage;
+
 use super::approval::{ApprovalReviewPersistenceCoordinator, ApprovalReviewPersistenceSettlement};
 use super::conversation_runtime::{ConversationRuntimeAuthority, TurnAuthorityAdmission};
 use super::post_turn_state::{
@@ -98,6 +100,8 @@ pub(super) struct TurnStreamReduction {
     // 이 스트림 이벤트로 턴이 끝나서 평가를 기다린다. 값은 그 턴의 planning 작업 공간이다.
     pub(super) post_turn_evaluation_due_workspace: Option<String>,
     pub(super) snapshots: Vec<TurnStreamSnapshot>,
+    // 화면에 공개하지 않는 백그라운드 턴도 수용한 사용량을 기록한다.
+    pub(super) usage_records: Vec<KernelEvent>,
     pub(super) stop_effects: Vec<StopEffectIntent>,
     pub(super) approval_review_persistence: Option<ApprovalReviewPersistenceCorrelation>,
 }
@@ -557,9 +561,11 @@ impl ThreadSession {
             self.schedule_stop_synchronization_after_turn_started(&mut stop_effects);
         }
         self.prune_post_turn_evaluation_for_lifecycle();
+        let usage_records = task_usage::usage_events(&snapshots, self.op_id);
         TurnStreamReduction {
             post_turn_evaluation_due_workspace,
             snapshots,
+            usage_records,
             stop_effects,
             approval_review_persistence,
         }
