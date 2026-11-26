@@ -1316,6 +1316,66 @@ fn authority_schema_v21_moves_legacy_workspace_paths_once() {
 }
 
 #[test]
+fn authority_schema_v21_moves_trimmed_and_backslash_direction_paths() {
+    let workspace_dir = temp_workspace("schema-migrate-akra-direction-input-forms");
+    let location =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(&workspace_dir)
+            .expect("authority location should resolve");
+    let connection = open_authority_connection(&location).expect("current store should open");
+    // v20 stored the trimmed column and the raw JSON value. Both input forms passed the old rules.
+    connection
+        .execute_batch(
+            r#"INSERT INTO planning_direction_config
+               (config_key, version, queue_idle_policy, queue_idle_prompt_path)
+               VALUES ('default', 1, 'review',
+                       '.codex-exec-loop\planning\prompts\queue-idle-review.md');
+               INSERT INTO planning_directions
+               (direction_id, direction_order, title, state, detail_doc_path, content_json)
+               VALUES ('plain', 0, 'P', 'active', '.codex-exec-loop/planning/directions/plain.md',
+                       '{"id":"plain","detail_doc_path":".codex-exec-loop/planning/directions/plain.md"}'),
+                      ('spaced', 1, 'S', 'active', '.codex-exec-loop/planning/directions/spaced.md',
+                       '{"id":"spaced","detail_doc_path":"  .codex-exec-loop/planning/directions/spaced.md "}'),
+                      ('windows', 2, 'W', 'active', '.codex-exec-loop\planning\directions\windows.md',
+                       '{"id":"windows","detail_doc_path":".codex-exec-loop\\planning\\directions\\windows.md"}');
+               UPDATE authority_metadata SET value = '20' WHERE key = 'schema_version';"#,
+        )
+        .expect("v20 fixture should install");
+    drop(connection);
+
+    let migrated = open_authority_connection(&location).expect("v20 store should migrate");
+    let prompt_path: String = migrated
+        .query_row(
+            "SELECT queue_idle_prompt_path FROM planning_direction_config",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(prompt_path, ".akra/planning/prompts/queue-idle-review.md");
+    let mut statement = migrated
+        .prepare(
+            "SELECT direction_id, detail_doc_path, json_extract(content_json, '$.detail_doc_path')
+             FROM planning_directions ORDER BY direction_order",
+        )
+        .unwrap();
+    let directions = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    for (direction_id, column_path, json_path) in directions {
+        let expected = format!(".akra/planning/directions/{direction_id}.md");
+        assert_eq!(column_path, expected, "column of `{direction_id}`");
+        assert_eq!(json_path, expected, "content_json of `{direction_id}`");
+    }
+}
+
+#[test]
 fn authority_schema_v21_path_conflict_rolls_back_the_whole_migration() {
     let workspace_dir = temp_workspace("schema-migrate-akra-conflict");
     let location =

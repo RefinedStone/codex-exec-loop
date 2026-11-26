@@ -899,21 +899,86 @@ fn migrate_legacy_workspace_directory_paths(connection: &Connection) -> Result<(
                 format!("failed to move `{table}.{column}` to the `{current}` workspace directory")
             })?;
     }
-    // The direction row also keeps the path inside the JSON that load deserializes.
-    connection
-        .execute(
-            "UPDATE planning_directions
-             SET content_json = json_set(
-                 content_json,
-                 '$.detail_doc_path',
-                 ?2 || substr(json_extract(content_json, '$.detail_doc_path'), length(?1) + 1)
-             )
-             WHERE json_valid(content_json)
-               AND substr(json_extract(content_json, '$.detail_doc_path'), 1, length(?1)) = ?1",
-            params![legacy, current],
-        )
-        .context("failed to move direction detail paths to the `.akra/` workspace directory")?;
+    migrate_legacy_direction_path_references(connection)
+}
+
+/*
+direction 경로의 예전 입력 규칙(`is_valid_planning_markdown_path`)은 양끝 공백과 `\`를 받아들였다. 저장할 때 column은
+trim만 했고, load가 역직렬화하는 `content_json`에는 원문이 남았다. 그래서 위의 접두어 비교가 놓친 queue-idle prompt
+경로, direction column, JSON 사본을 같은 규칙으로 정규화한 뒤 옮긴다.
+*/
+fn migrate_legacy_direction_path_references(connection: &Connection) -> Result<()> {
+    let prompt_paths = {
+        let mut statement = connection
+            .prepare("SELECT config_key, queue_idle_prompt_path FROM planning_direction_config")?;
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (config_key, path) in prompt_paths {
+        if let Some(moved) = moved_legacy_workspace_path(&path) {
+            connection
+                .execute(
+                    "UPDATE planning_direction_config SET queue_idle_prompt_path = ?2
+                     WHERE config_key = ?1",
+                    params![config_key, moved],
+                )
+                .context("failed to move the queue-idle prompt path to the `.akra/` directory")?;
+        }
+    }
+    let direction_paths = {
+        let mut statement = connection.prepare(
+            "SELECT direction_id, detail_doc_path,
+                    CASE WHEN json_valid(content_json) THEN
+                        CASE WHEN json_type(content_json, '$.detail_doc_path') = 'text'
+                             THEN json_extract(content_json, '$.detail_doc_path') END
+                    END
+             FROM planning_directions",
+        )?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (direction_id, column_path, json_path) in direction_paths {
+        if let Some(moved) = moved_legacy_workspace_path(&column_path) {
+            connection
+                .execute(
+                    "UPDATE planning_directions SET detail_doc_path = ?2 WHERE direction_id = ?1",
+                    params![direction_id, moved],
+                )
+                .with_context(|| {
+                    format!("failed to move direction `{direction_id}` detail path")
+                })?;
+        }
+        if let Some(moved) = json_path.as_deref().and_then(moved_legacy_workspace_path) {
+            connection
+                .execute(
+                    "UPDATE planning_directions
+                     SET content_json = json_set(content_json, '$.detail_doc_path', ?2)
+                     WHERE direction_id = ?1",
+                    params![direction_id, moved],
+                )
+                .with_context(|| format!("failed to move direction `{direction_id}` JSON path"))?;
+        }
+    }
     Ok(())
+}
+
+/// 예전 입력 규칙대로 `trim`과 `\` -> `/` 정규화를 한 뒤 `.codex-exec-loop/` 경로만 `.akra/` 경로로 돌려준다.
+fn moved_legacy_workspace_path(path: &str) -> Option<String> {
+    let normalized = path.trim().replace('\\', "/");
+    let rest = normalized
+        .strip_prefix(LEGACY_WORKSPACE_DIRECTORY)?
+        .strip_prefix('/')?;
+    Some(format!("{AKRA_WORKSPACE_DIRECTORY}/{rest}"))
 }
 
 fn migrate_pr_validation_review_watch_projection(connection: &Connection) -> Result<()> {
