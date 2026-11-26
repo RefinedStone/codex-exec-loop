@@ -1002,6 +1002,10 @@ mod tests {
     use crate::adapter::outbound::filesystem::FilesystemPlanningWorkspaceAdapter;
     use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
     use crate::application::port::outbound::parallel_agent_worker_port::NoopParallelAgentWorkerPort;
+    use crate::application::port::outbound::planning_workspace_port::{
+        PlanningDraftFileRecord, PlanningDraftLoadRecord, PlanningDraftStageRecord,
+        PlanningFileSyncCandidateRecord, PlanningWorkspaceLoadRecord, PlanningWorkspacePort,
+    };
     use crate::application::port::outbound::session_catalog_port::SessionCatalogPort;
     use crate::application::port::outbound::startup_probe_port::{
         AppServerStartupContext, StartupProbePort,
@@ -1018,6 +1022,7 @@ mod tests {
     use crate::application::service::session_service::SessionService;
     use crate::application::service::startup_service::StartupService;
     use crate::core::app::{CoreInput, CorePromptOrigin, StartupReadySnapshot, TurnStreamEvent};
+    use crate::core::native_client_port::NativeClientDispatchOutcome;
     use crate::domain::conversation::{
         ConversationReasoningEffort, ConversationRuntimeControlTruth, ConversationSnapshot,
         ConversationTurnOptions,
@@ -1030,8 +1035,8 @@ mod tests {
     use anyhow::Result;
     use std::fs;
     use std::path::PathBuf;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex, mpsc};
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     #[derive(Default)]
@@ -1141,10 +1146,27 @@ mod tests {
     }
 
     fn make_test_app(workspace: &TempWorkspace) -> NativeTuiApp {
+        make_test_app_with_planning_workspace(
+            workspace,
+            Arc::new(FilesystemPlanningWorkspaceAdapter::new()),
+        )
+    }
+
+    /// 수동 준비 worker 를 실제 파일 시스템 앞에서 멈추는 app 이다. 시험이 `gate.release()` 로 푼다 (#2747).
+    fn make_gated_test_app(workspace: &TempWorkspace) -> (NativeTuiApp, PreparationGate) {
+        let (planning_workspace, gate) = gated_planning_workspace();
+        (
+            make_test_app_with_planning_workspace(workspace, Arc::new(planning_workspace)),
+            gate,
+        )
+    }
+
+    fn make_test_app_with_planning_workspace(
+        workspace: &TempWorkspace,
+        planning_workspace: Arc<dyn PlanningWorkspacePort>,
+    ) -> NativeTuiApp {
         let codex_port = Arc::new(FakeAppServerPort);
-        let planning = test_helpers::test_planning_services(Arc::new(
-            FilesystemPlanningWorkspaceAdapter::new(),
-        ));
+        let planning = test_helpers::test_planning_services(planning_workspace);
         let parallel_mode_control_plane_composition =
             test_helpers::test_parallel_mode_control_plane_composition_with_worker(
                 test_helpers::test_parallel_mode_service(),
@@ -1260,18 +1282,351 @@ mod tests {
         ready_conversation_mut(app).composer.input_buffer = input.to_string();
     }
 
-    fn poll_manual_prompt_preparation_completion(app: &mut NativeTuiApp) {
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while app.conversation.pending_manual_prompt_preparation.is_some()
-            && Instant::now() < deadline
-        {
-            app.poll_client_runtime_events(16);
-            std::thread::yield_now();
+    // The gate removes the timing dependency before release. After release the worker still
+    // does real file I/O, so the watchdog only stops a lost completion from hanging the run.
+    const MANUAL_PREPARATION_WATCHDOG: Duration = Duration::from_secs(10);
+
+    /*
+     * Wraps the real filesystem adapter. The first planning workspace call stops the manual
+     * preparation worker until the test releases it, so the test decides when preparation
+     * completes. Each call records its port function as the current preparation stage.
+     */
+    struct GatedPlanningWorkspace {
+        inner: FilesystemPlanningWorkspaceAdapter,
+        armed: AtomicBool,
+        entered: mpsc::SyncSender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+        stage: Arc<Mutex<&'static str>>,
+    }
+
+    struct PreparationGate {
+        entered: mpsc::Receiver<()>,
+        release: mpsc::SyncSender<()>,
+        stage: Arc<Mutex<&'static str>>,
+    }
+
+    fn gated_planning_workspace() -> (GatedPlanningWorkspace, PreparationGate) {
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        let stage = Arc::new(Mutex::new("no planning workspace call"));
+        (
+            GatedPlanningWorkspace {
+                inner: FilesystemPlanningWorkspaceAdapter::new(),
+                armed: AtomicBool::new(true),
+                entered: entered_tx,
+                release: Mutex::new(release_rx),
+                stage: stage.clone(),
+            },
+            PreparationGate {
+                entered: entered_rx,
+                release: release_tx,
+                stage,
+            },
+        )
+    }
+
+    impl GatedPlanningWorkspace {
+        fn enter(&self, stage: &'static str) {
+            *self.stage.lock().unwrap_or_else(|e| e.into_inner()) = stage;
+            if !self.armed.swap(false, Ordering::SeqCst) {
+                return;
+            }
+            let _ = self.entered.send(());
+            // A dropped gate also releases the worker, so a failed test leaves no blocked thread.
+            let _ = self
+                .release
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .recv();
         }
-        assert!(
-            app.conversation.pending_manual_prompt_preparation.is_none(),
-            "manual prompt preparation should complete through the Core mailbox"
-        );
+    }
+
+    impl PreparationGate {
+        fn stage(&self) -> &'static str {
+            *self.stage.lock().unwrap_or_else(|e| e.into_inner())
+        }
+
+        fn has_held_worker(&self) -> bool {
+            self.entered.try_recv().is_ok()
+        }
+
+        fn wait_until_worker_is_held(&self, app: &NativeTuiApp) {
+            if let Err(error) = self.entered.recv_timeout(MANUAL_PREPARATION_WATCHDOG) {
+                panic!(
+                    "manual prompt preparation worker did not reach the planning workspace / {} / stage: {} / watchdog: {MANUAL_PREPARATION_WATCHDOG:?} / {error}",
+                    pending_manual_preparation_label(app),
+                    self.stage(),
+                );
+            }
+        }
+
+        fn release(&self) {
+            self.release
+                .send(())
+                .expect("gated manual preparation worker should accept one release");
+        }
+    }
+
+    impl PlanningWorkspacePort for GatedPlanningWorkspace {
+        fn uses_repo_scoped_authority(&self, workspace_dir: &str) -> bool {
+            self.enter("uses_repo_scoped_authority");
+            self.inner.uses_repo_scoped_authority(workspace_dir)
+        }
+
+        fn export_planning_file_sync_candidate(
+            &self,
+            workspace_dir: &str,
+            relative_path: &str,
+            body: &str,
+            observed_planning_revision: Option<i64>,
+        ) -> Result<String> {
+            self.enter("export_planning_file_sync_candidate");
+            self.inner.export_planning_file_sync_candidate(
+                workspace_dir,
+                relative_path,
+                body,
+                observed_planning_revision,
+            )
+        }
+
+        fn load_planning_file_sync_candidate(
+            &self,
+            workspace_dir: &str,
+            relative_path: &str,
+        ) -> Result<Option<PlanningFileSyncCandidateRecord>> {
+            self.enter("load_planning_file_sync_candidate");
+            self.inner
+                .load_planning_file_sync_candidate(workspace_dir, relative_path)
+        }
+
+        fn stage_planning_draft_files(
+            &self,
+            workspace_dir: &str,
+            draft_name: &str,
+            files: &[PlanningDraftFileRecord],
+        ) -> Result<PlanningDraftStageRecord> {
+            self.enter("stage_planning_draft_files");
+            self.inner
+                .stage_planning_draft_files(workspace_dir, draft_name, files)
+        }
+
+        fn load_planning_draft_files(
+            &self,
+            workspace_dir: &str,
+            draft_name: &str,
+        ) -> Result<PlanningDraftLoadRecord> {
+            self.enter("load_planning_draft_files");
+            self.inner
+                .load_planning_draft_files(workspace_dir, draft_name)
+        }
+
+        fn replace_planning_draft_file(
+            &self,
+            workspace_dir: &str,
+            draft_name: &str,
+            active_path: &str,
+            body: &str,
+        ) -> Result<String> {
+            self.enter("replace_planning_draft_file");
+            self.inner
+                .replace_planning_draft_file(workspace_dir, draft_name, active_path, body)
+        }
+
+        fn load_planning_workspace_files(
+            &self,
+            workspace_dir: &str,
+        ) -> Result<PlanningWorkspaceLoadRecord> {
+            self.enter("load_planning_workspace_files");
+            self.inner.load_planning_workspace_files(workspace_dir)
+        }
+
+        fn load_planning_execution_snapshot(
+            &self,
+            workspace_dir: &str,
+        ) -> Result<Option<crate::domain::planning::ExecutionSnapshot>> {
+            self.enter("load_planning_execution_snapshot");
+            self.inner.load_planning_execution_snapshot(workspace_dir)
+        }
+
+        fn load_planning_workspace_candidate_files(
+            &self,
+            workspace_dir: &str,
+        ) -> Result<PlanningWorkspaceLoadRecord> {
+            self.enter("load_planning_workspace_candidate_files");
+            self.inner
+                .load_planning_workspace_candidate_files(workspace_dir)
+        }
+
+        fn commit_planning_workspace_files(
+            &self,
+            workspace_dir: &str,
+            record: &PlanningWorkspaceLoadRecord,
+        ) -> Result<()> {
+            self.enter("commit_planning_workspace_files");
+            self.inner
+                .commit_planning_workspace_files(workspace_dir, record)
+        }
+
+        fn compare_and_swap_planning_workspace_files(
+            &self,
+            workspace_dir: &str,
+            observed: &PlanningWorkspaceLoadRecord,
+            replacement: &PlanningWorkspaceLoadRecord,
+        ) -> Result<bool> {
+            self.enter("compare_and_swap_planning_workspace_files");
+            self.inner.compare_and_swap_planning_workspace_files(
+                workspace_dir,
+                observed,
+                replacement,
+            )
+        }
+
+        fn compare_and_swap_planning_workspace_files_at_revision(
+            &self,
+            workspace_dir: &str,
+            expected_planning_revision: Option<i64>,
+            observed: &PlanningWorkspaceLoadRecord,
+            replacement: &PlanningWorkspaceLoadRecord,
+        ) -> Result<bool> {
+            self.enter("compare_and_swap_planning_workspace_files_at_revision");
+            self.inner
+                .compare_and_swap_planning_workspace_files_at_revision(
+                    workspace_dir,
+                    expected_planning_revision,
+                    observed,
+                    replacement,
+                )
+        }
+
+        fn load_optional_planning_file(
+            &self,
+            workspace_dir: &str,
+            relative_path: &str,
+        ) -> Result<Option<String>> {
+            self.enter("load_optional_planning_file");
+            self.inner
+                .load_optional_planning_file(workspace_dir, relative_path)
+        }
+
+        fn load_optional_planning_candidate_file(
+            &self,
+            workspace_dir: &str,
+            relative_path: &str,
+        ) -> Result<Option<String>> {
+            self.enter("load_optional_planning_candidate_file");
+            self.inner
+                .load_optional_planning_candidate_file(workspace_dir, relative_path)
+        }
+
+        fn replace_planning_workspace_file(
+            &self,
+            workspace_dir: &str,
+            relative_path: &str,
+            body: Option<&str>,
+        ) -> Result<()> {
+            self.enter("replace_planning_workspace_file");
+            self.inner
+                .replace_planning_workspace_file(workspace_dir, relative_path, body)
+        }
+
+        fn remove_planning_workspace_entry(
+            &self,
+            workspace_dir: &str,
+            relative_path: &str,
+        ) -> Result<()> {
+            self.enter("remove_planning_workspace_entry");
+            self.inner
+                .remove_planning_workspace_entry(workspace_dir, relative_path)
+        }
+
+        fn archive_rejected_planning_file(
+            &self,
+            workspace_dir: &str,
+            archive_name: &str,
+            active_path: &str,
+            body: &str,
+        ) -> Result<String> {
+            self.enter("archive_rejected_planning_file");
+            self.inner.archive_rejected_planning_file(
+                workspace_dir,
+                archive_name,
+                active_path,
+                body,
+            )
+        }
+    }
+
+    fn pending_manual_preparation_label(app: &NativeTuiApp) -> String {
+        match &app.conversation.pending_manual_prompt_preparation {
+            Some(pending) => format!(
+                "request_id: {} / generation: {} / workspace: {}",
+                pending.correlation.request_id,
+                pending.correlation.generation,
+                pending.correlation.workspace_directory
+            ),
+            None => "no pending manual preparation".to_string(),
+        }
+    }
+
+    fn dispatch_outcome_event_names(outcome: &NativeClientDispatchOutcome) -> String {
+        let core = match outcome {
+            NativeClientDispatchOutcome::Core(core)
+            | NativeClientDispatchOutcome::Combined { core, .. } => core,
+            NativeClientDispatchOutcome::Parallel(_) => return "parallel dispatch".to_string(),
+        };
+        let names = core
+            .events
+            .iter()
+            .map(|event| {
+                let text = format!("{event:?}");
+                text.split(|c: char| !c.is_alphanumeric())
+                    .next()
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        format!("core events: [{}]", names.join(", "))
+    }
+
+    /*
+     * Drains the Core mailbox until the pending manual preparation clears. When the watchdog
+     * ends first, the error names the request, the last preparation stage, the elapsed time,
+     * and the last Core dispatch, so a slow worker and a lost completion can be told apart.
+     */
+    fn wait_for_manual_prompt_preparation_completion(
+        app: &mut NativeTuiApp,
+        gate: &PreparationGate,
+        watchdog: Duration,
+    ) -> std::result::Result<(), String> {
+        let request = pending_manual_preparation_label(app);
+        let started = Instant::now();
+        let mut last_event = "none".to_string();
+        while app.conversation.pending_manual_prompt_preparation.is_some() {
+            if started.elapsed() >= watchdog {
+                return Err(format!(
+                    "manual prompt preparation did not complete through the Core mailbox / {request} / stage: {} / elapsed: {:?} / last event: {last_event}",
+                    gate.stage(),
+                    started.elapsed(),
+                ));
+            }
+            match app.runtime.client_runtime.poll_pending_client_event() {
+                Some(outcome) => {
+                    last_event = dispatch_outcome_event_names(&outcome);
+                    app.apply_native_client_dispatch_outcome(outcome);
+                }
+                // Sleep instead of spin so the test thread does not take CPU from the worker.
+                None => std::thread::sleep(Duration::from_millis(2)),
+            }
+        }
+        Ok(())
+    }
+
+    fn complete_manual_prompt_preparation(app: &mut NativeTuiApp, gate: &PreparationGate) {
+        if let Err(diagnostic) =
+            wait_for_manual_prompt_preparation_completion(app, gate, MANUAL_PREPARATION_WATCHDOG)
+        {
+            panic!("{diagnostic}");
+        }
     }
 
     fn arm_manual_prompt_preparation(
@@ -1463,7 +1818,7 @@ mod tests {
     #[test]
     fn manual_preparation_waits_for_startup_before_planning_side_effects() {
         let workspace = TempWorkspace::new("turn-submit-manual-startup-gate");
-        let mut pending_app = make_test_app(&workspace);
+        let (mut pending_app, gate) = make_gated_test_app(&workspace);
         pending_app.shell.chrome.startup_state = StartupState::Loading;
         set_input(&mut pending_app, "ship it");
 
@@ -1485,11 +1840,24 @@ mod tests {
             "ship it"
         );
         assert!(ready_conversation(&pending_app).messages.is_empty());
+        assert!(!gate.has_held_worker());
+        assert_eq!(gate.stage(), "no planning workspace call");
 
         pending_app.shell.chrome.startup_state =
             StartupState::Ready(startup_ready_snapshot(workspace.path_str(), true));
         pending_app.resolve_startup_submit_queue();
-        poll_manual_prompt_preparation_completion(&mut pending_app);
+        gate.wait_until_worker_is_held(&pending_app);
+
+        assert!(
+            pending_app
+                .conversation
+                .pending_manual_prompt_preparation
+                .is_some()
+        );
+        assert!(ready_conversation(&pending_app).messages.is_empty());
+
+        gate.release();
+        complete_manual_prompt_preparation(&mut pending_app, &gate);
 
         assert!(
             !ready_conversation(&pending_app)
@@ -1503,11 +1871,12 @@ mod tests {
     #[test]
     fn manual_preparation_tracks_raw_draft_and_submits_trimmed_transcript() {
         let workspace = TempWorkspace::new("turn-submit-manual-whitespace");
-        let mut app = make_test_app(&workspace);
+        let (mut app, gate) = make_gated_test_app(&workspace);
         set_input(&mut app, "  ship it  ");
 
         app.submit_manual_prompt_from_text("  ship it  ".to_string());
-        poll_manual_prompt_preparation_completion(&mut app);
+        gate.release();
+        complete_manual_prompt_preparation(&mut app, &gate);
 
         let conversation = ready_conversation(&app);
         assert_eq!(conversation.composer.input_buffer, "");
@@ -1596,7 +1965,7 @@ mod tests {
     #[test]
     fn startup_replays_an_image_only_submission_exactly_once_when_ready() {
         let workspace = TempWorkspace::new("turn-submit-startup-image-only");
-        let mut app = make_test_app(&workspace);
+        let (mut app, gate) = make_gated_test_app(&workspace);
         app.shell.chrome.startup_state = StartupState::Loading;
         app.dispatch_conversation_input(ConversationComposerEvent::ImageAttachmentAdded {
             path: "/tmp/queued-shot.png".to_string(),
@@ -1625,7 +1994,8 @@ mod tests {
 
         // A second readiness callback must not send the queued image again.
         app.resolve_startup_submit_queue();
-        poll_manual_prompt_preparation_completion(&mut app);
+        gate.release();
+        complete_manual_prompt_preparation(&mut app, &gate);
         let transcript = ready_conversation(&app);
         assert_eq!(transcript.messages.len(), 1);
         assert_eq!(transcript.messages[0].text, "[image #1: queued-shot.png]");
@@ -1634,14 +2004,15 @@ mod tests {
     #[test]
     fn resolve_startup_submit_queue_replays_ready_buffered_prompt() {
         let workspace = TempWorkspace::new("turn-submit-startup-replay");
-        let mut app = make_test_app(&workspace);
+        let (mut app, gate) = make_gated_test_app(&workspace);
         set_input(&mut app, "  queued prompt  ");
         app.dispatch_conversation_input(ConversationComposerEvent::StartupSubmitArmed {
             status_text: "queued".to_string(),
         });
 
         app.resolve_startup_submit_queue();
-        poll_manual_prompt_preparation_completion(&mut app);
+        gate.release();
+        complete_manual_prompt_preparation(&mut app, &gate);
 
         let conversation = ready_conversation(&app);
         assert!(app.conversation.pending_manual_prompt_preparation.is_none());
@@ -1866,16 +2237,72 @@ mod tests {
     #[test]
     fn rapid_double_enter_after_serial_preparation_does_not_duplicate_submission() {
         let workspace = TempWorkspace::new("turn-submit-double-enter");
-        let mut app = make_test_app(&workspace);
+        let (mut app, gate) = make_gated_test_app(&workspace);
         set_input(&mut app, "ship it");
 
         app.submit_manual_prompt_from_text("ship it".to_string());
-        poll_manual_prompt_preparation_completion(&mut app);
+        gate.wait_until_worker_is_held(&app);
+        let correlation = app
+            .conversation
+            .pending_manual_prompt_preparation
+            .as_ref()
+            .map(|pending| pending.correlation.clone());
 
+        // Two Enter presses while preparation is held must not start a second preparation.
+        app.start_turn_submission();
+        app.start_turn_submission();
+        assert_eq!(
+            app.conversation
+                .pending_manual_prompt_preparation
+                .as_ref()
+                .map(|pending| pending.correlation.clone()),
+            correlation
+        );
+        assert_eq!(
+            ready_conversation(&app).status_text,
+            "turn preparation already in progress; wait for it to finish before submitting again"
+        );
+        assert!(ready_conversation(&app).messages.is_empty());
+
+        gate.release();
+        complete_manual_prompt_preparation(&mut app, &gate);
         app.start_turn_submission();
 
         assert!(app.conversation.pending_manual_prompt_preparation.is_none());
+        assert_eq!(ready_conversation(&app).messages.len(), 1);
         assert_eq!(ready_conversation(&app).status_text, "starting turn");
+    }
+
+    #[test]
+    fn missing_manual_preparation_completion_reports_request_and_stage() {
+        let workspace = TempWorkspace::new("turn-submit-missing-completion");
+        let (mut app, gate) = make_gated_test_app(&workspace);
+        set_input(&mut app, "ship it");
+
+        app.submit_manual_prompt_from_text("ship it".to_string());
+        gate.wait_until_worker_is_held(&app);
+        let request_id = app
+            .conversation
+            .pending_manual_prompt_preparation
+            .as_ref()
+            .expect("held preparation should stay pending")
+            .correlation
+            .request_id;
+
+        // The gate is never released, so the completion does not arrive.
+        let diagnostic = wait_for_manual_prompt_preparation_completion(
+            &mut app,
+            &gate,
+            Duration::from_millis(50),
+        )
+        .expect_err("a held preparation should end at the watchdog");
+
+        assert!(diagnostic.contains(&format!("request_id: {request_id} ")));
+        assert_ne!(gate.stage(), "no planning workspace call");
+        assert!(diagnostic.contains(&format!("stage: {} ", gate.stage())));
+        assert!(diagnostic.contains("elapsed: "));
+        assert!(diagnostic.contains("last event: "));
+        assert!(app.conversation.pending_manual_prompt_preparation.is_some());
     }
 
     #[test]
