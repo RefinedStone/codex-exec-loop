@@ -18,6 +18,11 @@ describe("fitMenuPosition", () => {
     expect(fitMenuPosition({ x: 100, y: 550 }, menu, viewport)).toEqual({ x: 100, y: 350 });
   });
 
+  it("divides screen coordinates by the area zoom", () => {
+    expect(fitMenuPosition({ x: 400, y: 300 }, { width: 255, height: 300 }, viewport, 1.5)).toEqual({ x: 400 / 1.5, y: 200 });
+    expect(fitMenuPosition({ x: 750, y: 100 }, { width: 136, height: 160 }, viewport, 0.8)).toEqual({ x: 614 / 0.8, y: 125 });
+  });
+
   it("pins to the window edge when neither side fits", () => {
     expect(fitMenuPosition({ x: 100, y: 150 }, menu, viewport)).toEqual({ x: 100, y: 150 });
     expect(fitMenuPosition({ x: 100, y: 150 }, { width: 170, height: 500 }, viewport)).toEqual({ x: 100, y: 0 });
