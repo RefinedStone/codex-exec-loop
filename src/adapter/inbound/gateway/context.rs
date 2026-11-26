@@ -1,6 +1,7 @@
 //! Gateway 의 `akra/context/*` 처리이다 (plan 22). 스레드에 나온 외부 문서를 장부에서 읽어 준다. 수집은
 //! 블로킹(app-server 조회와 SQLite)이므로 요청마다 블로킹 작업으로 돌린다. 접속의 읽기 고리는 기다리지 않는다.
 //! `refresh` 는 외부 서비스에 문서의 버전을 묻는다. 느릴 수 있으므로 목록 조회(`thread`)와 따로 둔다.
+//! `attach` 와 `list` 는 스레드가 아닌 범위(저장소, 작업, 저장소 안 경로)를 쓴다 (A03).
 
 use std::sync::Arc;
 
@@ -10,15 +11,24 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
 use super::recorder::{RecordDirection, SessionRecording};
-use crate::application::port::inbound::work_context_port::WorkContextPort;
+use crate::application::port::inbound::work_context_port::{
+    AttachContextRequest, ContextScope, ContextScopeRequest, WorkContextPort,
+};
 
 pub(super) const CONTEXT_METHOD_PREFIX: &str = "akra/context/";
-/// params `{ threadId }` -> result `{ resources: [ThreadResource] }`
+/// params `{ threadId }` -> result `{ resources: [ContextResource] }`
 const CONTEXT_THREAD_METHOD: &str = "akra/context/thread";
-/// params `{ threadId }` -> result `{ resources: [ThreadResource] }`. 문서가 바뀌었는지 외부 서비스에 확인한다.
+/// params `{ threadId }` -> result `{ resources: [ContextResource] }`. 문서가 바뀌었는지 외부 서비스에 확인한다.
 const CONTEXT_REFRESH_METHOD: &str = "akra/context/refresh";
-/// params `{ threadId, kind, key }` -> result `{ resources: [ThreadResource] }`. 그 문서를 읽었다고 적는다.
+/// params `{ threadId, kind, key }` -> result `{ resources: [ContextResource] }`. 그 문서를 읽었다고 적는다.
 const CONTEXT_MARK_READ_METHOD: &str = "akra/context/markRead";
+/// params `{ cwd, scope, url, source? }` -> result `{ resources: [ContextResource] }`. 문서를 범위에 잇는다.
+/// `scope` 는 `{ kind: "repository" }`, `{ kind: "task", taskId }`, `{ kind: "path", path }` 이다.
+const CONTEXT_ATTACH_METHOD: &str = "akra/context/attach";
+/// params `{ cwd, scope }` -> result `{ resources: [ContextResource] }`. 장부의 값만 읽는다.
+const CONTEXT_LIST_METHOD: &str = "akra/context/list";
+/// `attach` 에 `source` 가 없으면 사람이 이은 것으로 본다.
+const DEFAULT_ATTACH_SOURCE: &str = "user";
 const JSON_RPC_METHOD_NOT_FOUND: i64 = -32601;
 const JSON_RPC_INVALID_PARAMS: i64 = -32602;
 const WORK_CONTEXT_ERROR: i64 = -32000;
@@ -41,6 +51,20 @@ struct MarkReadParams {
     thread_id: String,
     kind: String,
     key: String,
+}
+
+#[derive(Deserialize)]
+struct ScopeParams {
+    cwd: String,
+    scope: ContextScope,
+}
+
+#[derive(Deserialize)]
+struct AttachParams {
+    cwd: String,
+    scope: ContextScope,
+    url: String,
+    source: Option<String>,
 }
 
 fn params<T: serde::de::DeserializeOwned>(text: &str) -> Option<T> {
@@ -98,6 +122,38 @@ fn respond(context: &dyn WorkContextPort, id: Value, method: &str, text: &str) -
             };
             context.mark_thread_resource_read(&params.thread_id, &params.kind, &params.key)
         }
+        CONTEXT_ATTACH_METHOD => {
+            let Some(params) = params::<AttachParams>(text) else {
+                return error_response(
+                    id,
+                    JSON_RPC_INVALID_PARAMS,
+                    "`cwd`, `scope`, and `url` are required",
+                );
+            };
+            context.attach_scope_resource(&AttachContextRequest {
+                scope: ContextScopeRequest {
+                    cwd: params.cwd,
+                    scope: params.scope,
+                },
+                url: params.url,
+                source: params
+                    .source
+                    .unwrap_or_else(|| DEFAULT_ATTACH_SOURCE.to_string()),
+            })
+        }
+        CONTEXT_LIST_METHOD => {
+            let Some(params) = params::<ScopeParams>(text) else {
+                return error_response(
+                    id,
+                    JSON_RPC_INVALID_PARAMS,
+                    "`cwd` and `scope` are required",
+                );
+            };
+            context.scope_resources(&ContextScopeRequest {
+                cwd: params.cwd,
+                scope: params.scope,
+            })
+        }
         _ => {
             return error_response(
                 id,
@@ -115,7 +171,8 @@ fn respond(context: &dyn WorkContextPort, id: Value, method: &str, text: &str) -
 }
 
 /// `local` 이 아닌 접속의 `akra/context/*` 답이다 (plan 25 Q-C3). 답은 하지만 장부를 읽지도 쓰지도 않는다. 장부의
-/// 키는 thread id 뿐이라서 원격 thread 가 들어가면 같은 id 의 로컬 thread 와 섞인다.
+/// 키는 thread id 뿐이라서 원격 thread 가 들어가면 같은 id 의 로컬 thread 와 섞인다. 저장소 범위의 `cwd` 도 원격
+/// 호스트의 폴더라서 로컬에서 찾지 않는다.
 pub(super) fn remote_host_response(id: Value) -> String {
     json!({ "jsonrpc": "2.0", "id": id, "result": { "resources": [] } }).to_string()
 }
@@ -127,13 +184,13 @@ fn error_response(id: Value, code: i64, message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::port::inbound::work_context_port::ThreadResource;
+    use crate::application::port::inbound::work_context_port::ContextResource;
     use anyhow::Result;
 
     struct FakeContext;
 
-    fn resource(changed: bool) -> ThreadResource {
-        ThreadResource {
+    fn resource(changed: bool) -> ContextResource {
+        ContextResource {
             kind: "jira".into(),
             key: "acme.atlassian.net/ABC-1".into(),
             url: "https://acme.atlassian.net/browse/ABC-1".into(),
@@ -142,18 +199,20 @@ mod tests {
             first_seen_at: "2026-11-11T00:00:00Z".into(),
             changed,
             version_checked_at: changed.then(|| "2026-11-11T00:05:00Z".to_string()),
+            confirmed_version: Some("v1".to_string()),
+            current_version: Some(if changed { "v2" } else { "v1" }.to_string()),
         }
     }
 
     impl WorkContextPort for FakeContext {
-        fn thread_resources(&self, thread_id: &str) -> Result<Vec<ThreadResource>> {
+        fn thread_resources(&self, thread_id: &str) -> Result<Vec<ContextResource>> {
             if thread_id == "broken" {
                 anyhow::bail!("upstream is not ready");
             }
             Ok(vec![resource(false)])
         }
 
-        fn refresh_thread_resources(&self, _thread_id: &str) -> Result<Vec<ThreadResource>> {
+        fn refresh_thread_resources(&self, _thread_id: &str) -> Result<Vec<ContextResource>> {
             Ok(vec![resource(true)])
         }
 
@@ -162,11 +221,28 @@ mod tests {
             _thread_id: &str,
             resource_kind: &str,
             resource_key: &str,
-        ) -> Result<Vec<ThreadResource>> {
+        ) -> Result<Vec<ContextResource>> {
             if (resource_kind, resource_key) != ("jira", "acme.atlassian.net/ABC-1") {
                 anyhow::bail!("the thread has no such document");
             }
             Ok(vec![resource(false)])
+        }
+
+        fn attach_scope_resource(
+            &self,
+            request: &AttachContextRequest,
+        ) -> Result<Vec<ContextResource>> {
+            let mut attached = resource(false);
+            attached.source = request.source.clone();
+            attached.url = request.url.clone();
+            attached.title = format!("{}:{:?}", request.scope.cwd, request.scope.scope);
+            Ok(vec![attached])
+        }
+
+        fn scope_resources(&self, request: &ContextScopeRequest) -> Result<Vec<ContextResource>> {
+            let mut listed = resource(true);
+            listed.title = format!("{}:{:?}", request.cwd, request.scope);
+            Ok(vec![listed])
         }
     }
 
@@ -209,6 +285,61 @@ mod tests {
             json!({ "threadId": "t1", "kind": "jira", "key": "other" }),
         );
         assert_eq!(missing["error"]["code"], WORK_CONTEXT_ERROR);
+    }
+
+    #[test]
+    fn attach_and_list_take_a_repository_scope() {
+        // A03: one method family; the scope is a tagged object.
+        let attached = answer(
+            CONTEXT_ATTACH_METHOD,
+            json!({
+                "cwd": "/repo",
+                "scope": { "kind": "task", "taskId": "T-1" },
+                "url": "https://github.com/a/b/pull/2"
+            }),
+        );
+        let resource = &attached["result"]["resources"][0];
+        assert_eq!(resource["source"], "user");
+        assert_eq!(resource["url"], "https://github.com/a/b/pull/2");
+        assert_eq!(resource["title"], "/repo:Task { task_id: \"T-1\" }");
+        assert_eq!(resource["confirmedVersion"], "v1");
+
+        let listed = answer(
+            CONTEXT_LIST_METHOD,
+            json!({ "cwd": "/repo", "scope": { "kind": "path", "path": "src/a.rs" } }),
+        );
+        let resource = &listed["result"]["resources"][0];
+        assert_eq!(resource["title"], "/repo:Path { path: \"src/a.rs\" }");
+        assert_eq!(resource["changed"], true);
+        assert_eq!(resource["currentVersion"], "v2");
+        assert_eq!(
+            answer(
+                CONTEXT_LIST_METHOD,
+                json!({ "cwd": "/repo", "scope": { "kind": "repository" } })
+            )["result"]["resources"][0]["title"],
+            "/repo:Repository"
+        );
+
+        for (method, params) in [
+            (CONTEXT_LIST_METHOD, json!({ "cwd": "/repo" })),
+            (
+                CONTEXT_LIST_METHOD,
+                json!({ "cwd": "/repo", "scope": { "kind": "branch" } }),
+            ),
+            (
+                CONTEXT_LIST_METHOD,
+                json!({ "cwd": "/repo", "scope": { "kind": "task" } }),
+            ),
+            (
+                CONTEXT_ATTACH_METHOD,
+                json!({ "cwd": "/repo", "scope": { "kind": "repository" } }),
+            ),
+        ] {
+            assert_eq!(
+                answer(method, params)["error"]["code"],
+                JSON_RPC_INVALID_PARAMS
+            );
+        }
     }
 
     #[test]

@@ -1,5 +1,6 @@
 // DB outbound adapter 영역은 planning authority를 SQLite에 저장하고 읽는 구현을 담는다.
 // 이 module declaration이 실제 adapter 파일을 `adapter::outbound::db` namespace에 연결한다.
+pub(crate) mod planning_repository_identity;
 pub(crate) mod sqlite_delegation_store;
 pub mod sqlite_issue_automation_restart_registry;
 pub mod sqlite_issue_automation_store;

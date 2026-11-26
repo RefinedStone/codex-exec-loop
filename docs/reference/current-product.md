@@ -1113,9 +1113,9 @@ The Gateway records the external documents that a thread mentions, without a mod
 - Recognizers (`src/domain/work_context.rs`): Notion pages, Jira issues (`<site>/browse/KEY-123`), and
   GitHub pull requests and issues. A new service is one `ExternalResourceRecognizer`; the ledger, the
   Gateway, and Desktop handle only the kind name.
-- Ledger: `$AKRA_HOME/work-context/ledger.sqlite` with documents, document-to-scope links (only the
-  `thread` scope today), scan markers, the last checked version of each document, and the version each
-  scope read.
+- Ledger: `$AKRA_HOME/work-context/ledger.sqlite` with documents, document-to-scope links (`thread`,
+  `repository`, `task`, and `path` scopes), scan markers, the last checked version of each document, and
+  the version each scope read or confirmed.
 - Desktop reads the open thread's documents when a thread opens and when a turn ends, shows the count
   on the "문서" button, and lists them by kind in the "관련 문서" side panel.
 - Changed documents: `akra/context/refresh { threadId }` also asks a version provider for the current
@@ -1124,6 +1124,17 @@ The Gateway records the external documents that a thread mentions, without a mod
   `versionCheckedAt`. The first version a thread checks is its read version; a later different version
   sets `changed`. `akra/context/markRead { threadId, kind, key }` makes the checked version the read
   version. `akra/context/thread` asks no external service.
+- Repository scopes (#2481 A03, first slice): `akra/context/attach { cwd, scope, url, source? }` links one
+  recognized document to a scope in the repository of `cwd`. `scope` is `{ kind: "repository" }`,
+  `{ kind: "task", taskId }`, or `{ kind: "path", path }`. The repository is the planning repository
+  identity, so worktrees of one repository share scopes and a new repository at a reused folder does
+  not. `path` is relative to the repository: `\` becomes `/`, `.` and empty parts are removed, and
+  absolute paths or paths that leave the repository are refused. Symbolic links are not followed.
+  `source` is `user` (default), `agent`, or `tool`. Attach asks the version provider like `refresh`
+  and keeps the first confirmed version. `akra/context/list { cwd, scope }` returns the scope's
+  documents from the ledger only. Every resource also has `confirmedVersion` (the read version for a
+  thread) and `currentVersion` (the last checked version); `changed` compares them. The ledger keeps
+  only the document identity, address, and versions, never document text.
 - Version providers (`ExternalResourceVersionPort`): GitHub reads `updated_at` of the
   pull request or issue with `gh api --hostname github.com`, with `AKRA_GITHUB_TOKEN`, `GH_TOKEN`,
   `GITHUB_TOKEN`, or the stored `gh` login. Jira reads `updated` through a connected Desktop's

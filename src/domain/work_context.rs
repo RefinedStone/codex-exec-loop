@@ -78,6 +78,37 @@ pub fn extract_external_resources(
     found
 }
 
+/// 저장소 안 경로의 최대 길이이다.
+const REPOSITORY_PATH_MAX_CHARS: usize = 1024;
+
+/// 저장소 기준 상대 경로를 `/` 로 잇는 한 가지 모양으로 바꾼다 (A03). `\` 는 `/` 로 보고, `.` 과 빈 조각은 뺀다.
+/// 절대 경로, 저장소 밖으로 나가는 `..`, 저장소 자체를 가리키는 경로는 받지 않는다. 링크는 따라가지 않는다.
+pub fn normalize_repository_path(path: &str) -> anyhow::Result<String> {
+    if path.chars().count() > REPOSITORY_PATH_MAX_CHARS || path.chars().any(char::is_control) {
+        anyhow::bail!("the path is too long or has control characters");
+    }
+    let path = path.replace('\\', "/");
+    if path.starts_with('/') || path.as_bytes().get(1) == Some(&b':') {
+        anyhow::bail!("the path must be relative to the repository");
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if parts.pop().is_none() {
+                    anyhow::bail!("the path is outside the repository");
+                }
+            }
+            _ => parts.push(part),
+        }
+    }
+    if parts.is_empty() {
+        anyhow::bail!("the path is the repository itself; use the repository scope");
+    }
+    Ok(parts.join("/"))
+}
+
 /// 글 안의 `https://` 주소들이다. 공백, 따옴표, 괄호에서 끊고 끝의 문장 부호를 뗀다.
 fn https_urls(text: &str) -> Vec<&str> {
     const SCHEME: &str = "https://";
@@ -409,6 +440,33 @@ mod tests {
 
     fn extract(text: &str) -> Vec<ExternalResourceRef> {
         extract_external_resources(text, &external_resource_recognizers())
+    }
+
+    #[test]
+    fn repository_paths_have_one_form_and_stay_inside_the_repository() {
+        for (input, expected) in [
+            ("src/a.rs", "src/a.rs"),
+            ("./src//lib/", "src/lib"),
+            ("src\\domain\\x.rs", "src/domain/x.rs"),
+            ("src/../docs/a.md", "docs/a.md"),
+        ] {
+            assert_eq!(normalize_repository_path(input).unwrap(), expected);
+        }
+        for input in [
+            "",
+            ".",
+            "src/..",
+            "../other/a.rs",
+            "src/../../a.rs",
+            "/etc/passwd",
+            "\\\\server\\share",
+            "C:\\repo\\a.rs",
+            "c:a.rs",
+            "a\nb",
+        ] {
+            assert!(normalize_repository_path(input).is_err(), "{input:?}");
+        }
+        assert!(normalize_repository_path(&"a/".repeat(600)).is_err());
     }
 
     #[test]

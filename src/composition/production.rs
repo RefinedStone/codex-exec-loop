@@ -509,7 +509,10 @@ pub(crate) fn build_gateway_backend(
             )),
             providers.work.clone(),
             Arc::new(NotionResourceVersionAdapter::new(hub)),
-        ]),
+        ])
+        .with_repository_identity(Arc::new(
+            crate::adapter::outbound::db::planning_repository_identity::PlanningRepositoryIdentityAdapter,
+        )),
     );
     Ok(GatewayBackend {
         upstream,

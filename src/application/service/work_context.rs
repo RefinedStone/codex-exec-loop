@@ -5,19 +5,25 @@ use std::time::Duration;
 use anyhow::{Result, bail};
 use chrono::{DateTime, SecondsFormat, Utc};
 
-use crate::application::port::inbound::work_context_port::{ThreadResource, WorkContextPort};
+use crate::application::port::inbound::work_context_port::{
+    AttachContextRequest, ContextResource, ContextScope, ContextScopeRequest, WorkContextPort,
+};
 use crate::application::port::outbound::external_resource_version_port::ExternalResourceVersionPort;
+use crate::application::port::outbound::repository_identity_port::RepositoryIdentityPort;
 use crate::application::port::outbound::thread_transcript_port::ThreadTranscriptPort;
 use crate::application::port::outbound::work_context_store_port::{
-    ResourceVersionCheck, WORK_CONTEXT_SCOPE_THREAD, WorkContextLink, WorkContextStorePort,
+    ResourceVersionCheck, WORK_CONTEXT_SCOPE_PATH, WORK_CONTEXT_SCOPE_REPOSITORY,
+    WORK_CONTEXT_SCOPE_TASK, WORK_CONTEXT_SCOPE_THREAD, WorkContextLink, WorkContextStorePort,
 };
 use crate::domain::work_context::{
     ExternalResourceRecognizer, ExternalResourceRef, external_resource_recognizers,
-    extract_external_resources,
+    extract_external_resources, normalize_repository_path,
 };
 
-/// 스레드 id 는 장부의 키이다. app-server 의 id 는 짧은 UUID 이다.
-const MAX_THREAD_ID_CHARS: usize = 256;
+/// 스레드 id 와 작업 id 는 장부의 키이다. app-server 의 id 는 짧은 UUID 이다.
+const MAX_SCOPE_ID_CHARS: usize = 256;
+/// 사람이나 AI 가 직접 이은 문서의 출처이다. 수집기가 쓰는 값과 같다.
+const ATTACH_SOURCES: [&str; 3] = ["user", "agent", "tool"];
 /// 문서의 버전을 다시 묻기까지의 시간이다. 그 안에는 장부의 값을 쓴다.
 const VERSION_CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// 한 번에 외부 서비스에 묻는 문서 수의 상한이다. 문서가 많은 스레드도 정해진 시간 안에 답한다.
@@ -39,6 +45,8 @@ pub struct WorkContextService {
     store: Arc<dyn WorkContextStorePort>,
     recognizers: Vec<Box<dyn ExternalResourceRecognizer>>,
     version_providers: Vec<Arc<dyn ExternalResourceVersionPort>>,
+    /// 스레드가 아닌 범위의 저장소를 찾는다. 없으면 그 범위를 쓸 수 없다.
+    repository_identity: Option<Arc<dyn RepositoryIdentityPort>>,
     /// 버전 확인은 한 번에 하나만 한다. 같은 문서를 두 요청이 함께 묻지 않는다.
     version_check: Mutex<VersionCheckState>,
     clock: Clock,
@@ -61,6 +69,7 @@ impl WorkContextService {
             store,
             recognizers: external_resource_recognizers(),
             version_providers: Vec::new(),
+            repository_identity: None,
             version_check: Mutex::new(VersionCheckState::default()),
             clock: Arc::new(Utc::now),
         }
@@ -72,6 +81,14 @@ impl WorkContextService {
         version_providers: Vec<Arc<dyn ExternalResourceVersionPort>>,
     ) -> Self {
         self.version_providers = version_providers;
+        self
+    }
+
+    pub fn with_repository_identity(
+        mut self,
+        repository_identity: Arc<dyn RepositoryIdentityPort>,
+    ) -> Self {
+        self.repository_identity = Some(repository_identity);
         self
     }
 
@@ -105,16 +122,38 @@ impl WorkContextService {
         Ok(())
     }
 
-    fn links(&self, thread_id: &str) -> Result<Vec<WorkContextLink>> {
-        self.store.links(WORK_CONTEXT_SCOPE_THREAD, thread_id)
+    fn links(&self, scope: &LedgerScope) -> Result<Vec<WorkContextLink>> {
+        self.store.links(scope.kind, &scope.id)
     }
 
-    fn resources(&self, thread_id: &str) -> Result<Vec<ThreadResource>> {
+    fn resources(&self, scope: &LedgerScope) -> Result<Vec<ContextResource>> {
         Ok(self
-            .links(thread_id)?
+            .links(scope)?
             .into_iter()
-            .map(thread_resource)
+            .map(context_resource)
             .collect())
+    }
+
+    /// 요청의 범위를 장부의 키로 바꾼다. 저장소 밖 경로와 빈 작업 id 는 받지 않는다.
+    fn ledger_scope(&self, request: &ContextScopeRequest) -> Result<LedgerScope> {
+        let Some(identity) = &self.repository_identity else {
+            bail!("repository scopes are not available")
+        };
+        let repository = identity.repository_identity(&request.cwd)?;
+        Ok(match &request.scope {
+            ContextScope::Repository => LedgerScope {
+                kind: WORK_CONTEXT_SCOPE_REPOSITORY,
+                id: repository,
+            },
+            ContextScope::Task { task_id } => LedgerScope {
+                kind: WORK_CONTEXT_SCOPE_TASK,
+                id: repository_scope_id(&repository, valid_scope_id(task_id)?),
+            },
+            ContextScope::Path { path } => LedgerScope {
+                kind: WORK_CONTEXT_SCOPE_PATH,
+                id: repository_scope_id(&repository, &normalize_repository_path(path)?),
+            },
+        })
     }
 
     fn version_provider(&self, kind: &str) -> Option<&dyn ExternalResourceVersionPort> {
@@ -125,21 +164,21 @@ impl WorkContextService {
     }
 
     /// 확인한 지 오래된 문서의 지금 버전을 제공자에게 묻고 장부에 적는다. 처음 확인한 버전은 읽은 버전이 된다.
-    fn check_versions(&self, thread_id: &str) -> Result<()> {
+    fn check_versions(&self, scope: &LedgerScope) -> Result<()> {
         let mut state = self
             .version_check
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let now = (self.clock)();
         let mut due = Vec::new();
-        for link in self.links(thread_id)? {
+        for link in self.links(scope)? {
             let Some(provider) = self.version_provider(&link.resource.kind) else {
                 continue;
             };
             if let Some(check) = fresh_check(link.checked_version.as_ref(), now) {
-                // 다른 스레드가 조금 전에 확인한 문서이다. 그 버전이 이 스레드가 처음 확인한 버전이다.
+                // 다른 범위가 조금 전에 확인한 문서이다. 그 버전이 이 범위가 처음 확인한 버전이다.
                 if link.read_version.is_none() {
-                    self.set_first_read_version(thread_id, &link.resource, &check.version)?;
+                    self.set_first_read_version(scope, &link.resource, &check.version)?;
                 }
                 continue;
             }
@@ -168,7 +207,7 @@ impl WorkContextService {
                             checked_at: now.to_rfc3339_opts(SecondsFormat::Secs, true),
                         },
                     )?;
-                    self.set_first_read_version(thread_id, &link.resource, &version)?;
+                    self.set_first_read_version(scope, &link.resource, &version)?;
                 }
                 // 닿지 않는 문서는 건너뛴다. 장부의 이전 값이 남는다.
                 Err(_) => {
@@ -183,21 +222,36 @@ impl WorkContextService {
         Ok(())
     }
 
-    /// 스레드에 읽은 버전이 없을 때만 적는다. 있는 값은 사용자가 문서를 열 때만 바뀐다.
+    /// 범위에 읽은 버전이 없을 때만 적는다. 있는 값은 사용자가 문서를 열 때만 바뀐다.
     fn set_first_read_version(
         &self,
-        thread_id: &str,
+        scope: &LedgerScope,
         resource: &ExternalResourceRef,
         version: &str,
     ) -> Result<()> {
-        self.store.set_read_version(
-            WORK_CONTEXT_SCOPE_THREAD,
-            thread_id,
-            resource,
-            version,
-            false,
-        )
+        self.store
+            .set_read_version(scope.kind, &scope.id, resource, version, false)
     }
+}
+
+/// 장부의 범위 키이다.
+struct LedgerScope {
+    kind: &'static str,
+    id: String,
+}
+
+impl LedgerScope {
+    fn thread(thread_id: &str) -> Result<Self> {
+        Ok(Self {
+            kind: WORK_CONTEXT_SCOPE_THREAD,
+            id: valid_scope_id(thread_id)?.to_string(),
+        })
+    }
+}
+
+/// 저장소 안 범위의 키이다. JSON 배열이라 저장소 식별자나 값에 어떤 글자가 있어도 둘이 섞이지 않는다.
+fn repository_scope_id(repository: &str, value: &str) -> String {
+    serde_json::json!([repository, value]).to_string()
 }
 
 fn interval_has_passed(since: DateTime<Utc>, now: DateTime<Utc>) -> bool {
@@ -217,12 +271,12 @@ fn fresh_check(
     })
 }
 
-fn thread_resource(link: WorkContextLink) -> ThreadResource {
+fn context_resource(link: WorkContextLink) -> ContextResource {
     let changed = match (&link.checked_version, &link.read_version) {
         (Some(check), Some(read)) => &check.version != read,
         _ => false,
     };
-    ThreadResource {
+    ContextResource {
         title: link
             .resource
             .title_hint
@@ -233,30 +287,50 @@ fn thread_resource(link: WorkContextLink) -> ThreadResource {
         source: link.source,
         first_seen_at: link.first_seen_at,
         changed,
+        current_version: link
+            .checked_version
+            .as_ref()
+            .map(|check| check.version.clone()),
         version_checked_at: link.checked_version.map(|check| check.checked_at),
+        confirmed_version: link.read_version,
     }
 }
 
-fn valid_thread_id(thread_id: &str) -> Result<&str> {
-    let thread_id = thread_id.trim();
-    if thread_id.is_empty() || thread_id.chars().count() > MAX_THREAD_ID_CHARS {
-        bail!("thread id is not valid")
+fn valid_scope_id(scope_id: &str) -> Result<&str> {
+    let scope_id = scope_id.trim();
+    if scope_id.is_empty()
+        || scope_id.chars().count() > MAX_SCOPE_ID_CHARS
+        || scope_id.chars().any(char::is_control)
+    {
+        bail!("the scope id is not valid")
     }
-    Ok(thread_id)
+    Ok(scope_id)
+}
+
+/// 주소에서 문서 하나를 찾는다. 인식기가 모르는 주소나 문서가 여럿인 글은 받지 않는다.
+fn attached_resource(
+    url: &str,
+    recognizers: &[Box<dyn ExternalResourceRecognizer>],
+) -> Result<ExternalResourceRef> {
+    let mut resources = extract_external_resources(url, recognizers);
+    if resources.len() != 1 {
+        bail!("the url must name exactly one known document")
+    }
+    Ok(resources.remove(0))
 }
 
 impl WorkContextPort for WorkContextService {
-    fn thread_resources(&self, thread_id: &str) -> Result<Vec<ThreadResource>> {
-        let thread_id = valid_thread_id(thread_id)?;
-        self.collect(thread_id)?;
-        self.resources(thread_id)
+    fn thread_resources(&self, thread_id: &str) -> Result<Vec<ContextResource>> {
+        let scope = LedgerScope::thread(thread_id)?;
+        self.collect(&scope.id)?;
+        self.resources(&scope)
     }
 
-    fn refresh_thread_resources(&self, thread_id: &str) -> Result<Vec<ThreadResource>> {
-        let thread_id = valid_thread_id(thread_id)?;
-        self.collect(thread_id)?;
-        self.check_versions(thread_id)?;
-        self.resources(thread_id)
+    fn refresh_thread_resources(&self, thread_id: &str) -> Result<Vec<ContextResource>> {
+        let scope = LedgerScope::thread(thread_id)?;
+        self.collect(&scope.id)?;
+        self.check_versions(&scope)?;
+        self.resources(&scope)
     }
 
     fn mark_thread_resource_read(
@@ -264,10 +338,10 @@ impl WorkContextPort for WorkContextService {
         thread_id: &str,
         resource_kind: &str,
         resource_key: &str,
-    ) -> Result<Vec<ThreadResource>> {
-        let thread_id = valid_thread_id(thread_id)?;
+    ) -> Result<Vec<ContextResource>> {
+        let scope = LedgerScope::thread(thread_id)?;
         let link = self
-            .links(thread_id)?
+            .links(&scope)?
             .into_iter()
             .find(|link| link.resource.kind == resource_kind && link.resource.key == resource_key);
         let Some(link) = link else {
@@ -276,14 +350,38 @@ impl WorkContextPort for WorkContextService {
         // 확인한 버전이 없으면 바뀜도 없다. 적을 것이 없다.
         if let Some(check) = &link.checked_version {
             self.store.set_read_version(
-                WORK_CONTEXT_SCOPE_THREAD,
-                thread_id,
+                scope.kind,
+                &scope.id,
                 &link.resource,
                 &check.version,
                 true,
             )?;
         }
-        self.resources(thread_id)
+        self.resources(&scope)
+    }
+
+    fn attach_scope_resource(
+        &self,
+        request: &AttachContextRequest,
+    ) -> Result<Vec<ContextResource>> {
+        if !ATTACH_SOURCES.contains(&request.source.as_str()) {
+            bail!("the source must be one of {}", ATTACH_SOURCES.join(", "))
+        }
+        let resource = attached_resource(&request.url, &self.recognizers)?;
+        let scope = self.ledger_scope(&request.scope)?;
+        self.store.link_resources(
+            scope.kind,
+            &scope.id,
+            &request.source,
+            std::slice::from_ref(&resource),
+        )?;
+        self.check_versions(&scope)?;
+        self.resources(&scope)
+    }
+
+    fn scope_resources(&self, request: &ContextScopeRequest) -> Result<Vec<ContextResource>> {
+        let scope = self.ledger_scope(request)?;
+        self.resources(&scope)
     }
 }
 
@@ -480,7 +578,7 @@ mod tests {
         (service, versions, now)
     }
 
-    fn changed_flags(resources: &[ThreadResource]) -> Vec<(&str, bool)> {
+    fn changed_flags(resources: &[ContextResource]) -> Vec<(&str, bool)> {
         resources
             .iter()
             .map(|resource| (resource.key.as_str(), resource.changed))
@@ -844,6 +942,172 @@ mod tests {
         assert_eq!(
             *transcript.requests.lock().unwrap(),
             vec![None, Some("item-2".to_string()), Some("item-3".to_string())]
+        );
+    }
+
+    /// 폴더 이름의 첫 조각을 저장소 식별자로 쓰는 가짜이다. `/one/wt` 와 `/one/main` 은 같은 저장소이다.
+    struct FakeRepositories;
+
+    impl RepositoryIdentityPort for FakeRepositories {
+        fn repository_identity(&self, cwd: &str) -> Result<String> {
+            match cwd.split('/').nth(1) {
+                Some(name) if !name.is_empty() => Ok(format!("repo-{name}")),
+                _ => bail!("not a repository"),
+            }
+        }
+    }
+
+    fn scope(cwd: &str, scope: ContextScope) -> ContextScopeRequest {
+        ContextScopeRequest {
+            cwd: cwd.to_string(),
+            scope,
+        }
+    }
+
+    fn attach(scope: ContextScopeRequest, url: &str) -> AttachContextRequest {
+        AttachContextRequest {
+            scope,
+            url: url.to_string(),
+            source: "agent".to_string(),
+        }
+    }
+
+    fn path(path: &str) -> ContextScope {
+        ContextScope::Path {
+            path: path.to_string(),
+        }
+    }
+
+    #[test]
+    fn attached_documents_keep_their_scope_source_and_confirmed_version() {
+        // A03 first slice: explicit repository, task, and path scopes beside the thread scope.
+        let (service, versions, now) = versioned_service("https://github.com/a/b/pull/2");
+        let service = service.with_repository_identity(Arc::new(FakeRepositories));
+        versions.set("a/b#2", "v1");
+        let task = || {
+            scope(
+                "/one/wt",
+                ContextScope::Task {
+                    task_id: " T-1 ".to_string(),
+                },
+            )
+        };
+
+        let attached = service
+            .attach_scope_resource(&attach(task(), "https://github.com/a/b/pull/2"))
+            .unwrap();
+        assert_eq!(attached.len(), 1);
+        assert_eq!(attached[0].source, "agent");
+        assert_eq!(attached[0].confirmed_version.as_deref(), Some("v1"));
+        assert_eq!(attached[0].current_version.as_deref(), Some("v1"));
+        assert!(!attached[0].changed);
+        // 다른 worktree 의 같은 작업은 같은 범위이다. 다른 저장소와 다른 범위 종류는 섞이지 않는다.
+        assert_eq!(
+            service
+                .scope_resources(&scope(
+                    "/one/main",
+                    ContextScope::Task {
+                        task_id: "T-1".to_string()
+                    }
+                ))
+                .unwrap(),
+            attached
+        );
+        assert!(
+            service
+                .scope_resources(&scope(
+                    "/two/main",
+                    ContextScope::Task {
+                        task_id: "T-1".to_string()
+                    }
+                ))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            service
+                .scope_resources(&scope("/one/wt", ContextScope::Repository))
+                .unwrap()
+                .is_empty()
+        );
+
+        // 경로는 한 가지 모양으로 적는다. 저장소 밖 경로는 받지 않는다.
+        service
+            .attach_scope_resource(&attach(
+                scope("/one/wt", path("./src\\lib")),
+                "https://github.com/a/b/pull/2",
+            ))
+            .unwrap();
+        assert_eq!(
+            service
+                .scope_resources(&scope("/one/main", path("src/lib/")))
+                .unwrap()
+                .len(),
+            1
+        );
+        for bad in ["../x", "/one/wt/src", "src/../.."] {
+            assert!(
+                service
+                    .attach_scope_resource(&attach(
+                        scope("/one/wt", path(bad)),
+                        "https://github.com/a/b/pull/2"
+                    ))
+                    .is_err(),
+                "{bad}"
+            );
+        }
+
+        // 나중에 확인한 버전이 다르면 바뀜이다. 목록은 외부 서비스에 묻지 않는다.
+        versions.set("a/b#2", "v2");
+        *now.lock().unwrap() += chrono::Duration::seconds(6 * 60);
+        service.refresh_thread_resources("thread-1").unwrap();
+        let asked = versions.asked.lock().unwrap().len();
+        let listed = service.scope_resources(&task()).unwrap();
+        assert_eq!(versions.asked.lock().unwrap().len(), asked);
+        assert_eq!(listed[0].confirmed_version.as_deref(), Some("v1"));
+        assert_eq!(listed[0].current_version.as_deref(), Some("v2"));
+        assert!(listed[0].changed);
+    }
+
+    #[test]
+    fn attach_rejects_unknown_documents_sources_and_repositories() {
+        let service = WorkContextService::new(
+            Arc::new(FakeTranscript::default()),
+            Arc::new(FakeStore::default()),
+        );
+        let request = attach(
+            scope("/one", ContextScope::Repository),
+            "https://github.com/a/b/pull/2",
+        );
+        assert!(
+            service.attach_scope_resource(&request).is_err(),
+            "no repository identity"
+        );
+        let service = service.with_repository_identity(Arc::new(FakeRepositories));
+        assert_eq!(service.attach_scope_resource(&request).unwrap().len(), 1);
+        for url in [
+            "https://example.com/doc",
+            "https://github.com/a/b/pull/2 https://github.com/a/b/pull/3",
+        ] {
+            let mut bad = request.clone();
+            bad.url = url.to_string();
+            assert!(service.attach_scope_resource(&bad).is_err(), "{url}");
+        }
+        let mut bad = request.clone();
+        bad.source = "system".to_string();
+        assert!(service.attach_scope_resource(&bad).is_err());
+        let mut bad = request.clone();
+        bad.scope.cwd = "/".to_string();
+        assert!(service.attach_scope_resource(&bad).is_err());
+        assert!(
+            service
+                .scope_resources(&scope(
+                    "/one",
+                    ContextScope::Task {
+                        task_id: " ".to_string()
+                    }
+                ))
+                .is_err()
         );
     }
 

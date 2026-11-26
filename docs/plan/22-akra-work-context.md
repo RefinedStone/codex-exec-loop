@@ -64,7 +64,8 @@ recognize(주소의 호스트와 경로) -> 문서(kind, key, url, title_hint) �
 | `resource_versions` | 문서마다 마지막으로 확인한 버전과 그 시각. 문서의 값이므로 모든 범위가 함께 쓴다 |
 | `read_versions` | 범위가 그 문서에서 읽은 버전. 확인한 버전과 다르면 "바뀜"이다 |
 
-범위 종류는 글자이다. 지금은 `thread` 만 쓴다. `path`(파일 폴더)와 `task`(planning 작업, 브랜치)는 같은 표에 더한다.
+범위 종류는 글자이다. `thread` 는 수집기가 잇는다. `repository`, `task`, `path` 는 사람이나 AI 가 직접 잇는다
+(아래 "3단계 첫 조각"). 표는 바꾸지 않았다.
 
 ### 수집기
 
@@ -117,6 +118,20 @@ recognize(주소의 호스트와 경로) -> 문서(kind, key, url, title_hint) �
     읽은 버전은 Gateway 가 마지막으로 확인한 버전이다. 그 뒤에 또 바뀐 문서는 다음 확인에서 다시 "바뀜"이 된다.
   - 이 스레드의 AI 가 직접 바꾼 것(댓글, push)도 "바뀜"이 된다. 자기 변경을 빼는 것은 5단계의 일이다.
   - 무엇이 바뀌었는지는 보이지 않는다.
+
+## 3단계 첫 조각: 저장소·작업·경로 범위의 직접 연결 (#2481 A03)
+
+- `akra/context/attach { cwd, scope, url, source? }`: 문서 하나를 범위에 잇는다. 범위는 `repository`, `task`
+  (`taskId`), `path`(저장소 기준 상대 경로)이다. 저장소는 planning 의 저장소 식별자이다. 같은 저장소의 worktree
+  들은 같은 범위를 쓴다. 장부의 범위 id 는 저장소는 식별자, 작업과 경로는 `[식별자, 값]` JSON 배열이다.
+- 잇을 때 버전 제공자에게 지금 버전을 묻고 그 범위의 확인 버전(`read_versions`)으로 적는다. 처음 값을 지킨다.
+- `akra/context/list { cwd, scope }`: 장부의 값만 읽는다. 항목에 `confirmedVersion`, `currentVersion`, `changed` 가
+  있다.
+- 경로는 `\` 를 `/` 로, `.` 과 빈 조각을 빼서 한 모양으로 적는다. 절대 경로와 저장소 밖 경로는 거절한다. 링크는
+  따라가지 않는다.
+- 장부에는 문서의 식별자, 주소, 버전만 적는다. 본문과 Vault 에서 복원한 평문은 적지 않는다.
+- 남은 일 (proposed): 범위의 `refresh` 와 `markRead`, 작업 id 의 존재 확인, 경로의 prefix 매칭·rename·symlink
+  규칙, 선정과 제외 이유, pin/exclude, 버전 manifest 인계, 관찰기의 자동 연결, Desktop 화면.
 
 ## 남은 단계 (proposed)
 

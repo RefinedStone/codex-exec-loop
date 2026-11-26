@@ -78,6 +78,8 @@ pub mod interactive_turn_runtime_port;
 // thread transcript port 는 스레드 기록에서 글만 읽는 조회 경계다.
 pub mod external_resource_version_port;
 pub mod thread_transcript_port;
+// repository identity port 는 폴더가 속한 저장소의 안정 식별자를 찾는 경계다.
+pub mod repository_identity_port;
 // work context store port 는 외부 문서와 범위의 관계를 저장하는 장부 경계다.
 pub mod work_context_store_port;
 // MCP hub backend port 는 MCP 서버 등록부와 필요할 때만 여는 연결을 추상화한다.
