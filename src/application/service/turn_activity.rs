@@ -75,9 +75,25 @@ pub struct TurnActivityObserver {
 
 impl TurnActivityObserver {
     pub fn thread_folder(&self, thread_id: &str, folder: &str) {
+        self.thread_snapshot(thread_id, folder, None);
+    }
+
+    /// 구독 스냅샷의 폴더와 상태는 함께 보인다. 상태가 없으면 이미 본 턴 알림을 보존한다.
+    pub fn thread_snapshot(&self, thread_id: &str, folder: &str, running: Option<bool>) {
         self.registry.update(self.id, thread_id, |thread| {
             thread.folder = Some(folder.to_string());
+            if let Some(running) = running {
+                thread.running = running;
+            }
         });
+    }
+
+    /// 이 접속이 더는 관찰하지 않는 스레드만 지운다. 다른 접속의 관찰 기록은 그대로이다.
+    pub fn forget_thread(&self, thread_id: &str) {
+        self.registry
+            .lock()
+            .threads
+            .remove(&(self.id, thread_id.to_string()));
     }
 
     pub fn turn_running(&self, thread_id: &str, running: bool) {
