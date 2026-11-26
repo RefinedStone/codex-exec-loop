@@ -2364,3 +2364,21 @@ button.issues-title:hover {
 .next-turn-settings-fields label { display: flex; align-items: center; gap: 6px; }
 .next-turn-settings-fields select { max-width: 260px; color: var(--text); background: var(--bg-elevated); border: 1px solid var(--line); border-radius: 5px; padding: 4px; }
 .next-turn-settings p { margin: 8px 0 0; }
+
+/* 다시 연 스레드의 "새 내용" 구분선 (#2843). */
+.new-content-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  color: var(--accent);
+  font-size: var(--text-xs, 11px);
+  font-weight: 600;
+}
+
+.new-content-divider::before,
+.new-content-divider::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--accent);
+}
