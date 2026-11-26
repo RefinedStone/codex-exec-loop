@@ -103,6 +103,28 @@ try {
   await page.getByTestId("browser-message").waitFor({ timeout: 5_000 });
   check("non-http addresses are refused", true);
 
+  // 페이지는 main 의 보기라서 renderer 의 대화 상자 위에 그려진다. 팔레트가 열린 동안 보기를 숨기고, 닫으면 같은 페이지를 다시 보인다.
+  const nativeView = () => app.evaluate(({ BrowserWindow }) => {
+    const view = BrowserWindow.getAllWindows()[0].contentView.children.find((child) => child.webContents);
+    return view ? { visible: view.getVisible(), url: view.webContents.getURL() } : null;
+  });
+  const viewBecomes = async (visible) => {
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      if ((await nativeView())?.visible === visible) return true;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return false;
+  };
+  const before = await nativeView();
+  await page.getByRole("button", { name: "검색과 명령" }).click();
+  await page.getByTestId("palette").waitFor({ timeout: 10_000 });
+  check("an open palette hides the browser view", await viewBecomes(false), JSON.stringify(await nativeView()));
+  await page.keyboard.press("Escape");
+  await page.getByTestId("palette").waitFor({ state: "detached", timeout: 10_000 });
+  check("closing the palette shows the browser view again", await viewBecomes(true), JSON.stringify(await nativeView()));
+  check("the browser view keeps its page across the palette", (await nativeView())?.url === before?.url, JSON.stringify({ before, after: await nativeView() }));
+
   const saved = JSON.parse(readFileSync(join(userData, "browser-settings.json"), "utf8"));
   check("profiles are saved in the userData folder", saved.profiles.some((profile) => profile.id === "qa"));
 
