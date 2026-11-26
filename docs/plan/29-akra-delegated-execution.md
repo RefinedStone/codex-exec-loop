@@ -1,6 +1,8 @@
 # 29. 위임 실행 (delegated execution)
 
-상태: **Proposed**. 현재 제품 동작을 설명하지 않는다. 세부 계약은 조각마다 다시 정한다. · 기준일: 2026-11-21 (Asia/Seoul) ·
+상태: **부분 구현** (2026-11-26, §14.1). D1·D2·D5 와 D3·D4·D6 의 대부분은 PR #2595, #2639 로 들어왔다. 현재 동작의 기준은
+[current-product](../reference/current-product.md) 의 위임 절과 [PR 리뷰 백엔드](../reference/pr-review-backend.md) 이다. 나머지
+문장은 제안이다. · 처음 기준일: 2026-11-21 (Asia/Seoul) ·
 기준 커밋: `33a12b72` (`origin/prerelease`), akra-tunnel `7cd0de6` (`master`, 다른 저장소) ·
 관련: [plan 17 Akra Desktop](17-akra-desktop/README.md) ([R3](17-akra-desktop/roadmap/R3-browser-panel.md),
 [R9](17-akra-desktop/roadmap/R9-agent-browser-and-screenshots.md), [결정 D-13, D-14, D-17, D-19](17-akra-desktop/03-decisions.md)),
@@ -493,6 +495,20 @@ Akra Desktop 은 akra-tunnel-core 의 frontend 이다 (사용자의 방향, 2026
 - 모든 조각은 kernel 시뮬레이션 시험 (`src/composition/kernel_host/simulation.rs`) 을 통과한다. 시험은 가짜 백엔드와
   가짜 시계를 쓴다. 모델 턴이 없다.
 - 실제 계정의 확인은 조각마다 사용자가 허락한 한 번만 한다 (D-13).
+
+### 14.1 조각 상태 (2026-11-26, `origin/prerelease@21a3d0974`)
+
+소스와 문서를 대조한 결과이다. 실행 재현은 하지 않았다. 남은 조각은 이 저장소의 이슈로 추적하고, D7 은 다른 저장소가 추적한다.
+
+| 조각 | 상태 | 근거 | 남은 것 |
+| --- | --- | --- | --- |
+| D1 계약과 장부 | 구현됨 | `src/domain/delegation.rs` (상태, 전달, 단계, 시도, 근거), `src/application/port/outbound/agent_backend_port.rs`, `src/adapter/outbound/db/sqlite_delegation_store.rs`, kernel 조회 `delegation`·`delegations` | 없음 |
+| D2 Codex thread 백엔드 | 구현됨 | `src/adapter/outbound/app_server/codex_thread.rs` (격리 읽기 전용 thread, `UsageLimitExceeded` → `quota`), `akra codex-delegation login`, 이슈 판정 소비자 (`issue_assessment_model.rs`) | 없음 |
+| D3 ChatGPT 채팅 백엔드 | 부분 | Desktop 구동기와 tunnel launcher schema 23, 계정 일치, 로그인 보기 (current-product 위임 절) | 켜기가 `AKRA_DESKTOP_DELEGATED_CHAT=1` 에 묶여 있다 (#2879) |
+| D4 경로와 대체 | 대부분 | `src/domain/delegation/policy.rs` (백엔드 순서, `tool_access`, 사용자 상한을 넘지 못하는 저장소 값, `max_running`, `max_started_per_day`), `BackendStatus` 의 `circuit`, `Fallback` 이력 | D4-4 미리 보는 건강(계정 사용 한도 읽기)은 #2821·#2859 가 같은 API 를 다룬다 |
+| D5 기능 바인딩과 PR 리뷰 | 구현됨 | `src/composition/pr_review.rs`, [PR 리뷰 백엔드](../reference/pr-review-backend.md) (기본 꺼짐, 도구 없는 모델 경로, 명시적 게시 설정) | 없음 |
+| D6 에이전트 입구와 화면 | 대부분 | `akra kernel delegation submit_delegation`·`wait`·`status`·`result`, 콜백 `checkpoint_delegation`·`report_delegation_result` 과 작업별 토큰, skill `assets/app-server/hub-skills/akra-kernel/SKILL.md`, Desktop "ChatGPT 위임" 패널과 "내 차례" | 깊이 한도가 없다 (#2880) |
+| D7 akra-tunnel-core | 다른 저장소 | akra-tunnel-core v0.1.2, launcher PR #94 (PR #2639 본문) | `RefinedStone/akra-tunnel-core` #1 ~ #8 이 추적한다. D3 의 남은 일(#2879)은 그 저장소의 배포 상태를 확인하고 정한다 |
 
 ## 15. 결정 (제안)과 미결정
 
