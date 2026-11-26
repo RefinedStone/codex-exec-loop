@@ -415,7 +415,7 @@ OS 알림은 알림 설정(plan 26 A2)을 따른다. 같은 글의 알림은 1�
 
 | 부분 | 맡는 일 | 위치 |
 | --- | --- | --- |
-| 스킬 | 글의 구성, 문체, 근거 규칙, 금지 사항. 사람이 읽고 고친다. | `assets/app-server/skills/akra-tech-blog/SKILL.md` (신규). `akra-issue-draft-review` 와 같은 방식이다. |
+| 스킬 | 글의 구성, 문체, 근거 규칙, 금지 사항. 사람이 읽고 고친다. | `assets/app-server/skills/akra-tech-blog/SKILL.md` (구현, #2872). 커널이 워커에 실어 보내고, 워커가 집필 입력의 앞에 붙인다. |
 | 플러그인 (커널 확장) | 대상 목록, 근거 수집, 모델 실행, 검수 반복, 판, 읽음, 내보내기, 작업 상태. | 기존 `akra.tech-blog` 확장. 버전 2. |
 | Desktop 패널 | 대상 고르기, 진행 표시, 결과 보기. 판단을 하지 않는다. | `TechBlogPanel.tsx` |
 

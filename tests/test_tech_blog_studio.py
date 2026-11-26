@@ -97,6 +97,17 @@ class StudioTest(unittest.TestCase):
         self.assertIn("feat: third", model.prompts[0][1])
         self.assertIn("+third line", model.prompts[0][1])
 
+    def test_the_writing_rules_come_from_the_skill_document(self):
+        # #2872: no prompt string in Python; the skill body leads the writer input.
+        self.assertFalse(hasattr(studio, "WRITE_PROMPT"))
+        skill = (Path(__file__).resolve().parents[1] / "assets/app-server/skills/akra-tech-blog/SKILL.md").read_text("utf-8")
+        model = FakeModel("pass")
+        self.run_all(self.generate(), model)
+        kind, prompt = model.prompts[0]
+        self.assertEqual(kind, "write")
+        self.assertTrue(prompt.startswith(skill.rstrip("\n") + "\n"))
+        self.assertIn('"sources"', prompt[len(skill):])
+
     def test_findings_trigger_one_automatic_rewrite(self):
         model = FakeModel("revise", "revise")
         result = self.run_all(self.generate(), model)
