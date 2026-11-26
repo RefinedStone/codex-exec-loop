@@ -597,6 +597,9 @@ fn turn_key(thread_id: &str, turn_id: &str) -> (String, String) {
 #[derive(Default)]
 struct SimKernelLog(Mutex<Vec<RecordedKernelEvent>>);
 
+/// 강제 종료한 커널이 쓴 기록 가운데 디스크에 닿은 개수를 고른다 (#2806).
+type KeepWritten = dyn Fn(&[RecordedKernelEvent]) -> usize;
+
 impl SimKernelLog {
     /*
      * 기록을 다 쓰지 못한 강제 종료이다 (#2806). 앞의 `kept` 개만 디스크에 닿았고 그 뒤는 잃었다. 기록기는 차례대로
@@ -1119,7 +1122,7 @@ impl Simulation {
      */
     fn crash_kernel(
         &mut self,
-        keep: &dyn Fn(&[RecordedKernelEvent]) -> usize,
+        keep: &KeepWritten,
         drop_effects: bool,
     ) -> Result<(), Violation> {
         let mut dropped_prompts = BTreeSet::new();
@@ -1145,7 +1148,7 @@ impl Simulation {
      */
     fn replace_kernel(
         &mut self,
-        crash: Option<(&dyn Fn(&[RecordedKernelEvent]) -> usize, BTreeSet<String>)>,
+        crash: Option<(&KeepWritten, BTreeSet<String>)>,
     ) -> Result<(), Violation> {
         self.restarts += 1;
         let SimKernel {
@@ -1200,7 +1203,7 @@ impl Simulation {
     /// 죽은 커널이 쓴 기록의 끝을 잃고, 그 기록이 없어서 달라지는 기대값을 고친다 (#2806 계약 C1~C4).
     fn lose_record_tail(
         &mut self,
-        keep: &dyn Fn(&[RecordedKernelEvent]) -> usize,
+        keep: &KeepWritten,
         dropped_prompts: &BTreeSet<String>,
     ) {
         let lifetime_start = self.lifetime_starts.last().copied().unwrap_or(0);
