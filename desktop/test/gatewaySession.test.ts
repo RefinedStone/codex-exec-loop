@@ -214,6 +214,7 @@ function sessionStore() {
       snapshot.folders = removeWorkspaceThread(snapshot.folders ?? [], threadId);
     },
     getOpenThreadId: () => snapshot.openThreadId ?? null,
+    getActiveThreadIds: () => snapshot.activeThreadIds ?? [],
     getTranscript: () => snapshot.transcript ?? null,
     setKernel: (kernel) => Object.assign(snapshot, { kernel }),
     setDots: (dots) => Object.assign(snapshot, { dots }),

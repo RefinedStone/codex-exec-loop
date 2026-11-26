@@ -2403,6 +2403,8 @@ button.issues-title:hover {
   position: fixed;
   z-index: 50;
   min-width: 160px;
+  max-height: calc(100vh / var(--area-zoom, 1));
+  overflow-y: auto;
   margin: 0;
   padding: 4px;
   list-style: none;

@@ -10,7 +10,7 @@ import { DotAvatar } from "../views/DotChat";
 import { DiagnosticsDialog } from "../views/DiagnosticsDialog";
 import { useZoomFactor, zoomStyle } from "../views/useZoom";
 import { type ThreadActions, ThreadMenu, ThreadRenameInput } from "./ThreadMenu";
-import { allThreads, folderName, needsAttention, relativeAge, threadMark, type ThreadMark, type ThreadMarkSource } from "./threadStatus";
+import { allThreads, archiveBlocked, folderName, needsAttention, relativeAge, threadMark, type ThreadMark, type ThreadMarkSource } from "./threadStatus";
 
 export type { ThreadActions } from "./ThreadMenu";
 
@@ -54,6 +54,7 @@ function ThreadRow({ thread, folder, actions, onArchived, onOpenThread }: {
   const open = useDesktopStore((state) => state.openThreadId === thread.id);
   const selected = useUiStore((state) => state.view === "thread") && open;
   const mark = useDesktopStore((state) => threadMark(thread, state));
+  const turnActive = useDesktopStore((state) => archiveBlocked(thread.id, state));
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [renaming, setRenaming] = useState(false);
   const closeMenu = useCallback(() => setMenu(null), []);
@@ -70,7 +71,7 @@ function ThreadRow({ thread, folder, actions, onArchived, onOpenThread }: {
   return (
     <li className="thread-row">
       {menu && actions && (
-        <ThreadMenu thread={thread} folder={folder} running={mark === "running"} position={menu} onClose={closeMenu}
+        <ThreadMenu thread={thread} folder={folder} running={turnActive} position={menu} onClose={closeMenu}
           onRename={() => setRenaming(true)}
           onArchive={() => actions.archive(thread.id).then(() => onArchived(thread), (cause: unknown) => toast(`보관하지 못했습니다: ${failure(cause)}`))}
           onOpenFolder={() => actions.openFolder(folder).then((opened) => { if (!opened) toast("폴더를 열지 못했습니다."); })} />
