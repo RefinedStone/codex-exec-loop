@@ -1,4 +1,5 @@
-//! Gateway 의 이슈 초안 메서드 처리이다 (#2426): `akra/issue/open`, `preview`, `publish`, `recheck`, `abandon`.
+//! Gateway 의 이슈 초안 메서드 처리이다 (#2426): `akra/issue/open`, `preview`, `publish`, `recheck`, `abandon`,
+//! 게시 검증 취소 `akra/issue/validation/cancel` (#2723).
 //! 인계의 `akra/issue/handoffCopy` 는 `issue` 모듈이 맡는다 (#2428). Desktop 의 이슈 초안 화면이 쓴다. 검증, 마스킹, 승인 검사, 게시 의도
 //! 기록은 `IssueDraftPort` 뒤의 서비스가 한다. 여기서는 요청을 읽고 답을 쓴다. 원격 조회는 블로킹이므로 요청마다
 //! 블로킹 작업으로 돌린다.
@@ -28,7 +29,7 @@ const ISSUE_OPEN_METHOD: &str = "akra/issue/open";
 /// params `{ target, text }` -> result `IssueDraftPreview`. 쓰지 않는다.
 const ISSUE_PREVIEW_METHOD: &str = "akra/issue/preview";
 const ISSUE_REVIEW_METHOD: &str = "akra/issue/review";
-/// params `{ target, text, approval, editBasis, sharedCopyOnly? }` -> result `IssueDraftPublished`.
+/// params `{ target, text, approval, editBasis, sharedCopyOnly?, validationId? }` -> result `IssueDraftPublished`.
 const ISSUE_PUBLISH_METHOD: &str = "akra/issue/publish";
 /// params `IssueDraftTarget` -> result `{ intent: IssueDraftIntent | null }`. 읽기만 한다.
 const ISSUE_RECHECK_METHOD: &str = "akra/issue/recheck";
@@ -40,6 +41,9 @@ const ISSUE_CREATE_PUBLISH_METHOD: &str = "akra/issue/create/publish";
 const ISSUE_CREATE_RECHECK_METHOD: &str = "akra/issue/create/recheck";
 const ISSUE_CREATE_CONFIRM_METHOD: &str = "akra/issue/create/confirm";
 const ISSUE_CREATE_RESTART_METHOD: &str = "akra/issue/create/restart";
+/// params `{ validationId }` -> result `{ cancelled: bool }`. 게시 요청과 따로 처리되므로 실행 중에 닿는다.
+/// `false` 는 이미 결과를 확정했거나 모르는 ID 이다.
+const ISSUE_VALIDATION_CANCEL_METHOD: &str = "akra/issue/validation/cancel";
 const JSON_RPC_METHOD_NOT_FOUND: i64 = -32601;
 const JSON_RPC_INVALID_PARAMS: i64 = -32602;
 const ISSUE_ERROR: i64 = -32000;
@@ -55,6 +59,12 @@ struct RequestEnvelope {
 struct AbandonParams {
     cwd: String,
     intent_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ValidationCancelParams {
+    validation_id: String,
 }
 
 #[derive(Deserialize)]
@@ -80,6 +90,7 @@ pub(super) fn is_issue_draft_method(method: &str) -> bool {
         ISSUE_CREATE_RECHECK_METHOD,
         ISSUE_CREATE_CONFIRM_METHOD,
         ISSUE_CREATE_RESTART_METHOD,
+        ISSUE_VALIDATION_CANCEL_METHOD,
     ]
     .contains(&method)
 }
@@ -211,6 +222,11 @@ fn respond(drafts: &dyn IssueDraftPort, id: Value, method: &str, text: &str) -> 
             drafts
                 .abandon(&params.cwd, &params.intent_id)
                 .and_then(|intent| Ok(json!({ "intent": to_value(&intent)? })))
+        }),
+        ISSUE_VALIDATION_CANCEL_METHOD => params::<ValidationCancelParams>(text).map(|params| {
+            drafts
+                .cancel_validation(&params.validation_id)
+                .map(|cancelled| json!({ "cancelled": cancelled }))
         }),
         _ => {
             return error_response(
@@ -374,6 +390,10 @@ mod tests {
         fn abandon(&self, _: &str, intent_id: &str) -> Result<IssueDraftIntent> {
             Ok(intent(intent_id, IssuePublishIntentState::Abandoned))
         }
+
+        fn cancel_validation(&self, validation_id: &str) -> Result<bool> {
+            Ok(validation_id == "v-running")
+        }
     }
 
     fn target() -> Value {
@@ -432,6 +452,23 @@ mod tests {
             json!({ "cwd": "/work/project", "intentId": "a1" }),
         );
         assert_eq!(abandoned["result"]["intent"]["state"], "abandoned");
+    }
+
+    #[test]
+    fn validation_cancel_answers_whether_a_running_validation_accepted_it() {
+        assert!(is_issue_draft_method(ISSUE_VALIDATION_CANCEL_METHOD));
+        let accepted = answer(
+            ISSUE_VALIDATION_CANCEL_METHOD,
+            json!({ "validationId": "v-running" }),
+        );
+        assert_eq!(accepted["result"], json!({ "cancelled": true }));
+        let finished = answer(
+            ISSUE_VALIDATION_CANCEL_METHOD,
+            json!({ "validationId": "v-finished" }),
+        );
+        assert_eq!(finished["result"], json!({ "cancelled": false }));
+        let invalid = answer(ISSUE_VALIDATION_CANCEL_METHOD, json!({ "id": "v-running" }));
+        assert_eq!(invalid["error"]["code"], JSON_RPC_INVALID_PARAMS);
     }
 
     #[test]

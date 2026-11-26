@@ -15,13 +15,17 @@ use crate::application::port::inbound::issue_draft_port::{
     IssueDraftTarget, IssueDraftTemplate, IssueDraftText, IssueDraftUnsupportedInput,
     IssueDraftValidationError,
 };
-use crate::application::port::outbound::issue_code_validator_runner_port::IssueCodeValidatorRunnerPort;
+use crate::application::port::outbound::issue_code_validator_runner_port::{
+    IssueCodeValidatorCancellation, IssueCodeValidatorRunnerPort,
+};
 use crate::application::port::outbound::issue_snapshot_port::{
     IssueSnapshotPort, IssueSnapshotResolveRequest, IssueSnapshotResponse,
 };
 use crate::application::service::evidence_vault_restore::restorable_fields;
 use crate::application::service::evidence_vault_unlock::EvidenceVaultUnlockService;
-use crate::application::service::issue_code_validator::gate_issue_publish_with_code_validators;
+use crate::application::service::issue_code_validator::{
+    IssueCodeValidationRegistry, gate_issue_publish_with_code_validators,
+};
 use crate::application::service::issue_masking::{
     IssueMaskedSpan, IssueMaskingBlocked, IssueSensitiveSpan, IssueTextField, mask_issue_text,
 };
@@ -70,6 +74,7 @@ pub struct IssueDraftService {
     creator: Option<Arc<IssueCreationService>>,
     automation_policy: Option<Arc<IssueAutomationPolicyService>>,
     code_validators: Arc<dyn IssueCodeValidatorRunnerPort>,
+    validations: IssueCodeValidationRegistry,
     vault_unlock: Arc<EvidenceVaultUnlockService>,
 }
 
@@ -97,6 +102,7 @@ impl IssueDraftService {
             creator: None,
             automation_policy: None,
             code_validators,
+            validations: IssueCodeValidationRegistry::default(),
             vault_unlock,
         }
     }
@@ -292,12 +298,13 @@ impl IssueDraftPort for IssueDraftService {
     }
 
     fn publish(&self, request: IssueDraftPublishRequest) -> Result<IssueDraftPublished> {
+        let validation = self.validations.start(request.validation_id.as_deref())?;
         let target = self.scoped_target(request.target)?;
         let conventions = self.conventions(&target.cwd)?;
         let (preview, passed) = evaluate(
             &conventions,
             &request.text,
-            Some(self.code_validators.as_ref()),
+            Some((self.code_validators.as_ref(), validation.cancellation())),
         );
         let Some((validated, masked_spans)) = passed else {
             return Ok(IssueDraftPublished::Blocked { preview });
@@ -367,6 +374,10 @@ impl IssueDraftPort for IssueDraftService {
                 .abandon(&self.workspace_dir(cwd)?, intent_id)?,
         ))
     }
+
+    fn cancel_validation(&self, validation_id: &str) -> Result<bool> {
+        Ok(self.validations.cancel(validation_id))
+    }
 }
 
 fn intent(record: &IssuePublishIntentRecord) -> IssueDraftIntent {
@@ -377,11 +388,14 @@ fn intent(record: &IssuePublishIntentRecord) -> IssueDraftIntent {
 }
 
 /// 로컬 글을 가리고 게시 관문으로 검사한다. 통과하면 관문을 지난 글과 가림 구간도 준다.
-/// `code_validators` 가 있으면 코드 검증기도 실행한다.
+/// `code_validators` 가 있으면 코드 검증기도 실행한다. 그 취소 상태가 취소를 받으면 게시를 막는다.
 fn evaluate(
     conventions: &Conventions,
     text: &IssueDraftText,
-    code_validators: Option<&dyn IssueCodeValidatorRunnerPort>,
+    code_validators: Option<(
+        &dyn IssueCodeValidatorRunnerPort,
+        &IssueCodeValidatorCancellation,
+    )>,
 ) -> (
     IssueDraftPreview,
     Option<(IssueValidationPassed, Vec<IssueMaskedSpan>)>,
@@ -427,11 +441,12 @@ fn evaluate(
     };
     let requirements = requirements(conventions);
     let gate = match code_validators {
-        Some(runner) => gate_issue_publish_with_code_validators(
+        Some((runner, cancellation)) => gate_issue_publish_with_code_validators(
             &masked.shared_copy,
             requirements.as_ref(),
             &conventions.policy,
             runner,
+            cancellation,
         ),
         None => gate_issue_publish(&masked.shared_copy, requirements.as_ref()),
     };
@@ -450,6 +465,14 @@ fn evaluate(
                     kind: "failed",
                 })
                 .collect(),
+            false,
+        ),
+        Err(IssuePublishBlocked::Cancelled) => (
+            vec![IssueDraftValidationError {
+                field: "code_validator",
+                label: None,
+                kind: "cancelled",
+            }],
             false,
         ),
     };
@@ -657,13 +680,14 @@ mod tests {
 
     /// 프로젝트의 정책 파일과 템플릿 파일이다. 시험 중에 바꿀 수 있다.
     struct FakeProjectFiles {
+        user_policy: Mutex<Option<String>>,
         policy: Mutex<String>,
         template: Mutex<String>,
     }
 
     impl IssuePolicySourcePort for FakeProjectFiles {
         fn load_user_policy_toml(&self) -> Result<Option<String>> {
-            Ok(None)
+            Ok(self.user_policy.lock().unwrap().clone())
         }
 
         fn load_project_policy_toml(&self, _: &str) -> Result<Option<String>> {
@@ -779,8 +803,32 @@ mod tests {
     struct NoCodeValidators;
 
     impl IssueCodeValidatorRunnerPort for NoCodeValidators {
-        fn run(&self, _: IssueCodeValidatorRunRequest) -> IssueCodeValidatorRunOutcome {
+        fn run(
+            &self,
+            _: IssueCodeValidatorRunRequest,
+            _: &IssueCodeValidatorCancellation,
+        ) -> IssueCodeValidatorRunOutcome {
             unreachable!("the policy selects no code validator")
+        }
+    }
+
+    /// 시작을 알리고 취소를 받을 때까지 기다린 뒤 통과로 끝난다: 취소와 겹친 늦은 성공이다.
+    struct PassesAfterCancel {
+        started: Mutex<std::sync::mpsc::Sender<()>>,
+    }
+
+    impl IssueCodeValidatorRunnerPort for PassesAfterCancel {
+        fn run(
+            &self,
+            _: IssueCodeValidatorRunRequest,
+            cancellation: &IssueCodeValidatorCancellation,
+        ) -> IssueCodeValidatorRunOutcome {
+            self.started.lock().unwrap().send(()).unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !cancellation.is_cancelled() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            IssueCodeValidatorRunOutcome::Passed
         }
     }
 
@@ -791,7 +839,15 @@ mod tests {
     }
 
     fn fixture(lose_answer: bool) -> Fixture {
+        fixture_with_runner(lose_answer, Arc::new(NoCodeValidators))
+    }
+
+    fn fixture_with_runner(
+        lose_answer: bool,
+        code_validators: Arc<dyn IssueCodeValidatorRunnerPort>,
+    ) -> Fixture {
         let files = Arc::new(FakeProjectFiles {
+            user_policy: Mutex::new(None),
             policy: Mutex::new(format!(
                 "[convention]\ntemplate = \"{TEMPLATE_PATH}\"\nrequired_sections = [\"Impact\"]\n"
             )),
@@ -817,7 +873,7 @@ mod tests {
                 Arc::new(FakeJournal::default()),
                 Arc::new(UnusedVault),
             ),
-            Arc::new(NoCodeValidators),
+            code_validators,
             Arc::new(EvidenceVaultUnlockService::new(Arc::new(key_store))),
         );
         Fixture {
@@ -880,7 +936,81 @@ mod tests {
             approval,
             edit_basis: fixture.service.open(target()).unwrap().edit_basis,
             shared_copy_only: false,
+            validation_id: None,
         }
+    }
+
+    #[test]
+    fn a_cancelled_publish_validation_never_writes_even_when_the_validator_passes_late() {
+        let (started, validator_started) = std::sync::mpsc::channel();
+        let fixture = fixture_with_runner(
+            false,
+            Arc::new(PassesAfterCancel {
+                started: Mutex::new(started),
+            }),
+        );
+        let command = if cfg!(windows) {
+            "C:/validators/team-rules.exe"
+        } else {
+            "/opt/validators/team-rules"
+        };
+        *fixture.files.user_policy.lock().unwrap() = Some(format!(
+            "[approved_code_validators.team-rules]\ncommand = \"{command}\"\nsha256 = \"{}\"\n",
+            "a".repeat(64)
+        ));
+        fixture
+            .files
+            .policy
+            .lock()
+            .unwrap()
+            .push_str("\n[[code_validators]]\nid = \"team-rules\"\n");
+        let text = text_with_span(Some(IssueSensitiveSpanClass::Secret));
+        let (_, approval, publishable) = ready(
+            fixture
+                .service
+                .preview(IssueDraftPreviewRequest {
+                    expected_labels: Vec::new(),
+                    target: target(),
+                    text: text.clone(),
+                })
+                .unwrap(),
+        );
+        assert!(publishable, "the preview does not run code validators");
+        let mut request = publish_request(&fixture, text, approval);
+        request.validation_id = Some("v1".to_string());
+
+        let published = std::thread::scope(|scope| {
+            let publishing = scope.spawn(|| fixture.service.publish(request));
+            validator_started
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("the validator started");
+            assert!(fixture.service.cancel_validation("v1").unwrap());
+            publishing.join().unwrap().unwrap()
+        });
+
+        let IssueDraftPublished::Blocked {
+            preview:
+                IssueDraftPreview::Ready {
+                    errors,
+                    publishable,
+                    ..
+                },
+        } = published
+        else {
+            panic!("a cancelled validation must block publish: {published:?}");
+        };
+        assert!(!publishable);
+        assert_eq!(
+            errors,
+            [IssueDraftValidationError {
+                field: "code_validator",
+                label: None,
+                kind: "cancelled",
+            }]
+        );
+        assert_eq!(*fixture.remote.writes.lock().unwrap(), 0);
+        // 끝난 검증은 다시 취소할 수 없다.
+        assert!(!fixture.service.cancel_validation("v1").unwrap());
     }
 
     #[test]

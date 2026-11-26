@@ -45,6 +45,9 @@ pub(super) fn publish(
     service: &IssueDraftService,
     request: IssueCreationPublishRequest,
 ) -> Result<IssueCreationPublished> {
+    let validation = service
+        .validations
+        .start(request.validation_id.as_deref())?;
     let creator = service.creator()?;
     let record = creator.intent(&request.target, &request.intent_id)?;
     if record.state == IssueCreationIntentState::Abandoned {
@@ -72,7 +75,11 @@ pub(super) fn publish(
     }
     let conventions = service.conventions(&record.repository.project_scope.workspace_dir)?;
     let text = frozen_text(&record).unwrap_or(request.text);
-    let (preview, passed) = evaluate(&conventions, &text, Some(service.code_validators.as_ref()));
+    let (preview, passed) = evaluate(
+        &conventions,
+        &text,
+        Some((service.code_validators.as_ref(), validation.cancellation())),
+    );
     let preview = creation_preview(&record, preview);
     let Some((validated, masked_spans)) = passed else {
         return Ok(IssueCreationPublished::Blocked { preview });

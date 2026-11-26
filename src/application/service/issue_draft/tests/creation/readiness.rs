@@ -124,6 +124,7 @@ fn malformed_automation_policy_does_not_block_creation_or_its_result_recovery() 
                 text,
                 approval: preview.approval.expect("Publish still has an approval"),
                 shared_copy_only: false,
+                validation_id: None,
             })
             .unwrap();
         assert!(matches!(

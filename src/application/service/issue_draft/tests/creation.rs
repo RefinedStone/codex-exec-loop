@@ -45,6 +45,7 @@ fn prepare(
         text,
         approval,
         shared_copy_only: false,
+        validation_id: None,
     };
     (opened, shared_copy, request)
 }
@@ -378,6 +379,7 @@ fn creator_enabled_updates_use_the_primary_scope_for_linked_and_subdirectory_tar
                 approval,
                 edit_basis: opened.edit_basis,
                 shared_copy_only: false,
+                validation_id: None,
             })
             .unwrap();
         let IssueDraftPublished::Confirmed { intent: published } = published else {

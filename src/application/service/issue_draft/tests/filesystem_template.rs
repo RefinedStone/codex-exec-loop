@@ -101,6 +101,7 @@ fn filesystem_template_fields_gate_publication_and_changed_bytes_invalidate_appr
                 approval,
                 edit_basis: opened.edit_basis.clone(),
                 shared_copy_only: true,
+                validation_id: None,
             })
             .unwrap();
         assert!(matches!(blocked, IssueDraftPublished::Blocked { .. }));
@@ -137,6 +138,7 @@ fn filesystem_template_fields_gate_publication_and_changed_bytes_invalidate_appr
                 approval,
                 edit_basis: opened.edit_basis.clone(),
                 shared_copy_only: true,
+                validation_id: None,
             })
             .unwrap();
         assert_eq!(
@@ -171,6 +173,7 @@ fn filesystem_template_fields_gate_publication_and_changed_bytes_invalidate_appr
                 approval,
                 edit_basis: opened.edit_basis,
                 shared_copy_only: true,
+                validation_id: None,
             })
             .unwrap();
         assert!(matches!(published, IssueDraftPublished::Confirmed { .. }));

@@ -1,5 +1,6 @@
 use crate::application::port::outbound::issue_code_validator_runner_port::{
-    IssueCodeValidatorRunOutcome, IssueCodeValidatorRunRequest, IssueCodeValidatorRunnerPort,
+    IssueCodeValidatorCancellation, IssueCodeValidatorRunOutcome, IssueCodeValidatorRunRequest,
+    IssueCodeValidatorRunnerPort,
 };
 
 /*
@@ -9,6 +10,7 @@ use crate::application::port::outbound::issue_code_validator_runner_port::{
  * Windows는 검증된 headless PE32+ LPAC 프로필만 사용한다.
  * 지원되지 않는 플랫폼/프로필/이미지 형식은 실행하지 않는다.
  * 격리 없는 실행으로 바꾸는 길은 없다.
+ * 사용자 취소는 모든 runner 가 제한 시간과 같은 자리에서 확인하고, 같은 정리 경로로 프로세스 트리를 끝낸다.
  *
  * macOS 에서의 실행:
  * - 승인한 해시와 같은 내용을 임시 작업 공간에 복사하고 그 복사본을 실행한다. 해시 확인 뒤에 원본을
@@ -26,24 +28,28 @@ impl SandboxedIssueCodeValidatorRunnerAdapter {
 }
 
 impl IssueCodeValidatorRunnerPort for SandboxedIssueCodeValidatorRunnerAdapter {
-    fn run(&self, request: IssueCodeValidatorRunRequest) -> IssueCodeValidatorRunOutcome {
+    fn run(
+        &self,
+        request: IssueCodeValidatorRunRequest,
+        cancellation: &IssueCodeValidatorCancellation,
+    ) -> IssueCodeValidatorRunOutcome {
         #[cfg(target_os = "macos")]
         {
-            macos::run(&request)
+            macos::run(&request, cancellation)
         }
         #[cfg(target_os = "linux")]
         {
-            linux::run(&request)
+            linux::run(&request, cancellation)
         }
         #[cfg(windows)]
         {
-            windows::run(&request)
+            windows::run(&request, cancellation)
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
         {
             use crate::application::port::outbound::issue_code_validator_runner_port::IssueCodeValidatorNotRun;
 
-            let _ = request;
+            let _ = (request, cancellation);
             IssueCodeValidatorRunOutcome::NotRun(IssueCodeValidatorNotRun::IsolationUnavailable)
         }
     }
@@ -71,7 +77,8 @@ mod macos {
     use sha2::{Digest, Sha256};
 
     use crate::application::port::outbound::issue_code_validator_runner_port::{
-        IssueCodeValidatorNotRun, IssueCodeValidatorRunOutcome, IssueCodeValidatorRunRequest,
+        IssueCodeValidatorCancellation, IssueCodeValidatorNotRun, IssueCodeValidatorRunOutcome,
+        IssueCodeValidatorRunRequest,
     };
 
     const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
@@ -102,7 +109,10 @@ mod macos {
   (subpath (param "WORKSPACE")))
 "#;
 
-    pub(super) fn run(request: &IssueCodeValidatorRunRequest) -> IssueCodeValidatorRunOutcome {
+    pub(super) fn run(
+        request: &IssueCodeValidatorRunRequest,
+        cancellation: &IssueCodeValidatorCancellation,
+    ) -> IssueCodeValidatorRunOutcome {
         let not_run = IssueCodeValidatorRunOutcome::NotRun;
         let Ok(content) = fs::read(&request.command) else {
             return not_run(IssueCodeValidatorNotRun::Missing);
@@ -116,7 +126,7 @@ mod macos {
         let Ok(workspace) = create_workspace() else {
             return not_run(IssueCodeValidatorNotRun::Crashed);
         };
-        let outcome = run_in_workspace(&workspace, &content, request)
+        let outcome = run_in_workspace(&workspace, &content, request, cancellation)
             .unwrap_or(not_run(IssueCodeValidatorNotRun::Crashed));
         let _ = fs::remove_dir_all(&workspace);
         outcome
@@ -139,6 +149,7 @@ mod macos {
         workspace: &Path,
         content: &[u8],
         request: &IssueCodeValidatorRunRequest,
+        cancellation: &IssueCodeValidatorCancellation,
     ) -> io::Result<IssueCodeValidatorRunOutcome> {
         let validator = workspace.join("validator");
         OpenOptions::new()
@@ -171,35 +182,39 @@ mod macos {
             .take()
             .ok_or_else(|| io::Error::other("validator stdout pipe is unavailable"))?;
         let mut message = Vec::new();
-        let status = (|| -> io::Result<Option<std::process::ExitStatus>> {
-            // The parent keeps this pipe handle; the validator cannot substitute a file or FIFO.
-            let fd = stdout.as_raw_fd();
-            // SAFETY: fd belongs to the live ChildStdout. fcntl changes only its status flags.
-            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-            if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
-            {
-                return Err(io::Error::last_os_error());
-            }
-            let deadline = Instant::now() + request.timeout;
-            loop {
-                drain_stdout(&mut stdout, &mut message)?;
-                if let Some(status) = child.try_wait()? {
-                    return Ok(Some(status));
+        let status =
+            (|| -> io::Result<Result<std::process::ExitStatus, IssueCodeValidatorNotRun>> {
+                // The parent keeps this pipe handle; the validator cannot substitute a file or FIFO.
+                let fd = stdout.as_raw_fd();
+                // SAFETY: fd belongs to the live ChildStdout. fcntl changes only its status flags.
+                let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+                if flags < 0
+                    || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
+                {
+                    return Err(io::Error::last_os_error());
                 }
-                if Instant::now() >= deadline {
-                    return Ok(None);
+                let deadline = Instant::now() + request.timeout;
+                loop {
+                    drain_stdout(&mut stdout, &mut message)?;
+                    if let Some(status) = child.try_wait()? {
+                        return Ok(Ok(status));
+                    }
+                    if Instant::now() >= deadline {
+                        return Ok(Err(IssueCodeValidatorNotRun::TimedOut));
+                    }
+                    if cancellation.is_cancelled() {
+                        return Ok(Err(IssueCodeValidatorNotRun::Cancelled));
+                    }
+                    thread::sleep(Duration::from_millis(20));
                 }
-                thread::sleep(Duration::from_millis(20));
-            }
-        })();
+            })();
         // Always stop descendants, including when collection fails or a descendant keeps stdout open.
         // SAFETY: the negative PID identifies the process group created above.
         unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
         let _ = child.wait();
-        let Some(status) = status? else {
-            return Ok(IssueCodeValidatorRunOutcome::NotRun(
-                IssueCodeValidatorNotRun::TimedOut,
-            ));
+        let status = match status? {
+            Ok(status) => status,
+            Err(reason) => return Ok(IssueCodeValidatorRunOutcome::NotRun(reason)),
         };
         drain_stdout(&mut stdout, &mut message)?;
 
@@ -258,13 +273,19 @@ mod macos {
             let sha256 = format!("{:x}", Sha256::digest(script.as_bytes()));
 
             assert_eq!(
-                run(&request(sha256, Duration::from_secs(20))),
+                run(
+                    &request(sha256, Duration::from_secs(20)),
+                    &IssueCodeValidatorCancellation::new()
+                ),
                 IssueCodeValidatorRunOutcome::Rejected {
                     message: "title is too short".to_string()
                 }
             );
             assert_eq!(
-                run(&request("0".repeat(64), Duration::from_secs(20))),
+                run(
+                    &request("0".repeat(64), Duration::from_secs(20)),
+                    &IssueCodeValidatorCancellation::new()
+                ),
                 IssueCodeValidatorRunOutcome::NotRun(IssueCodeValidatorNotRun::HashMismatch)
             );
             fs::remove_dir_all(directory).expect("cleanup");
@@ -293,7 +314,13 @@ mod macos {
                 };
                 let workspace = create_workspace().unwrap();
                 assert_eq!(
-                    run_in_workspace(&workspace, script.as_bytes(), &request).unwrap(),
+                    run_in_workspace(
+                        &workspace,
+                        script.as_bytes(),
+                        &request,
+                        &IssueCodeValidatorCancellation::new()
+                    )
+                    .unwrap(),
                     IssueCodeValidatorRunOutcome::Rejected {
                         message: "safe result".to_string()
                     }
@@ -314,7 +341,13 @@ mod macos {
                 input_json: "{}".to_string(),
             };
             assert_eq!(
-                run_in_workspace(&workspace, script, &request).unwrap(),
+                run_in_workspace(
+                    &workspace,
+                    script,
+                    &request,
+                    &IssueCodeValidatorCancellation::new()
+                )
+                .unwrap(),
                 IssueCodeValidatorRunOutcome::Rejected {
                     message: "x".repeat(MESSAGE_LIMIT_BYTES)
                 }
@@ -334,10 +367,50 @@ mod macos {
             };
             let started = Instant::now();
             assert_eq!(
-                run_in_workspace(&workspace, b"#!/bin/sh\nexec yes x\n", &request).unwrap(),
+                run_in_workspace(
+                    &workspace,
+                    b"#!/bin/sh\nexec yes x\n",
+                    &request,
+                    &IssueCodeValidatorCancellation::new()
+                )
+                .unwrap(),
                 IssueCodeValidatorRunOutcome::NotRun(IssueCodeValidatorNotRun::TimedOut)
             );
             assert!(started.elapsed() < Duration::from_secs(5));
+            fs::remove_dir_all(workspace).unwrap();
+        }
+
+        #[test]
+        fn user_cancel_stops_the_running_validator_and_its_children() {
+            let workspace = create_workspace().unwrap();
+            let marker = workspace.join("still-running");
+            // 자식이 살아 있으면 1 초 뒤에 표식을 만든다. 취소가 프로세스 그룹을 끝내면 표식이 없다.
+            let script = format!(
+                "#!/bin/sh\n(sleep 1; : > '{}') &\nexec sleep 30\n",
+                marker.display()
+            );
+            let request = IssueCodeValidatorRunRequest {
+                command: String::new(),
+                sha256: String::new(),
+                timeout: Duration::from_secs(30),
+                input_json: "{}".to_string(),
+            };
+            let cancellation = IssueCodeValidatorCancellation::new();
+            let started = Instant::now();
+            let outcome = thread::scope(|scope| {
+                scope.spawn(|| {
+                    thread::sleep(Duration::from_millis(300));
+                    assert!(cancellation.cancel());
+                });
+                run_in_workspace(&workspace, script.as_bytes(), &request, &cancellation).unwrap()
+            });
+            assert_eq!(
+                outcome,
+                IssueCodeValidatorRunOutcome::NotRun(IssueCodeValidatorNotRun::Cancelled)
+            );
+            assert!(started.elapsed() < Duration::from_secs(5));
+            thread::sleep(Duration::from_millis(1500));
+            assert!(!marker.exists(), "a validator child survived the cancel");
             fs::remove_dir_all(workspace).unwrap();
         }
     }

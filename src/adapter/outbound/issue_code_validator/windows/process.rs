@@ -35,7 +35,8 @@ use super::handles::Handle;
 use super::security::{Identity, wide};
 use super::storage::Workspace;
 use crate::application::port::outbound::issue_code_validator_runner_port::{
-    IssueCodeValidatorNotRun as NotRun, IssueCodeValidatorRunOutcome as Outcome,
+    IssueCodeValidatorCancellation, IssueCodeValidatorNotRun as NotRun,
+    IssueCodeValidatorRunOutcome as Outcome,
 };
 
 const MESSAGE_LIMIT: usize = 4096;
@@ -49,6 +50,7 @@ pub(super) fn run(
     identity: &Identity,
     workspace: &Workspace,
     timeout: Duration,
+    cancellation: &IssueCodeValidatorCancellation,
 ) -> io::Result<Outcome> {
     let stdout = Pipe::new()?;
     let stderr = Pipe::new()?;
@@ -60,8 +62,16 @@ pub(super) fn run(
     drop(stderr.child);
     let result = (|| {
         verify_and_resume(identity, &child, &job)?;
-        wait_bounded(&child, &job, &stdout.parent, &stderr.parent, timeout)
+        wait_bounded(
+            &child,
+            &job,
+            &stdout.parent,
+            &stderr.parent,
+            timeout,
+            cancellation,
+        )
     })();
+    // Timeout and user cancel both end here: the owned Job is terminated and observed empty.
     // Even successful exit is not publishable until the owned Job is empty.
     let cleanup = job.quiesce(child.process.raw());
     cleanup?;
@@ -450,6 +460,7 @@ fn wait_bounded(
     stdout: &Handle,
     stderr: &Handle,
     timeout: Duration,
+    cancellation: &IssueCodeValidatorCancellation,
 ) -> io::Result<Outcome> {
     let deadline = Instant::now() + timeout.min(MAX_DURATION);
     let mut message = Vec::new();
@@ -482,6 +493,9 @@ fn wait_bounded(
         }
         if Instant::now() >= deadline {
             return Ok(Outcome::NotRun(NotRun::TimedOut));
+        }
+        if cancellation.is_cancelled() {
+            return Ok(Outcome::NotRun(NotRun::Cancelled));
         }
         std::thread::sleep(Duration::from_millis(5));
     }

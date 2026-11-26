@@ -21,6 +21,8 @@ pub enum IssuePublishBlocked {
     Invalid(Vec<IssueValidationError>),
     /// 필수 코드 검증기가 거부했거나 실행되지 않았다 (#2431).
     CodeValidator(Vec<IssueCodeValidatorResult>),
+    /// 사용자가 결과 확정 전에 게시 검증을 취소했다 (#2723). 늦게 끝난 성공도 쓰지 않는다.
+    Cancelled,
 }
 
 impl fmt::Display for IssuePublishBlocked {
@@ -41,6 +43,10 @@ impl fmt::Display for IssuePublishBlocked {
                 formatter,
                 "issue publish blocked: {} required code validator(s) did not pass",
                 results.len()
+            ),
+            Self::Cancelled => write!(
+                formatter,
+                "issue publish blocked: the user cancelled the code validation"
             ),
         }
     }

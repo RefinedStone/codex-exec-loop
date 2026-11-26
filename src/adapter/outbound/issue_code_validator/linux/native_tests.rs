@@ -14,6 +14,11 @@ use std::os::unix::net::{SocketAddr, UnixListener, UnixStream};
 
 mod descendants;
 
+/// 이 시험들은 취소하지 않는다. 취소 경로는 `collect` 시험과 서비스 시험이 본다.
+fn run(request: &IssueCodeValidatorRunRequest) -> Outcome {
+    super::run(request, &IssueCodeValidatorCancellation::new())
+}
+
 fn fixture(script: &str) -> (Workspace, IssueCodeValidatorRunRequest) {
     assert!(
         program().is_some(),
@@ -160,8 +165,13 @@ fn native_profile_real_service_blocks_required_failure_and_allows_only_pass() {
             sha256: request.sha256,
             timeout_seconds: 1,
         }];
-        let result =
-            gate_issue_publish_with_code_validators(&shared, Some(&requirements), &policy, &runner);
+        let result = gate_issue_publish_with_code_validators(
+            &shared,
+            Some(&requirements),
+            &policy,
+            &runner,
+            &IssueCodeValidatorCancellation::new(),
+        );
         if outcome == Outcome::Passed {
             assert_eq!(result.unwrap().shared_copy(), &shared);
         } else {
@@ -174,7 +184,13 @@ fn native_profile_real_service_blocks_required_failure_and_allows_only_pass() {
         }
         policy.approved_code_validators[0].sha256 = "0".repeat(64);
         let Err(IssuePublishBlocked::CodeValidator(blocked)) =
-            gate_issue_publish_with_code_validators(&shared, Some(&requirements), &policy, &runner)
+            gate_issue_publish_with_code_validators(
+                &shared,
+                Some(&requirements),
+                &policy,
+                &runner,
+                &IssueCodeValidatorCancellation::new(),
+            )
         else {
             panic!("changed validator hash did not block publication");
         };

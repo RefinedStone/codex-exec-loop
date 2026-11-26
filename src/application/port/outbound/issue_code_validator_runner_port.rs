@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
 /*
@@ -31,6 +32,8 @@ pub enum IssueCodeValidatorNotRun {
     /// 이 플랫폼에서 필요한 격리를 적용할 수 없다.
     IsolationUnavailable,
     TimedOut,
+    /// 사용자가 실행을 취소했다. 실행 중이면 제한 시간과 같은 정리 경로로 프로세스 트리를 끝낸다.
+    Cancelled,
     /// 시작하지 못했거나, 신호로 끝났거나, 종료 코드가 0 과 1 이 아니다.
     Crashed,
 }
@@ -46,6 +49,76 @@ pub enum IssueCodeValidatorRunOutcome {
     NotRun(IssueCodeValidatorNotRun),
 }
 
+const VALIDATION_RUNNING: u8 = 0;
+const VALIDATION_CANCELLED: u8 = 1;
+const VALIDATION_FINISHED: u8 = 2;
+
+/// 게시 검증 한 번의 취소 상태이다. 취소와 완료 중 먼저 받은 쪽만 성립한다: 취소를 받은 뒤에 끝난 성공은 버린다.
+#[derive(Debug, Default)]
+pub struct IssueCodeValidatorCancellation {
+    state: AtomicU8,
+}
+
+impl IssueCodeValidatorCancellation {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 실행기는 이 값을 제한 시간과 함께 확인한다.
+    pub fn is_cancelled(&self) -> bool {
+        self.state.load(Ordering::Acquire) == VALIDATION_CANCELLED
+    }
+
+    /// 취소를 받으면 `true` 이다. 이미 끝난 검증은 바꾸지 않고 `false` 이다.
+    pub fn cancel(&self) -> bool {
+        match self.state.compare_exchange(
+            VALIDATION_RUNNING,
+            VALIDATION_CANCELLED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => true,
+            Err(current) => current == VALIDATION_CANCELLED,
+        }
+    }
+
+    /// 검증 결과를 확정한다. 취소를 먼저 받았으면 `false` 이고 결과는 게시에 쓰지 않는다.
+    pub fn finish(&self) -> bool {
+        self.state
+            .compare_exchange(
+                VALIDATION_RUNNING,
+                VALIDATION_FINISHED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+}
+
 pub trait IssueCodeValidatorRunnerPort: Send + Sync {
-    fn run(&self, request: IssueCodeValidatorRunRequest) -> IssueCodeValidatorRunOutcome;
+    /// `cancellation` 이 취소되면 실행하지 않거나 실행 중인 프로세스 트리를 끝내고 `Cancelled` 를 준다.
+    fn run(
+        &self,
+        request: IssueCodeValidatorRunRequest,
+        cancellation: &IssueCodeValidatorCancellation,
+    ) -> IssueCodeValidatorRunOutcome;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_first_of_cancel_and_finish_wins() {
+        let cancelled = IssueCodeValidatorCancellation::new();
+        assert!(cancelled.cancel());
+        assert!(cancelled.cancel());
+        assert!(!cancelled.finish());
+        assert!(cancelled.is_cancelled());
+
+        let finished = IssueCodeValidatorCancellation::new();
+        assert!(finished.finish());
+        assert!(!finished.cancel());
+        assert!(!finished.is_cancelled());
+    }
 }

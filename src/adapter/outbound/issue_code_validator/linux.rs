@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use sha2::{Digest, Sha256};
 
 use crate::application::port::outbound::issue_code_validator_runner_port::{
-    IssueCodeValidatorNotRun as NotRun, IssueCodeValidatorRunOutcome as Outcome,
-    IssueCodeValidatorRunRequest,
+    IssueCodeValidatorCancellation, IssueCodeValidatorNotRun as NotRun,
+    IssueCodeValidatorRunOutcome as Outcome, IssueCodeValidatorRunRequest,
 };
 
 const BWRAP: &str = "/usr/bin/bwrap";
@@ -242,7 +242,10 @@ fn mount_workspace(command: &mut Command, validator: &Path) {
         ]);
 }
 
-pub(super) fn run(request: &IssueCodeValidatorRunRequest) -> Outcome {
+pub(super) fn run(
+    request: &IssueCodeValidatorRunRequest,
+    cancellation: &IssueCodeValidatorCancellation,
+) -> Outcome {
     let Some(program) = program() else {
         return Outcome::NotRun(NotRun::IsolationUnavailable);
     };
@@ -260,10 +263,14 @@ pub(super) fn run(request: &IssueCodeValidatorRunRequest) -> Outcome {
         return Outcome::NotRun(NotRun::IsolationUnavailable);
     };
     command.stdin(input);
-    collect(&mut command, request.timeout)
+    collect(&mut command, request.timeout, cancellation)
 }
 
-fn collect(command: &mut Command, timeout: Duration) -> Outcome {
+fn collect(
+    command: &mut Command,
+    timeout: Duration,
+    cancellation: &IssueCodeValidatorCancellation,
+) -> Outcome {
     let Ok(mut child) = crate::subprocess::spawn(command) else {
         return Outcome::NotRun(NotRun::IsolationUnavailable);
     };
@@ -272,7 +279,7 @@ fn collect(command: &mut Command, timeout: Duration) -> Outcome {
         return Outcome::NotRun(NotRun::Crashed);
     };
     let mut captured = Vec::new();
-    let result = (|| -> io::Result<Option<std::process::ExitStatus>> {
+    let result = (|| -> io::Result<Result<std::process::ExitStatus, NotRun>> {
         let fd = output.as_raw_fd();
         // SAFETY: fd is owned by the live ChildStdout.
         let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
@@ -283,10 +290,13 @@ fn collect(command: &mut Command, timeout: Duration) -> Outcome {
         loop {
             drain(&mut output, &mut captured)?;
             if let Some(status) = child.try_wait()? {
-                return Ok(Some(status));
+                return Ok(Ok(status));
             }
             if Instant::now() >= deadline {
-                return Ok(None);
+                return Ok(Err(NotRun::TimedOut));
+            }
+            if cancellation.is_cancelled() {
+                return Ok(Err(NotRun::Cancelled));
             }
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -297,10 +307,10 @@ fn collect(command: &mut Command, timeout: Duration) -> Outcome {
         return Outcome::NotRun(NotRun::Crashed);
     }
     match result {
-        Ok(Some(status)) if drain(&mut output, &mut captured).is_ok() => {
+        Ok(Ok(status)) if drain(&mut output, &mut captured).is_ok() => {
             classify(status.code(), &captured)
         }
-        Ok(None) => Outcome::NotRun(NotRun::TimedOut),
+        Ok(Err(reason)) => Outcome::NotRun(reason),
         _ => Outcome::NotRun(NotRun::Crashed),
     }
 }
@@ -421,7 +431,10 @@ mod tests {
             timeout: Duration::from_secs(3),
             input_json: "{}".into(),
         };
-        assert_eq!(run(&request), Outcome::NotRun(NotRun::IsolationUnavailable));
+        assert_eq!(
+            run(&request, &IssueCodeValidatorCancellation::new()),
+            Outcome::NotRun(NotRun::IsolationUnavailable)
+        );
         assert!(!marker.exists());
     }
 
@@ -469,11 +482,29 @@ exit 1
             input_json: r#"{"title":"T"}"#.into(),
         };
         assert_eq!(
-            run(&request),
+            run(&request, &IssueCodeValidatorCancellation::new()),
             Outcome::Rejected {
                 message: "rejected by fixture".into()
             }
         );
+    }
+
+    #[test]
+    fn user_cancel_ends_the_collect_loop_through_the_contained_child_cleanup() {
+        // `collect` 의 취소와 정리만 본다. bubblewrap 격리는 native 시험이 맡는다.
+        let mut command = Command::new("/bin/sleep");
+        command.arg("30").stdout(Stdio::piped());
+        let cancellation = IssueCodeValidatorCancellation::new();
+        let started = Instant::now();
+        let outcome = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(200));
+                assert!(cancellation.cancel());
+            });
+            collect(&mut command, Duration::from_secs(30), &cancellation)
+        });
+        assert_eq!(outcome, Outcome::NotRun(NotRun::Cancelled));
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }
 
