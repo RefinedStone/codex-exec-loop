@@ -164,15 +164,25 @@ impl WorkContextService {
     }
 
     /// 확인한 지 오래된 문서의 지금 버전을 제공자에게 묻고 장부에 적는다. 처음 확인한 버전은 읽은 버전이 된다.
-    /// `links` 는 그 범위의 연결 중 확인할 것이다.
-    fn check_versions(&self, scope: &LedgerScope, links: Vec<WorkContextLink>) -> Result<()> {
+    /// `selected_resource` 가 있으면 그 문서만 확인한다.
+    fn check_versions(
+        &self,
+        scope: &LedgerScope,
+        selected_resource: Option<&ExternalResourceRef>,
+    ) -> Result<()> {
         let mut state = self
             .version_check
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let now = (self.clock)();
         let mut due = Vec::new();
-        for link in links {
+        // 기다리는 동안 다른 요청이 갱신했을 수 있으므로 잠금을 잡은 뒤 최신 연결을 읽는다.
+        for link in self.links(scope)? {
+            if selected_resource.is_some_and(|resource| {
+                link.resource.kind != resource.kind || link.resource.key != resource.key
+            }) {
+                continue;
+            }
             let Some(provider) = self.version_provider(&link.resource.kind) else {
                 continue;
             };
@@ -330,7 +340,7 @@ impl WorkContextPort for WorkContextService {
     fn refresh_thread_resources(&self, thread_id: &str) -> Result<Vec<ContextResource>> {
         let scope = LedgerScope::thread(thread_id)?;
         self.collect(&scope.id)?;
-        self.check_versions(&scope, self.links(&scope)?)?;
+        self.check_versions(&scope, None)?;
         self.resources(&scope)
     }
 
@@ -377,12 +387,7 @@ impl WorkContextPort for WorkContextService {
             std::slice::from_ref(&resource),
         )?;
         // 이은 문서만 확인한다. 범위에 오래된 문서가 많아도 새 문서가 확인 상한 밖으로 밀리지 않는다.
-        let attached = self
-            .links(&scope)?
-            .into_iter()
-            .filter(|link| link.resource.kind == resource.kind && link.resource.key == resource.key)
-            .collect();
-        self.check_versions(&scope, attached)?;
+        self.check_versions(&scope, Some(&resource))?;
         self.resources(&scope)
     }
 
@@ -399,6 +404,7 @@ mod tests {
         ThreadTextFragment, ThreadTextPage,
     };
     use crate::application::port::outbound::work_context_store_port::WorkContextLink;
+    use std::sync::mpsc;
 
     #[derive(Default)]
     struct FakeTranscript {
@@ -425,6 +431,7 @@ mod tests {
     struct FakeStore {
         links: Mutex<Vec<(String, WorkContextLink)>>,
         markers: Mutex<HashMap<String, String>>,
+        link_reads: Mutex<Option<mpsc::Sender<()>>>,
     }
 
     fn same_document(link: &WorkContextLink, resource: &ExternalResourceRef) -> bool {
@@ -467,14 +474,18 @@ mod tests {
             Ok(())
         }
         fn links(&self, _scope_kind: &str, scope_id: &str) -> Result<Vec<WorkContextLink>> {
-            Ok(self
+            let links = self
                 .links
                 .lock()
                 .unwrap()
                 .iter()
                 .filter(|(scope, _)| scope == scope_id)
                 .map(|(_, link)| link.clone())
-                .collect())
+                .collect();
+            if let Some(observer) = self.link_reads.lock().unwrap().as_ref() {
+                let _ = observer.send(());
+            }
+            Ok(links)
         }
         fn scan_marker(&self, _scope_kind: &str, scope_id: &str) -> Result<Option<String>> {
             Ok(self.markers.lock().unwrap().get(scope_id).cloned())
@@ -518,12 +529,18 @@ mod tests {
         }
     }
 
+    struct VersionCheckGate {
+        started: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+    }
+
     /// 문서 키마다 지금 버전을 답하는 가짜 GitHub 이다. 버전이 없는 키는 닿지 않는 문서이다.
     #[derive(Default)]
     struct FakeVersions {
         versions: Mutex<HashMap<String, String>>,
         asked: Mutex<Vec<String>>,
         blocked: Mutex<std::collections::HashSet<String>>,
+        first_check: Mutex<Option<VersionCheckGate>>,
     }
 
     impl FakeVersions {
@@ -545,6 +562,11 @@ mod tests {
         fn current_version(&self, resource: &ExternalResourceRef) -> Result<String> {
             let key = &resource.key;
             self.asked.lock().unwrap().push(key.to_string());
+            let first_check = self.first_check.lock().unwrap().take();
+            if let Some(gate) = first_check {
+                gate.started.send(()).unwrap();
+                gate.release.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
             self.versions
                 .lock()
                 .unwrap()
@@ -590,6 +612,68 @@ mod tests {
             .iter()
             .map(|resource| (resource.key.as_str(), resource.changed))
             .collect()
+    }
+
+    #[test]
+    fn concurrent_refresh_and_attach_reuse_the_completed_version_check() {
+        for attach_second in [false, true] {
+            let transcript = Arc::new(FakeTranscript::default());
+            transcript.pages.lock().unwrap().push(ThreadTextPage {
+                fragments: vec![fragment("user", "https://github.com/a/b/pull/2")],
+                newest_item_id: Some("item-1".into()),
+            });
+            let store = Arc::new(FakeStore::default());
+            let versions = Arc::new(FakeVersions::default());
+            versions.set("a/b#2", "v1");
+            let (started, first_started) = mpsc::channel();
+            let (release, first_release) = mpsc::channel();
+            *versions.first_check.lock().unwrap() = Some(VersionCheckGate {
+                started,
+                release: first_release,
+            });
+            let (clock, _) = test_clock("2026-11-11T00:00:00Z");
+            let service = WorkContextService::new(transcript, store.clone())
+                .with_version_providers(vec![versions.clone()])
+                .with_repository_identity(Arc::new(FakeRepositories))
+                .with_clock(clock);
+            service.thread_resources("thread-1").unwrap();
+            let (reads, observed_read) = mpsc::channel();
+            *store.link_reads.lock().unwrap() = Some(reads);
+
+            std::thread::scope(|threads| {
+                let first = threads.spawn(|| service.refresh_thread_resources("thread-1"));
+                first_started.recv_timeout(Duration::from_secs(5)).unwrap();
+                observed_read.recv_timeout(Duration::from_secs(5)).unwrap();
+                let (entered, second_entered) = mpsc::channel();
+                let service = &service;
+                let second = threads.spawn(move || {
+                    entered.send(()).unwrap();
+                    if attach_second {
+                        service.attach_scope_resource(&attach(
+                            scope("/one", ContextScope::Repository),
+                            "https://github.com/a/b/pull/2",
+                        ))
+                    } else {
+                        service.refresh_thread_resources("thread-1")
+                    }
+                });
+                second_entered.recv_timeout(Duration::from_secs(5)).unwrap();
+                // Before the fix the second request reads stale rows while the provider
+                // is held here. With serialization it cannot read until the first finishes.
+                // The deadline releases that correctly blocked request without a sleep.
+                let _ = observed_read.recv_timeout(Duration::from_secs(1));
+                release.send(()).unwrap();
+                let first = first.join().unwrap().unwrap();
+                let second = second.join().unwrap().unwrap();
+                assert_eq!(first[0].current_version.as_deref(), Some("v1"));
+                assert_eq!(second[0].confirmed_version.as_deref(), Some("v1"));
+            });
+            assert_eq!(
+                *versions.asked.lock().unwrap(),
+                ["a/b#2"],
+                "the waiting request must reuse the first check (attach={attach_second})"
+            );
+        }
     }
 
     #[test]
