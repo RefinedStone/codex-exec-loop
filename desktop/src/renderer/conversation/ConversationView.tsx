@@ -2,16 +2,16 @@
 // 도구 호출은 한 줄 요약으로 접고, 계획은 체크 목록으로, 변경은 요약 카드로 보여 준다 (R10).
 // 사용자가 맨 아래를 보고 있으면 새 내용이 올 때 맨 아래를 따라간다. 위로 올려 읽는 중이면 따라가지 않는다.
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { TurnPlanStep } from "../../shared/protocol/generated/v2/TurnPlanStep";
 import type { TurnStatus } from "../../shared/protocol/generated/v2/TurnStatus";
 import { Icon, type IconName } from "../design/icons";
 import type { TaskDraftSource } from "../kernel/TaskEditor";
-import { useConversationStore } from "../session/desktopStore";
+import { ConversationStoreContext, useConversationStore } from "../session/desktopStore";
 import { openPanel, useUiStore } from "../session/uiStore";
 import { copyText } from "./copyText";
-import { newContentTurnId } from "./newContent";
+import { newContentTurnId, restoreStep } from "./newContent";
 import { diffFileFromChange, totalCounts, turnDiffFiles, type DiffFile } from "./diff";
 import { DiffCounts, DiffFileList } from "./DiffView";
 import { findTurns, matchRanges } from "./find";
@@ -334,6 +334,10 @@ function ThreadConversation({ threadId, onLoadOlder, onDraftTask }: Conversation
   // 다시 연 스레드의 기억이다. 열 때 한 번 읽는다 (#2843).
   const remembered = useRef(threadViewMemory.get(threadId) ?? null);
   const restored = useRef(false);
+  /** 보던 턴을 찾으려고 읽은 이전 페이지 수와, 읽기를 부탁할 때의 첫 턴이다. 같은 첫 턴에서 두 번 부탁하지 않는다. */
+  const restorePages = useRef(0);
+  const restoreRequestedAt = useRef<string | null>(null);
+  const conversationStore = useContext(ConversationStoreContext);
   const position = useRef<ThreadViewMemory["position"]>(null);
   const dividerTurnId = useMemo(
     () => newContentTurnId(turns.map((turn) => turn.id), remembered.current?.lastSeenTurnId),
@@ -347,12 +351,24 @@ function ThreadConversation({ threadId, onLoadOlder, onDraftTask }: Conversation
 
   // 내용이 바뀔 때마다, 맨 아래를 보고 있었으면 맨 아래로 간다. 이전 턴을 붙였으면 보던 턴으로 돌아간다.
   useLayoutEffect(() => {
-    if (!restored.current && turns.length > 0) {
-      restored.current = true;
+    if (!restored.current && turns.length > 0 && restoreRequestedAt.current !== turns[0]?.id) {
       // 새 내용이 있으면 그 앞에서, 아니면 보던 자리에서 시작한다. 둘 다 없으면 맨 아래이다.
       const startTurn = dividerTurnId ?? remembered.current?.position?.turnId ?? null;
-      const index = startTurn ? turns.findIndex((turn) => turn.id === startTurn) : -1;
-      if (index >= 0) {
+      const step = restoreStep(turns.map((turn) => turn.id), startTurn, Boolean(transcript?.olderTurnsCursor), restorePages.current);
+      if (step.kind === "loadOlder") {
+        // 보던 턴이 아직 읽히지 않았다. 한 페이지 더 읽고, 붙은 뒤 다시 고른다. 그동안은 맨 아래를 보인다.
+        const firstTurnId = turns[0]?.id ?? null;
+        restorePages.current += 1;
+        restoreRequestedAt.current = firstTurnId;
+        const giveUpIfUnchanged = () => {
+          if (conversationStore.getState().transcript?.turns[0]?.id === firstTurnId) restored.current = true;
+        };
+        void onLoadOlder().then(giveUpIfUnchanged, giveUpIfUnchanged);
+      } else {
+        restored.current = true;
+      }
+      if (step.kind === "scroll") {
+        const index = step.index;
         followBottom.current = false;
         setAtBottom(false);
         const offset = dividerTurnId ? 0 : (remembered.current?.position?.offset ?? 0);
