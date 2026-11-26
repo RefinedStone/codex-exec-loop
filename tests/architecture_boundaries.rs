@@ -3850,6 +3850,8 @@ fn core_conversation_turn_feature_reducer_owns_one_correlated_lifecycle_slice() 
         "turn_options",
         // plan 18 K4-4: the operation of the command that submitted the current turn.
         "op_id",
+        // #2796: the turn whose approval review persistence failure this thread reports.
+        "approval_review_turn",
     ];
     let forbidden_root_fields = [
         "turn_stream_state",
