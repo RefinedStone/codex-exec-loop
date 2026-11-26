@@ -1,3 +1,5 @@
+import { TaskCriteriaEditor } from "./TaskCriteriaEditor";
+import type { TaskAcceptanceCriterion, TaskAcceptanceChannel } from "./protocol";
 import type { IssueDecisionFactRecord, IssueDecisionRequestState } from "./protocol";
 import { ISSUE_ARBITER_WAIT_TEXT, issueDecisionAnswerOrigin } from "./issueArbiter";
 import { issueDeadlineDateLabel, issueDecisionDeadline } from "./issueDecisionDeadline";
@@ -11,7 +13,7 @@ export interface IssueDecisionCardsProps {
   busy: boolean;
   drafts: ReadonlyMap<string, IssueDecisionDraft>;
   onDraftChange(key: string, draft: IssueDecisionDraft): void;
-  onAnswer(decisionId: string, option: string, note: string): Promise<void>;
+  onAnswer(decisionId: string, option: string, note: string, criteria?: TaskAcceptanceCriterion[]): Promise<void>;
 }
 
 /** 질문·선택지·권고는 현재 공개 정책을 통과한 서버 표시값만 사용한다. */
@@ -39,6 +41,10 @@ function DecisionCard({ request, busy, asOfUnixMs, state = request.state, reason
   const selected = request.options.some((value) => value.id === option);
   const noteRequired = request.kind === "agent_question" && option === "reply";
   const missingNote = noteRequired && note.trim().length === 0;
+  const adoptingCriteria = request.kind === "start_approval" && !request.basis.work_order_id && option === "start";
+  const criteria = draft.criteria ?? [];
+  const invalidCriteria = adoptingCriteria && (criteria.length === 0 || criteria.length > 64 || criteria.some((value) => !value.scenario.trim() || issueTextBytes(value.scenario) > 4_096) || criteria.reduce((total, value) => total + issueTextBytes(value.id) + issueTextBytes(value.scenario), 0) > 16_384);
+  const setCriteria = (criteria: TaskAcceptanceCriterion[]) => onDraftChange?.({ ...draft, criteria });
   return (
     <section className="issues-decision-card" data-testid="issue-decision-card" data-decision-id={request.id} data-state={state} aria-label={heading}>
       <div className="issues-decision-heading">
@@ -85,6 +91,26 @@ function DecisionCard({ request, busy, asOfUnixMs, state = request.state, reason
       </fieldset>
       {open && (
         <>
+          {adoptingCriteria && <section aria-label="이슈 완료 기준 확정" data-testid="issue-criteria-adoption">
+            <p>이슈의 완료 기준을 작업에 연결합니다. 검증 채널과 필수 여부를 확인한 뒤 시작하세요.</p>
+            {(request.criteria_scenarios ?? []).map((scenario, index) => {
+              const id = "issue-criterion-" + (index + 1);
+              const added = criteria.some((criterion) => criterion.id === id);
+              return <label className="issues-input-label" key={id}>
+                <span>{scenario}</span>
+                <select aria-label={"제안 기준 " + (index + 1) + " 검증 채널"} value="" disabled={busy || added} onChange={(event) => {
+                  const channel = event.target.value as TaskAcceptanceChannel;
+                  if (!["command", "data", "http", "screen"].includes(channel)) return;
+                  setCriteria([...criteria, { id, scenario, channel, essential: true }]);
+                }}>
+                  <option value="">{added ? "작업 기준에 추가됨" : "검증 채널을 선택하여 추가…"}</option>
+                  <option value="command">명령</option><option value="data">데이터</option><option value="http">HTTP</option><option value="screen">화면</option>
+                </select>
+              </label>;
+            })}
+            <TaskCriteriaEditor value={criteria} onChange={setCriteria} disabled={busy} idPrefix={"issue-" + request.id} />
+            {invalidCriteria && <p className="muted">작업 완료 기준을 한 개 이상 작성하고 검증 채널을 선택하세요. 각 기준은 4,096바이트 이내여야 합니다.</p>}
+          </section>}
           <label className="issues-input-label">
             {noteRequired ? "공유할 답변" : "공유할 추가 설명"} <span className="muted">{noteRequired ? "(필수)" : "(선택)"}</span>
             <textarea value={note} onChange={(event) => setNote(event.target.value)} disabled={busy} rows={2} maxLength={4_096} aria-invalid={tooLong} required={noteRequired} aria-required={noteRequired} placeholder={noteRequired ? "원래 대화를 확인한 뒤 답변을 적어 주세요." : "선택에 필요한 설명을 적어 주세요."} data-testid="issue-decision-note" />
@@ -92,7 +118,7 @@ function DecisionCard({ request, busy, asOfUnixMs, state = request.state, reason
           {tooLong && <p className="issues-inline-notice error" role="alert">추가 설명은 4,096바이트 이내로 적어 주세요.</p>}
           <div className="issues-decision-footer">
             <span>시스템 확인 창에서 한 번 더 확인합니다.</span>
-            <button type="button" className="issues-action-button primary" disabled={busy || !selected || tooLong || missingNote} onClick={() => void onAnswer(request.id, option, note)} data-testid="issue-decision-answer">{busy ? "처리 중…" : "선택 확인"}</button>
+            <button type="button" className="issues-action-button primary" disabled={busy || !selected || tooLong || missingNote || invalidCriteria} onClick={() => void onAnswer(request.id, option, note, adoptingCriteria ? criteria : undefined)} data-testid="issue-decision-answer">{busy ? "처리 중…" : "선택 확인"}</button>
           </div>
         </>
       )}

@@ -56,7 +56,7 @@ interface IssuePanelProps {
   onSync(): Promise<void>;
   onSetAutonomy(level: IssueAutonomyLevel): Promise<void>;
   onSetBindingPaused?(paused: boolean): Promise<void>;
-  onAnswerDecision(decisionId: string, option: string, note: string): Promise<void>;
+  onAnswerDecision(decisionId: string, option: string, note: string, criteria?: import("./protocol").TaskAcceptanceCriterion[]): Promise<void>;
   onIntervene(action: IssueInterventionName, message?: string, confirm?: boolean): Promise<IssueCommandOutcome>;
   onOpenConversation(): Promise<void>;
   onOpenUrl(url: string): void;

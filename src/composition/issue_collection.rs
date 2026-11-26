@@ -546,13 +546,14 @@ fn build_execution_with_admission(
         Arc::new(crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new()),
     )
     .with_delivery_evidence(delivery_evidence)
-    .with_issue_binding_admission(admission, store);
+    .with_issue_binding_admission(admission, store.clone());
     Arc::new(
         crate::composition::issue_work_execution::AkraIssueWorkExecutionAdapter::new(
             authority.clone(),
             authority,
             parallel,
-        ),
+        )
+        .with_criteria_store(store),
     )
 }
 

@@ -136,6 +136,14 @@ impl IssueState {
                     .filter(|stored| stored.request.state() == IssueDecisionState::Open)
                     .map(|stored| {
                         let mut request = IssueDecisionRequestState::from(stored);
+                        if request.kind == crate::domain::issue_automation::decision::IssueDecisionKind::StartApproval
+                            && stored.request.definition().basis.work_order_id.is_none()
+                            && let Some(crate::domain::issue_automation::source::IssueSourceRead::Observed(observed)) = &item.current
+                            && let crate::domain::issue_automation::source::IssueSourceContent::Shared(snapshot) = &observed.content
+                            && stored.request.definition().basis.field_hash.as_ref() == Some(&snapshot.basis.field_hash)
+                        {
+                            request.criteria_scenarios = crate::domain::issue_automation::triage::issue_acceptance_criteria(&snapshot.shared_copy.body).ok();
+                        }
                         if stored.request.definition().on_timeout == IssueDecisionTimeout::Arbiter {
                             request.arbiter_wait = detail
                                 .arbiter_waits

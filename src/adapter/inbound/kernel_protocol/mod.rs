@@ -1025,6 +1025,8 @@ pub enum KernelCommand {
     },
     /// 현재 기준과 맞는 열린 결정에 에이전트 답 하나를 저장한다. 사람 확인 증명을 받지 않는다.
     AnswerIssueDecision {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        criteria: Option<Vec<crate::domain::issue_automation::criteria::IssueWorkCriterion>>,
         #[schemars(length(min = 1, max = 128), regex(pattern = NON_BLANK))]
         decision_id: String,
         #[schemars(length(min = 1, max = 128), regex(pattern = NON_BLANK))]
@@ -1492,10 +1494,12 @@ impl KernelCommand {
                 Self::SetIssueAutomationMode { mode: mode.into() }
             }
             StoredCommand::AnswerIssueDecision {
+                criteria,
                 decision_id,
                 option,
                 note,
             } => Self::AnswerIssueDecision {
+                criteria,
                 decision_id,
                 option,
                 note,
@@ -1697,12 +1701,15 @@ impl KernelCommand {
                 return Ok(KernelCommandInput::RetryDelegation { id });
             }
             Self::AnswerIssueDecision {
+                criteria,
                 decision_id,
                 option,
                 note,
             } => {
                 issue_decision::validate_answer_input(&decision_id, &option, note.as_deref())?;
+                issue_decision::validate_criteria_input(criteria.as_deref())?;
                 StoredCommand::AnswerIssueDecision {
+                    criteria,
                     decision_id,
                     option,
                     note,

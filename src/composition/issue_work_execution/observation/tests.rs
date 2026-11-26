@@ -45,6 +45,7 @@ fn tasks(values: Vec<TaskDefinition>) -> TaskAuthorityDocument {
 
 fn order(ids: &[&str]) -> PlanningWorkOrderRecord {
     PlanningWorkOrderRecord {
+        acceptance_receipt: None,
         link_reference: None,
         work_order_id: "issue-work-1".into(),
         origin: "issue_automation".into(),

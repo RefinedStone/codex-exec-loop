@@ -1246,3 +1246,5 @@ mod gated;
 
 mod binding_pause;
 mod jira;
+
+mod criteria_adoption;

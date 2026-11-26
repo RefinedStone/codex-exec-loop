@@ -101,6 +101,7 @@ pub(super) fn answer_through_kernel(
     option: &str,
 ) -> Result<TelegramIssueAnswerOutcome> {
     let command = KernelCommand::AnswerIssueDecision {
+        criteria: None,
         decision_id: decision_id.to_string(),
         option: option.to_string(),
         note: None,

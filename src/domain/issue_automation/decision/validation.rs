@@ -187,6 +187,21 @@ pub(super) fn answer(
         (IssueDecisionAnswerBy::Arbiter, None) if valid_arbiter_answer(value, definition) => {}
         _ => return Err(IssueDecisionError::UnsupportedAnswerOrigin),
     }
+    if let Some(criteria) = &value.criteria
+        && (value.by != IssueDecisionAnswerBy::Human
+            || definition.kind != IssueDecisionKind::StartApproval
+            || definition.gate != IssueAutomationGate::Start
+            || definition.basis.field_hash.is_none()
+            || definition.basis.work_order_id.is_some()
+            || definition.basis.delivery.is_some()
+            || value.option != "start"
+            || !super::super::criteria::normalize_issue_work_criteria(criteria)
+                .is_ok_and(|normalized| normalized == *criteria))
+    {
+        return Err(IssueDecisionError::InvalidField {
+            field: "answer.criteria",
+        });
+    }
     if let Some(note) = &value.note {
         shared_text(note.as_str(), "answer.note", MAX_ISSUE_DECISION_NOTE_BYTES)?;
     }

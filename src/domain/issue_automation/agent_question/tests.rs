@@ -56,6 +56,7 @@ fn definition(evidence: Vec<String>) -> IssueDecisionDefinition {
 
 fn answer(option: &str, note: Option<&str>) -> IssueDecisionAnswer {
     IssueDecisionAnswer {
+        criteria: None,
         option: option.into(),
         note: note.map(shared),
         by: IssueDecisionAnswerBy::Human,

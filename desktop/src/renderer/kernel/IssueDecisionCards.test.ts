@@ -6,6 +6,22 @@ import { decisionDraftIdentity } from "./issueInteractions";
 import { arbiterFact, arbiterRequest } from "../../../test/fixtures/issueArbiter";
 
 describe("arbiter decision cards", () => {
+  it("requires user-selected task criteria before confirming an original issue start", () => {
+    const request = { ...arbiterRequest(), kind: "start_approval" as const, gate: "start" as const,
+      basis: { ...arbiterRequest().basis, work_order_id: null }, criteria_scenarios: ["원래 이슈의 완료 기준"],
+      options: [{ id: "start", label: "시작", effect: "작업 생성" }] };
+    const render = (criteria: import("./protocol").TaskAcceptanceCriterion[]) => renderToStaticMarkup(createElement(IssueDecisionCards, {
+      decisions: [request], history: [], busy: false, onAnswer: vi.fn(), onDraftChange: vi.fn(),
+      drafts: new Map([[decisionDraftIdentity(request), { option: "start", note: "", criteria }]]),
+    }));
+    const empty = render([]);
+    expect(empty).toContain("원래 이슈의 완료 기준");
+    expect(empty).toContain("검증 채널을 선택하여 추가");
+    expect(empty.match(/<button[^>]*data-testid="issue-decision-answer"[^>]*>/)?.[0]).toContain("disabled");
+    const selected = render([{ id: "issue-criterion-1", scenario: "원래 이슈의 완료 기준", channel: "data", essential: true }]);
+    expect(selected.match(/<button[^>]*data-testid="issue-decision-answer"[^>]*>/)?.[0]).not.toContain("disabled");
+    expect(selected).toContain("작업 기준에 추가됨");
+  });
   it("keeps a selected answer and note enabled in a human Wait card", () => {
     const request = { ...arbiterRequest(), arbiter_wait: { reason: "low_confidence" as const } };
     const answer = vi.fn(async () => {});

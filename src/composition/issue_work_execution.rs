@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 mod answer;
 mod conversation;
+mod criteria;
 mod delivery_authority;
 mod observation;
 mod recovery;
@@ -30,6 +31,7 @@ pub(crate) struct AkraIssueWorkExecutionAdapter {
     authority: Arc<dyn PlanningAuthorityPort>,
     work_orders: PlanningWorkOrderService,
     parallel: ParallelModeService,
+    criteria_store: Option<Arc<dyn crate::application::port::outbound::issue_automation_store_port::IssueAutomationStorePort>>,
 }
 
 impl AkraIssueWorkExecutionAdapter {
@@ -44,7 +46,16 @@ impl AkraIssueWorkExecutionAdapter {
             authority,
             work_orders: PlanningWorkOrderService::new(orders, PriorityQueueService::new()),
             parallel,
+            criteria_store: None,
         }
+    }
+
+    pub(crate) fn with_criteria_store(
+        mut self,
+        store: Arc<dyn crate::application::port::outbound::issue_automation_store_port::IssueAutomationStorePort>,
+    ) -> Self {
+        self.criteria_store = Some(store);
+        self
     }
 }
 
@@ -247,27 +258,32 @@ Work order: {}",
                 .unwrap_or(&order.issue.issue_id),
             order.work_order_id
         );
-        let admission = self
-            .work_orders
-            .register_work_order(PlanningWorkOrderRequest {
-                workspace_directory: workspace.into(),
-                work_order_id: order.work_order_id.clone(),
-                origin: "issue_automation".into(),
-                link_reference,
-                input: PlanningTaskCreateInput {
-                    acceptance: None,
-                    direction_id: None,
-                    direction_relation_note: Some("사용자가 이슈 작업 시작을 승인했습니다.".into()),
-                    title: order.title.clone(),
-                    description: Some(description),
-                    status: None,
-                    base_priority: Some(order.priority),
-                    dynamic_priority_delta: None,
-                    priority_reason: Some("issue start approval".into()),
-                    depends_on: Vec::new(),
-                    blocked_by: Vec::new(),
-                },
-            })?;
+        let acceptance = criteria::verified(self, workspace, order)?;
+        let request = PlanningWorkOrderRequest {
+            workspace_directory: workspace.into(),
+            work_order_id: order.work_order_id.clone(),
+            origin: "issue_automation".into(),
+            link_reference,
+            input: PlanningTaskCreateInput {
+                acceptance: None,
+                direction_id: None,
+                direction_relation_note: Some("사용자가 이슈 작업 시작을 승인했습니다.".into()),
+                title: order.title.clone(),
+                description: Some(description),
+                status: None,
+                base_priority: Some(order.priority),
+                dynamic_priority_delta: None,
+                priority_reason: Some("issue start approval".into()),
+                depends_on: Vec::new(),
+                blocked_by: Vec::new(),
+            },
+        };
+        let admission = match acceptance {
+            Some(acceptance) => self
+                .work_orders
+                .register_work_order_with_acceptance(request, acceptance)?,
+            None => self.work_orders.register_work_order(request)?,
+        };
         Ok(admission.work_order.task_ids)
     }
 

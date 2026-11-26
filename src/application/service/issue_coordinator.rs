@@ -1356,10 +1356,31 @@ impl IssueCoordinatorService {
         }
         let acceptance = issue_acceptance_criteria(&snapshot.shared_copy.body)
             .map_err(|reason| anyhow!(reason))?;
+        let criteria_adoption = match authorization {
+            StartAuthorization::Human(decision)
+                if decision
+                    .answer()
+                    .is_some_and(|answer| answer.criteria.is_some()) =>
+            {
+                let stored = self
+                    .store
+                    .get_issue_decision_commit(&self.workspace, decision.id())?
+                    .ok_or_else(|| anyhow!("the confirmed criteria decision is unavailable"))?;
+                if stored.record.request != *decision {
+                    bail!("the criteria decision changed before work admission");
+                }
+                crate::domain::issue_automation::criteria::IssueWorkCriteriaAdoption::from_stored(
+                    &stored.record,
+                )
+                .map_err(anyhow::Error::msg)?
+            }
+            _ => None,
+        };
         Ok(IssueWorkCheckpoint {
             authorization: None,
             permit_authorization_epoch: 0,
             order: IssueWorkOrder {
+                criteria_adoption,
                 work_order_id: issue_work_order_id(&item.issue),
                 issue: item.issue.clone(),
                 field_hash: snapshot.basis.field_hash.clone(),

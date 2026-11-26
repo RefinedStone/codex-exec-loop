@@ -294,6 +294,7 @@ fn register_delivery_work_order_with_origin_and_link(
         .register_work_order(
             &workspace,
             PlanningWorkOrderRegistration {
+                acceptance_receipt: None,
                 link_reference: reference,
                 work_order_id: &work_order_id,
                 origin,

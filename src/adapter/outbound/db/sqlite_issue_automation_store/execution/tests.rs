@@ -30,6 +30,7 @@ fn seed_with_tasks(fixture: &Fixture, task_ids: Vec<String>) -> IssueWorkCheckpo
         authorization: None,
         permit_authorization_epoch: 0,
         order: IssueWorkOrder {
+            criteria_adoption: None,
             work_order_id: issue_work_order_id(&issue),
             issue: issue.clone(),
             field_hash: field_hash.clone(),

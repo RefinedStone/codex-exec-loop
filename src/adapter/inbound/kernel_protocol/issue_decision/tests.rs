@@ -72,6 +72,7 @@ fn answer() -> IssueDecisionAgentAnswer {
 
 fn answer_wire(note: Option<&str>) -> KernelCommand {
     KernelCommand::AnswerIssueDecision {
+        criteria: None,
         decision_id: "decision-1".to_owned(),
         option: "continue".to_owned(),
         note: note.map(ToOwned::to_owned),
@@ -107,7 +108,7 @@ fn answer_wire_accepts_only_option_note_and_id_and_maps_to_storage() {
     let command = answer_wire(Some("shared after service policy"));
     assert!(!command.confirmed());
     assert!(matches!(command.into_input("/workspace").unwrap(),
-        KernelCommandInput::Stored(StoredCommand::AnswerIssueDecision { decision_id, option, note })
+        KernelCommandInput::Stored(StoredCommand::AnswerIssueDecision { decision_id, option, note, criteria: None })
         if decision_id == "decision-1" && option == "continue" && note.is_some()));
     for field in [
         "by",
@@ -155,6 +156,7 @@ fn invalid_answer_inputs_are_bounded_without_echoing_the_original() {
         ),
     ] {
         let error = KernelCommand::AnswerIssueDecision {
+            criteria: None,
             decision_id: id,
             option,
             note,
@@ -517,6 +519,7 @@ fn delivery_review_projects_the_frozen_decision_and_preserves_legacy_json() {
 fn native_confirmation_target_roundtrip_keeps_delivery_basis_and_exact_commit_ids() {
     use crate::application::port::inbound::stored_command_port::issue_confirmation::IssueConfirmationTarget;
     let target = IssueConfirmationTarget::Decision {
+        criteria_digest: None,
         workspace: "/workspace".to_owned(),
         decision_id: IssueDecisionId::new("delivery-1").unwrap(),
         option: "continue".to_owned(),

@@ -316,8 +316,8 @@ export class DesktopSession {
     return this.kernel.setIssueAutonomy(level);
   }
 
-  answerIssueDecision(decisionId: string, option: string, note: string): Promise<void> {
-    return this.kernel.answerIssueDecision(decisionId, option, note);
+  answerIssueDecision(decisionId: string, option: string, note: string, criteria?: import("../kernel/protocol").TaskAcceptanceCriterion[]): Promise<void> {
+    return this.kernel.answerIssueDecision(decisionId, option, note, criteria);
   }
 
   interveneIssue(action: IssueInterventionName, message?: string, confirm = false): Promise<IssueCommandOutcome> {

@@ -33,6 +33,7 @@ fn register_auto_work(base: &Fixture) {
             .register_work_order(
                 workspace,
                 PlanningWorkOrderRegistration {
+                    acceptance_receipt: None,
                     work_order_id: "auto-order",
                     origin: "issue_automation",
                     link_reference: None,

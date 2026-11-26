@@ -261,6 +261,8 @@ pub enum IssueDecisionAnswerBy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IssueDecisionAnswer {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub criteria: Option<Vec<super::criteria::IssueWorkCriterion>>,
     pub option: String,
     pub note: Option<IssueDecisionSharedText>,
     pub by: IssueDecisionAnswerBy,
@@ -484,6 +486,23 @@ impl IssueDecisionRequest {
         input: IssueDecisionAgentAnswer,
         confirmation_reference: Option<&str>,
     ) -> Result<IssueDecisionResolution, IssueDecisionError> {
+        self.answer_for_gate_with_criteria(
+            current_basis,
+            gate_action,
+            input,
+            confirmation_reference,
+            None,
+        )
+    }
+
+    pub(crate) fn answer_for_gate_with_criteria(
+        &self,
+        current_basis: &IssueDecisionBasis,
+        gate_action: IssueAutomationGateAction,
+        input: IssueDecisionAgentAnswer,
+        confirmation_reference: Option<&str>,
+        criteria: Option<Vec<super::criteria::IssueWorkCriterion>>,
+    ) -> Result<IssueDecisionResolution, IssueDecisionError> {
         if self.state() != IssueDecisionState::Open {
             return Ok(IssueDecisionResolution {
                 request: self.clone(),
@@ -493,6 +512,7 @@ impl IssueDecisionRequest {
         }
         current_basis.validate()?;
         let mut answer = IssueDecisionAnswer {
+            criteria: None,
             option: input.option,
             note: input.note,
             by: IssueDecisionAnswerBy::Agent,
@@ -521,6 +541,7 @@ impl IssueDecisionRequest {
             {
                 return Err(IssueDecisionError::HumanConfirmationRequired);
             }
+            answer.criteria = criteria;
             validation::answer(&answer, self.definition())?;
             record.state = IssueDecisionState::Answered;
             record.answer = Some(answer);

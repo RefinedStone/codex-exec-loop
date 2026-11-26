@@ -1,4 +1,4 @@
-import type { CommandRequest, CommandResponse } from "../shared/kernel-protocol/generated";
+import type { CommandRequest, CommandResponse, TaskAcceptanceCriterion } from "../shared/kernel-protocol/generated";
 import type { IssueConfirmationResponse } from "../shared/issueConfirmation";
 import { isRecord, type ConfirmationRpc } from "./connection";
 import type { ConfirmationHelper } from "./transport";
@@ -134,16 +134,36 @@ function commandResponse(value: unknown): CommandResponse {
 }
 
 function decisionRequest(value: unknown): { workspace: string; command: CommandRequest } {
-  if (!isRecord(value) || !onlyFields(value, ["workspace", "decisionId", "option", "note", "key"]) ||
+  if (!isRecord(value) || !onlyFields(value, ["workspace", "decisionId", "option", "note", "criteria", "key"]) ||
     !workspace(value.workspace) || !token(value.decisionId, 128) || !token(value.option, 128) || !token(value.key, 128) ||
     (value.note !== undefined && value.note !== null && !boundedText(value.note, 4_096, true))) throw failure();
+  const criteria = value.criteria == null ? undefined : decisionCriteria(value.criteria);
   return {
     workspace: value.workspace,
     command: {
-      command: { type: "answer_issue_decision", decision_id: value.decisionId, option: value.option, ...(value.note != null ? { note: value.note } : {}) },
+      command: { type: "answer_issue_decision", decision_id: value.decisionId, option: value.option, ...(value.note != null ? { note: value.note } : {}), ...(criteria ? { criteria } : {}) },
       idempotency_key: value.key,
     },
   };
+}
+
+function decisionCriteria(value: unknown): TaskAcceptanceCriterion[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 64) throw failure();
+  const ids = new Set<string>();
+  let totalBytes = 0;
+  return value.map((criterion: unknown) => {
+    if (!isRecord(criterion) || !onlyFields(criterion, ["id", "scenario", "channel", "essential", "verification_recipe"]) ||
+      !boundedText(criterion.id, 128, false) || !boundedText(criterion.scenario, 4_096, false) ||
+      !["command", "data", "http", "screen"].includes(criterion.channel as string) || typeof criterion.essential !== "boolean" ||
+      (criterion.verification_recipe != null && (criterion.verification_recipe !== "git_diff_check_v1" || criterion.channel !== "command"))) throw failure();
+    const id = (criterion.id as string).trim();
+    const scenario = (criterion.scenario as string).trim();
+    totalBytes += new TextEncoder().encode(id + scenario).length;
+    if (ids.has(id) || totalBytes > 16_384) throw failure();
+    ids.add(id);
+    return { id, scenario, channel: criterion.channel as TaskAcceptanceCriterion["channel"], essential: criterion.essential,
+      ...(criterion.verification_recipe != null ? { verification_recipe: "git_diff_check_v1" as const } : {}) };
+  });
 }
 
 function modeRequest(value: unknown): { workspace: string; command: CommandRequest } {

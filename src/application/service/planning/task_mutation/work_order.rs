@@ -1,4 +1,6 @@
+pub(crate) mod acceptance;
 mod supplemental;
+use acceptance::VerifiedWorkOrderAcceptance;
 use std::sync::Arc;
 pub use supplemental::PlanningSupplementalWorkRequest;
 
@@ -71,12 +73,33 @@ impl PlanningWorkOrderService {
         self.register_work_order_at(request, Utc::now())
     }
 
+    pub(crate) fn register_work_order_with_acceptance(
+        &self,
+        request: PlanningWorkOrderRequest,
+        acceptance: VerifiedWorkOrderAcceptance,
+    ) -> Result<PlanningWorkOrderAdmission> {
+        acceptance.require_target(&request)?;
+        self.register_with_acceptance_at(request, Some(acceptance), Utc::now())
+    }
+
     fn register_work_order_at(
         &self,
         request: PlanningWorkOrderRequest,
         generated_at: DateTime<Utc>,
     ) -> Result<PlanningWorkOrderAdmission> {
+        self.register_with_acceptance_at(request, None, generated_at)
+    }
+
+    fn register_with_acceptance_at(
+        &self,
+        request: PlanningWorkOrderRequest,
+        acceptance: Option<VerifiedWorkOrderAcceptance>,
+        generated_at: DateTime<Utc>,
+    ) -> Result<PlanningWorkOrderAdmission> {
         super::acceptance::create_fields(&request.input, PlanningTaskMutationSource::System)?;
+        let receipt = acceptance
+            .as_ref()
+            .map(|value| value.receipt_digest.as_str());
         validate_work_order_identity(&request.work_order_id, &request.origin)?;
         if let Some(reference) = &request.link_reference {
             reference.validate()?;
@@ -89,7 +112,7 @@ impl PlanningWorkOrderService {
         loop {
             // Do this before loading authority or validating task input. A replay must survive
             // provenance edits, receipt pruning, and deliberate removal of the original task.
-            if let Some(existing) = self.existing_admission(&request)? {
+            if let Some(existing) = self.existing_admission(&request, receipt)? {
                 return Ok(existing);
             }
 
@@ -100,13 +123,13 @@ impl PlanningWorkOrderService {
                 Ok(context) => context,
                 Err(error) => {
                     // Another writer may have registered and then reset authority after our read.
-                    if let Some(existing) = self.existing_admission(&request)? {
+                    if let Some(existing) = self.existing_admission(&request, receipt)? {
                         return Ok(existing);
                     }
                     return Err(error);
                 }
             };
-            let task = self.task_mutation.build_task(
+            let mut task = self.task_mutation.build_task(
                 &request.input,
                 TaskMutationAuditContext {
                     source: PlanningTaskMutationSource::System,
@@ -117,6 +140,10 @@ impl PlanningWorkOrderService {
                 generated_at,
                 collision_suffix,
             )?;
+            if let Some(acceptance) = &acceptance {
+                task.acceptance = acceptance.criteria.clone();
+                task.acceptance_revision = 1;
+            }
             let task_id = task.id.clone();
             if task_id_exists(&context.task_authority, &task_id) {
                 collisions += 1;
@@ -139,6 +166,7 @@ impl PlanningWorkOrderService {
             let result = self.repository.register_work_order(
                 &request.workspace_directory,
                 PlanningWorkOrderRegistration {
+                    acceptance_receipt: receipt,
                     work_order_id: &request.work_order_id,
                     origin: &request.origin,
                     link_reference: request.link_reference.as_ref(),
@@ -155,10 +183,10 @@ impl PlanningWorkOrderService {
             )?;
             match result {
                 PlanningWorkOrderRegistrationResult::Registered { work_order, .. } => {
-                    return admission(&request, work_order, true);
+                    return admission(&request, work_order, true, receipt);
                 }
                 PlanningWorkOrderRegistrationResult::Existing { work_order } => {
-                    return admission(&request, work_order, false);
+                    return admission(&request, work_order, false, receipt);
                 }
                 PlanningWorkOrderRegistrationResult::RevisionConflict { .. } => {
                     revision_conflicts += 1;
@@ -188,6 +216,7 @@ impl PlanningWorkOrderService {
     fn existing_admission(
         &self,
         request: &PlanningWorkOrderRequest,
+        receipt: Option<&str>,
     ) -> Result<Option<PlanningWorkOrderAdmission>> {
         self.repository
             .replay_work_order(
@@ -195,8 +224,9 @@ impl PlanningWorkOrderService {
                 &request.work_order_id,
                 &request.origin,
                 request.link_reference.as_ref(),
+                receipt,
             )?
-            .map(|work_order| admission(request, work_order, false))
+            .map(|work_order| admission(request, work_order, false, receipt))
             .transpose()
     }
 
@@ -244,8 +274,12 @@ fn admission(
     request: &PlanningWorkOrderRequest,
     work_order: PlanningWorkOrderRecord,
     created: bool,
+    receipt: Option<&str>,
 ) -> Result<PlanningWorkOrderAdmission> {
     work_order.validate()?;
+    if work_order.acceptance_receipt.as_deref() != receipt {
+        bail!("work order was admitted with a different acceptance approval");
+    }
     if work_order.work_order_id != request.work_order_id {
         bail!("work order repository returned a different work order identity");
     }

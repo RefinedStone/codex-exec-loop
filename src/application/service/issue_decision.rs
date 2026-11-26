@@ -30,6 +30,7 @@ use super::issue_triage::IssueTriageService;
 const DECISION_CAS_ATTEMPTS: usize = 3;
 
 mod ask;
+mod criteria;
 mod deadlines;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +71,15 @@ impl IssueDecisionService {
 
     /// 한 장부 snapshot의 요청과 판을 준비한다. 새 요청이나 확인 증거를 만들지 않는다.
     pub fn prepare_confirmation(&self, id: &str, option: &str) -> Result<IssueConfirmationPreview> {
+        self.prepare_confirmation_with_criteria(id, option, None)
+    }
+
+    pub fn prepare_confirmation_with_criteria(
+        &self,
+        id: &str,
+        option: &str,
+        criteria: Option<&[crate::domain::issue_automation::criteria::IssueWorkCriterion]>,
+    ) -> Result<IssueConfirmationPreview> {
         let id =
             IssueDecisionId::new(id).map_err(|_| anyhow!("the decision identifier is invalid"))?;
         reject_secret_identifier(id.as_str())?;
@@ -93,6 +103,7 @@ impl IssueDecisionService {
             .policy
             .resolve(&self.workspace_dir)
             .map_err(|_| policy_unavailable())?;
+        let criteria = criteria::confirmed_criteria(request, option, criteria, &policy)?;
         let question = shared_text(request.definition().question.as_str(), &policy)?;
         let label = shared_text(selected.label.as_str(), &policy)?;
         let effect = shared_text(selected.effect.as_str(), &policy)?;
@@ -101,8 +112,16 @@ impl IssueDecisionService {
             detail.push_str("\n\n");
             detail.push_str(&review);
         }
+        if let Some(criteria) = &criteria {
+            detail.push_str(&criteria::confirmation_detail(criteria));
+        }
         Ok(IssueConfirmationPreview {
-            target: confirmation_target(&self.workspace_dir, &snapshot.record, option),
+            target: confirmation_target(
+                &self.workspace_dir,
+                &snapshot.record,
+                option,
+                criteria.as_deref(),
+            ),
             display: IssueConfirmationDisplay {
                 message: question.as_str().to_owned(),
                 detail,
@@ -195,6 +214,17 @@ impl IssueDecisionService {
         note: Option<&str>,
         context: &StoredCommandContext,
     ) -> Result<IssueDecisionAnswerResult> {
+        self.answer_with_criteria(decision_id, option, note, None, context)
+    }
+
+    pub fn answer_with_criteria(
+        &self,
+        decision_id: &str,
+        option: &str,
+        note: Option<&str>,
+        criteria: Option<&[crate::domain::issue_automation::criteria::IssueWorkCriterion]>,
+        context: &StoredCommandContext,
+    ) -> Result<IssueDecisionAnswerResult> {
         let id = IssueDecisionId::new(decision_id)
             .map_err(|_| anyhow!("the decision identifier is invalid"))?;
         reject_secret_identifier(id.as_str())?;
@@ -267,12 +297,22 @@ impl IssueDecisionService {
                 }
                 continue;
             }
+            let policy = self
+                .policy
+                .resolve(&self.workspace_dir)
+                .map_err(|_| policy_unavailable())?;
+            let criteria =
+                criteria::confirmed_criteria(&stored.request, option, criteria, &policy)?;
             let confirmation = context.human_confirmation.as_ref();
+            if criteria.is_some() && confirmation.is_none() {
+                return Err(IssueConfirmationError::Required.into());
+            }
             if let Some(confirmation) = confirmation {
                 confirmation.require_target(&confirmation_target(
                     &self.workspace_dir,
                     &stored,
                     option,
+                    criteria.as_deref(),
                 ))?;
             }
             let mut gate_action = current
@@ -281,10 +321,6 @@ impl IssueDecisionService {
                 .find(|gate| gate.gate == stored.request.definition().gate)
                 .ok_or_else(|| anyhow!("the current decision gate is unavailable"))?
                 .action;
-            let policy = self
-                .policy
-                .resolve(&self.workspace_dir)
-                .map_err(|_| policy_unavailable())?;
             let is_worker_question = stored.request.definition().basis.work_order_id.is_some()
                 && stored.request.definition().kind
                     == crate::domain::issue_automation::decision::IssueDecisionKind::AgentQuestion;
@@ -318,7 +354,7 @@ impl IssueDecisionService {
                 .transpose()?;
             let resolution = stored
                 .request
-                .answer_for_gate(
+                .answer_for_gate_with_criteria(
                     &basis,
                     gate_action,
                     IssueDecisionAgentAnswer {
@@ -329,6 +365,7 @@ impl IssueDecisionService {
                         at: context.at.clone(),
                     },
                     confirmation.map(|value| value.reference()),
+                    criteria,
                 )
                 .map_err(|error| match error {
                     IssueDecisionError::HumanConfirmationRequired => {
@@ -504,6 +541,7 @@ fn confirmation_target(
     workspace: &str,
     stored: &StoredIssueDecision,
     option: &str,
+    criteria: Option<&[crate::domain::issue_automation::criteria::IssueWorkCriterion]>,
 ) -> IssueConfirmationTarget {
     IssueConfirmationTarget::Decision {
         workspace: workspace.to_owned(),
@@ -511,6 +549,8 @@ fn confirmation_target(
         option: option.to_owned(),
         basis: stored.request.definition().basis.clone(),
         decision_revision: stored.revision,
+        criteria_digest: criteria
+            .map(crate::domain::issue_automation::criteria::issue_work_criteria_digest),
     }
 }
 

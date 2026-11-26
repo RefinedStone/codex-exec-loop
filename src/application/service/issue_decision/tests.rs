@@ -652,6 +652,7 @@ fn human_confirmation_preview_uses_one_stored_request_without_changing_it() {
         basis,
         decision_revision,
         workspace,
+        ..
     } = preview.target
     else {
         panic!("decision target");
@@ -775,6 +776,7 @@ fn verified_confirmation_cannot_move_to_another_choice_request_workspace_or_revi
             option,
             basis,
             decision_revision,
+            ..
         } = &mut altered
         {
             match coordinate {

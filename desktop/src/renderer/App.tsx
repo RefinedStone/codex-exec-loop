@@ -849,7 +849,7 @@ export function App() {
                   onSync={async () => session.current?.syncIssues()}
                   onSetAutonomy={async (level) => session.current?.setIssueAutonomy(level)}
                   onSetBindingPaused={async (paused) => session.current?.setIssueBindingPaused(paused)}
-                  onAnswerDecision={async (decisionId, option, note) => session.current?.answerIssueDecision(decisionId, option, note)}
+                  onAnswerDecision={async (decisionId, option, note, criteria) => session.current?.answerIssueDecision(decisionId, option, note, criteria)}
                   onIntervene={async (action, message, confirm) => session.current?.interveneIssue(action, message, confirm) ?? "unavailable"}
                   onOpenConversation={openIssueConversation}
                   onOpenUrl={(url) => {

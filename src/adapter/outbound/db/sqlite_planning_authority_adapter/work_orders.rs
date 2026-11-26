@@ -37,6 +37,7 @@ pub(super) use permits::{check_work_order_permit_in_transaction, load_basis as l
 pub(super) fn ensure_work_order_tables(connection: &Connection) -> Result<()> {
     if table_exists(connection, "planning_work_orders")?
         && table_exists(connection, "planning_work_order_tasks")?
+        && table_exists(connection, "planning_work_order_acceptance_receipts")?
         && table_exists(connection, "planning_work_order_links")?
         && table_exists(connection, "planning_work_order_permit_basis")?
         && table_exists(connection, "planning_work_order_permit_revocations")?
@@ -57,6 +58,11 @@ pub(super) fn ensure_work_order_tables(connection: &Connection) -> Result<()> {
                 work_order_id TEXT PRIMARY KEY NOT NULL,
                 origin TEXT NOT NULL,
                 permits_json TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS planning_work_order_acceptance_receipts (
+                work_order_id TEXT PRIMARY KEY NOT NULL,
+                receipt_digest TEXT NOT NULL,
+                FOREIGN KEY (work_order_id) REFERENCES planning_work_orders(work_order_id)
             );
             CREATE TABLE IF NOT EXISTS planning_work_order_links (
                 work_order_id TEXT PRIMARY KEY NOT NULL,
@@ -219,6 +225,7 @@ impl PlanningWorkOrderRepositoryPort for SqlitePlanningAuthorityAdapter {
         work_order_id: &str,
         origin: &str,
         link_reference: Option<&PlanningWorkLinkReference>,
+        acceptance_receipt: Option<&str>,
     ) -> Result<Option<PlanningWorkOrderRecord>> {
         validate_work_order_identity(work_order_id, origin)?;
         if let Some(reference) = link_reference {
@@ -230,8 +237,13 @@ impl PlanningWorkOrderRepositoryPort for SqlitePlanningAuthorityAdapter {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("failed to open work-order replay transaction")?;
-        let work_order =
-            replay_existing_work_order(&transaction, work_order_id, origin, link_reference)?;
+        let work_order = replay_existing_work_order(
+            &transaction,
+            work_order_id,
+            origin,
+            link_reference,
+            acceptance_receipt,
+        )?;
         transaction
             .commit()
             .context("failed to commit work-order replay")?;
@@ -279,6 +291,14 @@ impl PlanningWorkOrderRepositoryPort for SqlitePlanningAuthorityAdapter {
         registration: PlanningWorkOrderRegistration<'_>,
     ) -> Result<PlanningWorkOrderRegistrationResult> {
         validate_work_order_identity(registration.work_order_id, registration.origin)?;
+        if registration.acceptance_receipt.is_some_and(|value| {
+            value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        }) {
+            bail!("invalid work-order acceptance receipt");
+        }
         if let Some(reference) = registration.link_reference {
             reference.validate()?;
         }
@@ -296,6 +316,7 @@ impl PlanningWorkOrderRepositoryPort for SqlitePlanningAuthorityAdapter {
             registration.work_order_id,
             registration.origin,
             registration.link_reference,
+            registration.acceptance_receipt,
         )? {
             transaction
                 .commit()
@@ -368,6 +389,12 @@ impl PlanningWorkOrderRepositoryPort for SqlitePlanningAuthorityAdapter {
                 params![registration.work_order_id, registration.origin],
             )
             .context("failed to register planning work order")?;
+        if let Some(receipt) = registration.acceptance_receipt {
+            transaction.execute(
+                "INSERT INTO planning_work_order_acceptance_receipts (work_order_id, receipt_digest) VALUES (?1, ?2)",
+                params![registration.work_order_id, receipt],
+            ).context("failed to store confirmed work-order acceptance receipt")?;
+        }
         if let Some(reference) = registration.link_reference {
             transaction.execute(
                 "INSERT INTO planning_work_order_links (work_order_id, reference_json) VALUES (?1, ?2)",
@@ -381,6 +408,7 @@ impl PlanningWorkOrderRepositoryPort for SqlitePlanningAuthorityAdapter {
             0,
         )?;
         let work_order = PlanningWorkOrderRecord {
+            acceptance_receipt: registration.acceptance_receipt.map(str::to_owned),
             work_order_id: registration.work_order_id.to_string(),
             origin: registration.origin.to_string(),
             link_reference: registration.link_reference.cloned(),
@@ -476,6 +504,7 @@ fn replay_existing_work_order(
     work_order_id: &str,
     origin: &str,
     link_reference: Option<&PlanningWorkLinkReference>,
+    acceptance_receipt: Option<&str>,
 ) -> Result<Option<PlanningWorkOrderRecord>> {
     // Loading validates contiguous task lineage and every stored permit's identity/shape.
     // Do not check a permit against the current basis: replay may precede its refresh.
@@ -483,6 +512,9 @@ fn replay_existing_work_order(
         return Ok(None);
     };
     work_order.ensure_origin(origin)?;
+    if work_order.acceptance_receipt.as_deref() != acceptance_receipt {
+        bail!("work order was admitted with a different acceptance approval");
+    }
     if work_order.link_reference.as_ref() == link_reference {
         return Ok(Some(work_order));
     }
@@ -605,7 +637,12 @@ pub(super) fn load_work_order_record(
         .map(|value| serde_json::from_str(&value))
         .transpose()
         .context("failed to decode work-order publication reference")?;
+    let acceptance_receipt = connection.query_row(
+        "SELECT receipt_digest FROM planning_work_order_acceptance_receipts WHERE work_order_id=?1",
+        params![work_order_id], |row| row.get::<_, String>(0),
+    ).optional().context("failed to read work-order acceptance receipt")?;
     let record = PlanningWorkOrderRecord {
+        acceptance_receipt,
         work_order_id: work_order_id.to_string(),
         origin,
         link_reference,
