@@ -58,6 +58,9 @@ pub(super) struct PlanningFeatureReducer {
     host_parallel_mode: Option<bool>,
     // 다시 낼 thread 지정 프롬프트이다 (plan 19 Q2-3). 먼저 거절된 것부터 낸다.
     queued_thread_prompts: std::collections::VecDeque<QueuedThreadPrompt>,
+    // 끝난 planning 읽기가 투영을 주지 못했다 (#2803: 실패, planning 없음). 그때 큐 머리는 투영 없이 나간다. 머리를
+    // 꺼내면 다시 거짓이 된다.
+    planning_read_left_no_projection: bool,
 }
 
 impl PlanningFeatureReducer {
@@ -72,6 +75,7 @@ impl PlanningFeatureReducer {
             worker_panel_history_seed: PlanningWorkerPanelState::default(),
             host_parallel_mode: None,
             queued_thread_prompts: std::collections::VecDeque::new(),
+            planning_read_left_no_projection: false,
         }
     }
 
@@ -93,7 +97,16 @@ impl PlanningFeatureReducer {
     }
 
     pub(super) fn take_queued_thread_prompt(&mut self) -> Option<QueuedThreadPrompt> {
+        self.planning_read_left_no_projection = false;
         self.queued_thread_prompts.pop_front()
+    }
+
+    pub(super) fn planning_read_left_no_projection(&self) -> bool {
+        self.planning_read_left_no_projection
+    }
+
+    pub(super) fn set_planning_read_left_no_projection(&mut self, left_no_projection: bool) {
+        self.planning_read_left_no_projection = left_no_projection;
     }
 
     /// 다시 낼 프롬프트가 있고, 준비 칸이 비었다. 준비 중인 프롬프트가 먼저 제출되게 기다린다.
