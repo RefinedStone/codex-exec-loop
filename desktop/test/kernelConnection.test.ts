@@ -861,24 +861,33 @@ describe("host verification requests", () => {
     await answerRefresh(h, secondReads);
   });
 
-  it("does not attribute another verification to a replay with no original attempt receipt", async () => {
+  it("leaves unknown on a real replay with no result and lets a follow-up verification start", async () => {
     const h = await hostHarness();
     const requested = h.connection.requestTaskVerification(h.target);
-    const command = h.requests("akra/kernel/command").at(-1)!;
+    const first = h.requests("akra/kernel/command").at(-1)!;
     const reads = h.requests("akra/kernel/query").length;
-    h.reply(command, { processed: true, operation: { op_id: 5, state: "completed", replayed: true } });
+    h.fail(first, -32000, "synthetic transport loss");
     await requested;
     await answerRefresh(h, reads);
     expect(Object.values(h.view().taskVerificationRequests)[0]?.status).toBe("unknown");
-    expect(Object.values(h.view().taskVerificationRequests)[0]?.attemptId).toBeNull();
-    const retried = h.connection.requestTaskVerification(h.target);
-    const retry = h.requests("akra/kernel/command").at(-1)!;
-    expect(retry.params).toEqual(command.params);
+    const rechecked = h.connection.requestTaskVerification(h.target);
+    const replay = h.requests("akra/kernel/command").at(-1)!;
+    expect(replay.params).toEqual(first.params);
     const rereads = h.requests("akra/kernel/query").length;
-    h.reply(retry, { processed: true, result: { type: "task_verification_requested", attempt_id: "2".repeat(64), changed: false } });
-    await retried;
+    // CommandResponse::replayed: receipt only, no result.
+    h.reply(replay, { processed: true, operation: { op_id: 5, state: "accepted", next: { query: "operation", after: 5 }, replayed: true } });
+    await rechecked;
     await answerRefresh(h, rereads);
-    expect(Object.values(h.view().taskVerificationRequests)[0]?.attemptId).toBe("2".repeat(64));
+    const request = Object.values(h.view().taskVerificationRequests)[0];
+    expect(request?.status).toBe("replayed");
+    expect(request?.requestId).toBe(first.params.idempotency_key);
+    expect(request?.attemptId).toBeNull();
+    void h.connection.requestTaskVerification(h.target);
+    const followUp = h.requests("akra/kernel/command").at(-1)!;
+    expect(followUp).not.toBe(replay);
+    expect(followUp.params.idempotency_key).not.toBe(first.params.idempotency_key);
+    expect(followUp.params.command).toEqual({ type: "request_task_verification", ...h.target, request_id: followUp.params.idempotency_key });
+    expect(h.requests("turn/start")).toHaveLength(0);
   });
 
   it("rejects a stale rendered scope and does not replay a pending request on reconnect", async () => {

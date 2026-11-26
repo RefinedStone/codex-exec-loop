@@ -455,7 +455,7 @@ export class KernelConnection {
   }
 
 
-  /** Only an explicit click can reserve a verification. Unknown replies reuse the same logical request. */
+  /** Only an explicit click can reserve a verification. Unknown replies reuse the same logical request; a confirmed replay ends it. */
   async requestTaskVerification(target: TaskVerificationTarget): Promise<void> {
     const view = this.store.getKernel();
     if (!this.canRead("overview") || !view.workspace || !view.kernel) return;
@@ -482,6 +482,10 @@ export class KernelConnection {
       } else if (response.processed === true && response.result?.type === "task_verification_requested") {
         attempt.view = { ...attempt.view, status: "accepted", attemptId: response.result.attempt_id,
           message: "검증 요청을 접수했습니다. 실행 결과는 커널 조회로 확인합니다." };
+      } else if (response.processed === true && response.operation?.replayed === true) {
+        // A real replay answers with the receipt only (no result), so the original attempt cannot be named here.
+        attempt.view = { ...attempt.view, status: "replayed",
+          message: `같은 요청은 이미 처리되었습니다 (연산 ${response.operation.op_id}). 결과는 커널 조회로 확인하며, 필요하면 새 검증을 요청할 수 있습니다.` };
       } else {
         attempt.view = { ...attempt.view, status: "unknown", message: "요청의 처리 결과를 확인하지 못했습니다. 상태를 조회한 뒤 같은 요청을 다시 확인할 수 있습니다." };
       }

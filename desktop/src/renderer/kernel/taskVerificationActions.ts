@@ -5,7 +5,8 @@ export type TaskVerificationTarget = Pick<Extract<KernelCommand, { type: "reques
   "task_id" | "criterion_id" | "scope_id" | "expected_acceptance_revision">;
 
 export interface TaskVerificationRequestView {
-  status: "sending" | "accepted" | "unknown" | "rejected";
+  /** `replayed`: the kernel confirmed the original request but a replay carries no attempt, so the next click is a new request. */
+  status: "sending" | "accepted" | "replayed" | "unknown" | "rejected";
   requestId: string;
   attemptId: string | null;
   message: string;
