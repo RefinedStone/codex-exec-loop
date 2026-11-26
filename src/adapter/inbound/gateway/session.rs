@@ -77,6 +77,7 @@ pub(super) struct GatewayServices {
     pub(super) git_graph: Option<Arc<dyn GitGraphPort>>,
     /// git 작업 엔진이다 (plan 27 G3). `git_graph` 와 같은 `akra/git/*` 에서 답한다. `local` 접속에만 답한다.
     pub(super) git_operations: Option<Arc<dyn GitOperationPort>>,
+    pub(super) conversation_workspaces: Option<Arc<dyn crate::application::port::inbound::conversation_workspace_port::ConversationWorkspacePort>>,
     /// 이슈 인계의 공유본이다 (#2428). 이 기기의 정책 파일과 `gh` 를 쓰므로 `local` 접속에만 답한다.
     pub(super) issue_handoff: Option<Arc<dyn IssueHandoffPort>>,
     /// 이슈 초안이다 (#2426). 이 기기의 정책 파일과 `gh` 를 쓰므로 `local` 접속에만 답한다.
@@ -284,6 +285,11 @@ where
                                 .git_graph
                                 .as_ref()
                                 .filter(|_| is_local && method.starts_with(GIT_METHOD_PREFIX));
+                            let workspaces_for_method =
+                                services.conversation_workspaces.as_ref().filter(|_| {
+                                    is_local
+                                        && method.starts_with(super::conversation_workspace::PREFIX)
+                                });
                             let issue_for_method = services
                                 .issue_handoff
                                 .as_ref()
@@ -378,6 +384,15 @@ where
                                     text.as_str().to_string(),
                                     outbox.clone(),
                                     recording.clone(),
+                                );
+                                None
+                            } else if let Some(workspaces) = workspaces_for_method {
+                                super::conversation_workspace::spawn_request(
+                                    workspaces.clone(),
+                                    id,
+                                    method,
+                                    text.as_str().to_string(),
+                                    outbox.clone(),
                                 );
                                 None
                             } else if let Some(graph) = git_for_method {

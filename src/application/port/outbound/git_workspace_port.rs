@@ -23,7 +23,33 @@ pub struct GitWorkspaceCondition {
     pub busy_branches: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitConversationWorktree {
+    pub head: String,
+    pub branch: Option<String>,
+}
+
 pub trait GitWorkspacePort: Send + Sync {
+    /// 사용자 요청 전용 공간을 새 브랜치에 만든다. 기존 목적지/브랜치를 채택하거나 지우지 않는다.
+    fn create_conversation_worktree(
+        &self,
+        _repository_dir: &str,
+        _destination: &str,
+        _branch: &str,
+        _base_commit: &str,
+    ) -> Result<()> {
+        anyhow::bail!("conversation worktree creation is unavailable")
+    }
+
+    /// 경로·Git common directory·root를 확인한다. 없는 경로만 None이고 알 수 없는 신원은 오류다.
+    fn inspect_conversation_worktree(
+        &self,
+        _repository_dir: &str,
+        _destination: &str,
+    ) -> Result<Option<GitConversationWorktree>> {
+        anyhow::bail!("conversation worktree inspection is unavailable")
+    }
+
     fn read_condition(&self, repository_dir: &str) -> Result<GitWorkspaceCondition>;
 
     /// `commit` (전체 sha)이 가리키는 커밋의 전체 sha 이다. 태그 객체는 그 커밋으로 푼다. 없으면 `None` 이다.

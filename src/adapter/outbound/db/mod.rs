@@ -20,3 +20,5 @@ pub(crate) mod extension_state_store;
 pub mod sqlite_provider_credentials;
 
 pub use sqlite_provider_credentials::SqliteProviderCredentialLedgerAdapter;
+
+pub(crate) mod conversation_workspace_store;

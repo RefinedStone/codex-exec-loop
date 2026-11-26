@@ -104,3 +104,5 @@ pub(crate) mod storage_sharing;
 pub mod provider_credentials;
 
 pub mod provider_work;
+
+pub mod conversation_workspace;
