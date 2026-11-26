@@ -1,5 +1,8 @@
 // main 의 GatewayConnection 과 renderer 세션을 가짜 Gateway 에 실제로 연결해서 시험한다. 턴은 쓰지 않는다.
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 
 import { DEFAULT_SETTINGS } from "../src/shared/settings";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { AkraBridge, ConnectionState } from "../src/shared/bridge";
 import type { ConfirmIssueAutomationModeRequest } from "../src/shared/issueConfirmation";
 import { GatewayConnection } from "../src/main/gatewayConnection";
+import { elicitationFields, elicitationResponse, permissionsResponse, toPendingApproval, userInputResponse } from "../src/renderer/conversation/approvals";
 import { EMPTY_KERNEL_VIEW } from "../src/renderer/kernel/kernelConnection";
 import { DesktopSession, groupThreadsByCwd, startDesktopSession, isAgentThreadSource, type SessionBridge } from "../src/renderer/session/desktopSession";
 import { type DesktopState, mergeWorkspaceFolders, remoteHostKey, removeWorkspaceThread, renameWorkspaceThread, type SessionStore } from "../src/renderer/session/desktopStore";
@@ -704,5 +708,123 @@ describe("issue interests over the shared Gateway session", () => {
     await session.showKernel(null);
     expect(fake.receivedMethods.filter((method) => method === "akra/kernel/detach")).toHaveLength(1);
     expect(store.getKernel()).toEqual(EMPTY_KERNEL_VIEW);
+  });
+});
+
+/** 녹화의 명령 승인 요청(id 0)을 다른 서버 요청으로 바꾼 녹화이다. 내용은 합성 값이다. */
+function recordingWithServerRequest(method: string, params: Record<string, unknown>): string {
+  const lines = readFileSync(APPROVAL_TURN_RECORDING, "utf8").split(/\r?\n/).filter(Boolean).map((line) => {
+    const entry = JSON.parse(line) as { direction: string; text: string };
+    const message = JSON.parse(entry.text) as { method?: string; id?: unknown; params?: Record<string, unknown> };
+    if (entry.direction === "gateway" && message.method === "item/commandExecution/requestApproval") {
+      const original = message.params ?? {};
+      entry.text = JSON.stringify({ method, id: message.id, params: { threadId: original.threadId, turnId: original.turnId, itemId: original.itemId, ...params } });
+    }
+    return JSON.stringify(entry);
+  });
+  const path = join(mkdtempSync(join(tmpdir(), "akra-server-request-")), "recording.jsonl");
+  writeFileSync(path, lines.join("\n"));
+  cleanups.push(() => rmSync(dirname(path), { recursive: true, force: true }));
+  return path;
+}
+
+async function openRecordedThread(recording: string) {
+  const fake = await startFakeGateway(uniqueTestEndpoint(), recording);
+  cleanups.push(() => fake.close());
+  const { connection, bridge } = connectBridge(fake.endpoint);
+  const store = sessionStore();
+  const session = new DesktopSession(bridge, store, "test", (callback) => setTimeout(callback, 0));
+  session.start();
+  cleanups.push(() => session.stop());
+  connection.start();
+  await waitFor(() => store.snapshot.gateway !== undefined || store.snapshot.sessionError !== undefined);
+  await session.openThread("01a1abfb-8f0a-7581-a8e4-c2953347f470");
+  await waitFor(() => (store.snapshot.pendingApprovals?.length ?? 0) === 1);
+  return { fake, store, session, approval: store.snapshot.pendingApprovals![0]! };
+}
+
+describe("server requests other than command and file approvals (#2836)", () => {
+  it("answers a permissions request with the requested profile for the session", async () => {
+    const recording = recordingWithServerRequest("item/permissions/requestApproval", {
+      environmentId: "local", startedAtMs: 0, cwd: "/work/example-app", reason: "needs network",
+      permissions: { network: { enabled: true }, fileSystem: null },
+    });
+    const { fake, store, session, approval } = await openRecordedThread(recording);
+    expect(approval).toMatchObject({ kind: "permissions", reason: "needs network", permissions: { network: { enabled: true } } });
+    session.answerApproval(approval.requestId, "acceptForSession");
+    expect(store.snapshot.pendingApprovals).toHaveLength(0);
+    await waitFor(() => fake.answeredRequests.length === 1);
+    expect(fake.answeredRequests[0]!.result).toEqual({ permissions: { network: { enabled: true } }, scope: "session" });
+  });
+
+  it("answers a tool question with the chosen option", async () => {
+    const recording = recordingWithServerRequest("item/tool/requestUserInput", {
+      isBlocking: true, autoResolutionMs: null,
+      questions: [{ id: "q1", header: "Branch", question: "Which branch?", isOther: true, isSecret: false, options: [{ label: "main", description: "" }] }],
+    });
+    const { fake, session, approval } = await openRecordedThread(recording);
+    expect(approval.kind).toBe("userInput");
+    expect(approval.questions?.map((question) => question.id)).toEqual(["q1"]);
+    session.answerServerRequest(approval.requestId, userInputResponse({ q1: "main" }));
+    await waitFor(() => fake.answeredRequests.length === 1);
+    expect(fake.answeredRequests[0]!.result).toEqual({ answers: { q1: { answers: ["main"] } } });
+  });
+
+  it("accepts an MCP form elicitation with typed content", async () => {
+    const recording = recordingWithServerRequest("mcpServer/elicitation/request", {
+      serverName: "notion", mode: "form", _meta: null, message: "Pick a page",
+      requestedSchema: { type: "object", properties: { count: { type: "integer", title: "Count" }, page: { type: "string", enum: ["a", "b"] } }, required: ["page"] },
+    });
+    const { fake, session, approval } = await openRecordedThread(recording);
+    expect(approval.elicitation?.fields?.map((field) => [field.name, field.input, field.required])).toEqual([
+      ["count", "integer", false],
+      ["page", "select", true],
+    ]);
+    session.answerServerRequest(approval.requestId, elicitationResponse("accept", { page: "a", count: 2 }));
+    await waitFor(() => fake.answeredRequests.length === 1);
+    expect(fake.answeredRequests[0]!.result).toEqual({ action: "accept", content: { page: "a", count: 2 }, _meta: null });
+  });
+
+  it("removes a card that another connection answered and tells the user about refused requests", async () => {
+    const { bridge, emit } = controlledResumeBridge();
+    const store = sessionStore();
+    const notices: string[] = [];
+    store.notice = (text) => notices.push(text);
+    const session = new DesktopSession(bridge, store, "test", (callback) => setTimeout(callback, 0));
+    session.start();
+    cleanups.push(() => session.stop());
+    bridge.ready();
+    emit({ id: 7, method: "mcpServer/elicitation/request", params: { threadId: "t", turnId: null, serverName: "s", mode: "url", _meta: null, message: "Sign in", url: "https://example.invalid/sign-in", elicitationId: "e" } });
+    await waitFor(() => (store.snapshot.pendingApprovals?.length ?? 0) === 1);
+    expect(store.snapshot.pendingApprovals![0]!.elicitation).toMatchObject({ url: "https://example.invalid/sign-in", fields: null });
+    emit({ method: "serverRequest/resolved", params: { threadId: "t", requestId: 7 } });
+    await waitFor(() => (store.snapshot.pendingApprovals?.length ?? 0) === 0);
+
+    emit({ id: 8, method: "item/tool/call", params: { threadId: "t" } });
+    await waitFor(() => notices.length === 1);
+    expect(notices[0]).toContain("item/tool/call");
+    expect(store.snapshot.pendingApprovals).toHaveLength(0);
+  });
+});
+
+describe("server request parsing", () => {
+  it("refuses a form that has a field it cannot draw", () => {
+    expect(elicitationFields({ type: "object", properties: { nested: { type: "object" } } })).toBeNull();
+    expect(elicitationFields({ type: "object", properties: { tags: { type: "array", items: { enum: ["x", "y"] } } } })).toEqual([
+      expect.objectContaining({ name: "tags", input: "multiSelect", options: [{ value: "x", label: "x" }, { value: "y", label: "y" }] }),
+    ]);
+  });
+
+  it("grants nothing when a permissions request is declined", () => {
+    expect(permissionsResponse({ network: { enabled: true }, fileSystem: null }, "decline")).toEqual({ permissions: {}, scope: "turn" });
+    expect(permissionsResponse({ network: null, fileSystem: { read: ["/a"], write: null } }, "accept")).toEqual({
+      permissions: { fileSystem: { read: ["/a"], write: null } }, scope: "turn",
+    });
+  });
+
+  it("does not show a request with malformed parameters", () => {
+    expect(toPendingApproval("item/tool/requestUserInput", { threadId: "t", questions: [{ header: "no id" }] }, 1)).toBeNull();
+    expect(toPendingApproval("mcpServer/elicitation/request", { threadId: "t", message: "m" }, 1)).toBeNull();
+    expect(toPendingApproval("item/tool/call", { threadId: "t" }, 1)).toBeNull();
   });
 });

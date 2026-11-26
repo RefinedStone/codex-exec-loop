@@ -7,15 +7,19 @@ import { useEffect, useMemo } from "react";
 import { Icon } from "../design/icons";
 import { useDesktopStore } from "../session/desktopStore";
 import { MOD_KEY } from "../session/uiStore";
-import { APPROVAL_DECISIONS, type ApprovalDecision, type PendingApproval } from "./approvals";
+import { answersWithDecision, APPROVAL_DECISIONS, type ApprovalDecision, type PendingApproval } from "./approvals";
 import { diffFileFromChange } from "./diff";
 import { DiffFileList } from "./DiffView";
+import { ElicitationForm, PermissionsDetail, UserInputForm } from "./ServerRequestForms";
 import type { Transcript } from "./transcript";
 
 const APPROVAL_TITLE: Record<PendingApproval["kind"], string> = {
   command: "명령 실행 승인",
   writeStdin: "실행 중인 프로세스에 입력 보내기 승인",
   fileChange: "파일 변경 승인",
+  permissions: "추가 권한 승인",
+  userInput: "도구가 묻는 질문",
+  elicitation: "MCP 서버의 입력 요청",
 };
 
 const DECISION_LABEL: Record<ApprovalDecision, string> = {
@@ -55,17 +59,20 @@ function isTyping(target: EventTarget | null): boolean {
 
 export function ApprovalPrompt({
   onAnswer,
+  onRespond,
 }: {
   onAnswer(requestId: PendingApproval["requestId"], decision: ApprovalDecision): void;
+  /** 양식으로 답하는 요청(사용자 입력, elicitation)의 응답을 보낸다. */
+  onRespond(requestId: PendingApproval["requestId"], result: unknown): void;
 }) {
   const openThreadId = useDesktopStore((state) => state.openThreadId);
   const pending = useDesktopStore((state) => state.pendingApprovals);
   const approvals = pending.filter((approval) => approval.threadId === openThreadId);
   const first = approvals[0];
 
-  // 단축키는 맨 위의 요청에 답한다.
+  // 단축키는 맨 위의 요청에 답한다. 양식으로 답하는 요청에는 쓰지 않는다.
   useEffect(() => {
-    if (!first) return;
+    if (!first || !answersWithDecision(first.kind)) return;
     const onKey = (event: KeyboardEvent) => {
       // 누르고 있어서 생긴 반복은 받지 않는다. 다음 요청까지 연달아 답하지 않게 한다.
       if (!(event.metaKey || event.ctrlKey) || event.repeat) return;
@@ -102,7 +109,10 @@ export function ApprovalPrompt({
           )}
           {approval.reason && <p>{approval.reason}</p>}
           {approval.kind === "fileChange" && <ApprovalChanges turnId={approval.turnId} itemId={approval.itemId} />}
-          <div className="approval-buttons">
+          {approval.permissions && <PermissionsDetail permissions={approval.permissions} />}
+          {approval.questions && <UserInputForm questions={approval.questions} onRespond={(result) => onRespond(approval.requestId, result)} />}
+          {approval.elicitation && <ElicitationForm request={approval.elicitation} onRespond={(result) => onRespond(approval.requestId, result)} />}
+          {answersWithDecision(approval.kind) && <div className="approval-buttons">
             {APPROVAL_DECISIONS.map((decision) => (
               <button
                 key={decision}
@@ -115,7 +125,7 @@ export function ApprovalPrompt({
                 {approval === first && DECISION_KEY[decision] && <kbd>{DECISION_KEY[decision]}</kbd>}
               </button>
             ))}
-          </div>
+          </div>}
         </div>
       ))}
     </section>

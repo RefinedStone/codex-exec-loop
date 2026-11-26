@@ -101,6 +101,43 @@
   max-height: 320px;
 }
 
+/* 승인 밖의 서버 요청 양식 (#2836): 사용자 입력, MCP elicitation, 추가 권한. */
+.approval-form,
+.approval-question {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0;
+  border: 0;
+  padding: 0;
+}
+
+.approval-question legend,
+.approval-field > span:first-child {
+  font-weight: 600;
+  font-size: var(--text-s);
+}
+
+.approval-option,
+.approval-field,
+.approval-multi {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-s);
+}
+
+.approval-permissions {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: var(--text-s);
+}
+
+.approval-url {
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
 .step .diff-file-list {
   margin: 4px 0 4px 20px;
 }

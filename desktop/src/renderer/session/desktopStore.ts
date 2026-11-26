@@ -389,7 +389,13 @@ export type SessionStore = Pick<
   | "applyDotLive"
   | "setChats"
   | "setChatConversation"
-> & { getOpenThreadId(): string | null; getTranscript(): Transcript | null; getKernel(): KernelView };
+> & {
+  getOpenThreadId(): string | null;
+  getTranscript(): Transcript | null;
+  getKernel(): KernelView;
+  /** 사용자에게 짧게 알린다. 시험용 저장소는 생략할 수 있다. */
+  notice?(text: string): void;
+};
 
 /** zustand 저장소를 세션이 쓰는 좁은 인터페이스로 감싼다. */
 export function desktopSessionStore(store: DesktopStore = useDesktopStore): SessionStore {
