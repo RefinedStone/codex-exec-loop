@@ -7,8 +7,8 @@
 mod post_turn_execution;
 
 #[cfg(test)]
-#[path = "turn_submission_runtime/manual_preparation_test_fixture.rs"]
-mod manual_preparation_test_fixture;
+#[path = "turn_submission_runtime/manual_preparation_fixture_tests.rs"]
+mod manual_preparation_fixture_tests;
 
 use crate::core::app::{
     AppCommand, AppEvent, CoreInput, CorePromptOrigin, ManualPromptPreparationAdmission,
@@ -996,7 +996,7 @@ mod prompt_submit_diagnostics_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::manual_preparation_test_fixture::controlled_workspace;
+    use super::manual_preparation_fixture_tests::controlled_workspace;
     use super::*;
     use crate::adapter::inbound::tui::app::test_helpers;
     use crate::adapter::inbound::tui::app::{
