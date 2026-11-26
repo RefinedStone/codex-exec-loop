@@ -794,6 +794,12 @@ spawns `codex app-server proxy --sock …` and `src/adapter/outbound/app_server/
 speaks WebSocket over its stdio, mapping one text message to one JSON line, so the line-based
 connection code stays the same. The proxy handshake has a 10 s deadline, and the stderr reader starts
 before it.
+The TUI uses the Gateway relay instead of its own app-server when a Gateway accepts a connection at
+TUI start (plan 18 K6-1): `AppServerTransport::GatewayRelay` spawns the `akra` executable itself as
+`akra __gateway-app-server-relay <endpoint>`, a child that copies bytes between its stdio and the
+Gateway client endpoint (`src/adapter/outbound/app_server/gateway_relay.rs`). The connection speaks the
+same WebSocket transport over that child, so the Gateway session relays the TUI like a Desktop client.
+The kernel protocol carries no conversation stream.
 
 Dropping `NativeClientRuntime` closes every parallel automation epoch first. The kernel drops the
 runtime on its host thread, so the epochs close before the lock is released. Worker threads of the

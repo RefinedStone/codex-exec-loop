@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
-use crate::adapter::outbound::app_server::GatewayUpstreamSocket;
+use crate::adapter::outbound::app_server::SharedAppServer;
 
 use crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter;
 use crate::adapter::outbound::filesystem::{
@@ -174,7 +174,7 @@ pub(crate) struct RepositoryKernelRegistry {
     local_extensions:
         Mutex<Option<Arc<crate::application::service::kernel_extensions::ExtensionService>>>,
     /// 커널이 붙을 app-server 이다. 없으면 커널마다 자기 app-server 를 띄운다 (시험).
-    app_server: Option<GatewayUpstreamSocket>,
+    app_server: Option<SharedAppServer>,
     providers: Option<super::provider_credentials::ProviderServices>,
     idle_notification: Mutex<Option<std::task::Waker>>,
     #[cfg(test)]
@@ -364,7 +364,7 @@ impl RepositoryKernelRegistry {
     }
 
     /// 커널들이 Gateway upstream app-server 를 Desktop 과 함께 쓴다 (K3-5, Q-K3-6).
-    pub(crate) fn sharing_app_server(app_server: GatewayUpstreamSocket) -> Self {
+    pub(crate) fn sharing_app_server(app_server: SharedAppServer) -> Self {
         Self {
             app_server: Some(app_server),
             ..Self::default()
@@ -564,7 +564,7 @@ impl RepositoryKernelRegistry {
 #[cfg(test)]
 pub(crate) fn build_kernel_for_workspace(
     workspace_dir: &str,
-    app_server: Option<GatewayUpstreamSocket>,
+    app_server: Option<SharedAppServer>,
 ) -> Result<RepositoryKernel> {
     build_kernel_for_workspace_with_providers(workspace_dir, app_server, None)
 }
@@ -586,7 +586,7 @@ fn build_issue_collection_with_providers(
 
 fn build_kernel_for_workspace_with_providers(
     workspace_dir: &str,
-    app_server: Option<GatewayUpstreamSocket>,
+    app_server: Option<SharedAppServer>,
     providers: Option<super::provider_credentials::ProviderServices>,
 ) -> Result<RepositoryKernel> {
     // 잠금을 먼저 잡는다. 런타임 조립이 PR 검증 스케줄러 스레드를 시작하기 때문이다.
@@ -609,7 +609,7 @@ fn build_kernel_for_workspace_with_providers(
 fn assemble_recovered_kernel(
     lock: RepositoryKernelLock,
     workspace_dir: &str,
-    app_server: Option<GatewayUpstreamSocket>,
+    app_server: Option<SharedAppServer>,
     issues: Arc<IssueCollectionService>,
     admission: Arc<IssueBindingAdmission>,
 ) -> Result<RepositoryKernel> {

@@ -14,7 +14,7 @@ use crate::adapter::outbound::app_server::cloud_upstream::{CloudGatewayUpstream,
 use crate::adapter::outbound::app_server::gateway_upstream::AppServerGatewayUpstream;
 use crate::adapter::outbound::app_server::thread_transcript::AppServerThreadTranscript;
 use crate::adapter::outbound::app_server::{
-    AppServerPlanningWorkerAdapter, CodexAppServerAdapter, GatewayUpstreamSocket,
+    AppServerPlanningWorkerAdapter, CodexAppServerAdapter, SharedAppServer,
 };
 use crate::adapter::outbound::clipboard::PlatformClipboardImageAdapter;
 use crate::adapter::outbound::db::sqlite_work_context_store::SqliteWorkContextStore;
@@ -992,9 +992,11 @@ pub(crate) fn build_native_tui_application(
         .map(|(_, issues, _, _)| (admission.clone(), issues.automation_store()));
     // 병렬 완료와 owner 가 같은 handle 을 나눈다. owner 가 없으면 recipe 가 있는 완료가 늘 보류된다 (#2814).
     let verification_handle = TaskVerificationHandle::default();
+    // Gateway 가 돌면 TUI 의 대화는 Gateway 의 app-server 중계를 지난다 (plan 18 K6-1). 없으면 지금처럼 자기
+    // app-server 를 띄운다.
     let application = build_native_application_for_workspace(
         &workspace,
-        None,
+        crate::adapter::outbound::app_server::gateway_relay::reachable_gateway_relay(),
         verification_handle.clone(),
         binding,
     )
@@ -1190,7 +1192,7 @@ pub(crate) fn repository_state_port() -> Arc<dyn RepositoryStatePort> {
 /// 붙어 Desktop 과 같은 app-server 를 쓴다 (K3-5).
 pub(crate) fn build_headless_kernel_runtime(
     workspace_dir: &str,
-    app_server: Option<GatewayUpstreamSocket>,
+    app_server: Option<SharedAppServer>,
     issues: Arc<crate::application::service::issue_collection::IssueCollectionService>,
     admission: Arc<crate::application::service::issue_binding_admission::IssueBindingAdmission>,
 ) -> NativeClientRuntime {
@@ -1241,7 +1243,7 @@ struct NativeApplicationAssembly {
 
 fn build_native_application_for_workspace(
     workspace_dir: &str,
-    app_server: Option<GatewayUpstreamSocket>,
+    app_server: Option<SharedAppServer>,
     verification_handle: TaskVerificationHandle,
     binding_admission: Option<(Arc<crate::application::service::issue_binding_admission::IssueBindingAdmission>, Arc<dyn crate::application::port::outbound::issue_automation_store_port::IssueAutomationStorePort>)>,
 ) -> NativeApplicationAssembly {
@@ -1487,7 +1489,7 @@ fn build_shared_ports_for_prompt_logging(prompt_logging_enabled: bool) -> Produc
 
 fn build_shared_ports_with_app_server(
     prompt_logging_enabled: bool,
-    app_server: Option<GatewayUpstreamSocket>,
+    app_server: Option<SharedAppServer>,
 ) -> ProductionSharedPorts {
     let planning_authority_adapter = Arc::new(SqlitePlanningAuthorityAdapter::new());
     let planning_authority_port: Arc<dyn PlanningAuthorityPort> =
@@ -1658,7 +1660,7 @@ fn build_pr_validation_scheduler_runtime(
 fn app_server_adapter(
     prompt_log_port: Arc<dyn AppServerPromptLogPort>,
     conversation_thread_turn_options_port: Arc<dyn ConversationThreadTurnOptionsPort>,
-    app_server: Option<GatewayUpstreamSocket>,
+    app_server: Option<SharedAppServer>,
 ) -> Arc<CodexAppServerAdapter> {
     let adapter = CodexAppServerAdapter::from_environment_with_prompt_log_and_thread_turn_options(
         APP_SERVER_CLIENT_NAME,
@@ -1667,7 +1669,7 @@ fn app_server_adapter(
         conversation_thread_turn_options_port,
     );
     Arc::new(match app_server {
-        Some(socket) => adapter.through_gateway_upstream(socket),
+        Some(shared) => adapter.through_shared_app_server(shared),
         None => adapter,
     })
 }

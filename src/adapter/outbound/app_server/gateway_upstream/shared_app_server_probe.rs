@@ -234,7 +234,7 @@ fn the_kernel_adapter_talks_to_the_upstream_through_the_proxy() {
     crate::private_directory::ensure_private_directory(&run_dir).expect("private run dir");
     let upstream = AppServerGatewayUpstream::start(&run_dir).expect("upstream should start");
     let adapter = super::super::CodexAppServerAdapter::new("akra-k3-5-probe", "0")
-        .through_gateway_upstream(upstream.kernel_socket());
+        .through_shared_app_server(upstream.kernel_socket());
 
     let startup = adapter.load_startup_context();
     let catalog = adapter.load_session_catalog(SessionCatalogRequest {

@@ -100,8 +100,8 @@ impl AppServerGatewayUpstream {
 
 impl AppServerGatewayUpstream {
     /// 데몬 커널이 이 upstream 에 붙을 소켓이다.
-    pub(crate) fn kernel_socket(&self) -> super::GatewayUpstreamSocket {
-        super::GatewayUpstreamSocket(codex_socket_argument(&self.shared.socket_path))
+    pub(crate) fn kernel_socket(&self) -> super::SharedAppServer {
+        super::SharedAppServer::Upstream(codex_socket_argument(&self.shared.socket_path))
     }
 }
 

@@ -254,6 +254,12 @@ pub(super) enum AppServerTransport {
     /// Gateway upstream app-server 에 `codex app-server proxy --sock` 로 붙는다 (데몬 커널). 같은 app-server 를
     /// Desktop 과 함께 써서, Desktop 이 커널이 돌리는 thread 를 resume 해 볼 수 있다 (Q-K3-6).
     GatewayProxy { socket_argument: String },
+    /// Gateway 의 클라이언트 endpoint 에 `akra` relay 자식으로 붙는다 (TUI, K6-1). Gateway 세션이 Desktop 의
+    /// 접속처럼 중계하므로, Gateway 가 TUI 의 턴도 본다.
+    GatewayRelay {
+        relay_executable: PathBuf,
+        endpoint: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -491,6 +497,10 @@ impl AppServerConnectionConfig {
         self.api_key_auth
     }
 
+    pub(super) fn uses_gateway_relay(&self) -> bool {
+        matches!(self.transport, AppServerTransport::GatewayRelay { .. })
+    }
+
     pub(super) fn set_transport(&mut self, transport: AppServerTransport) {
         self.transport = transport;
     }
@@ -504,6 +514,15 @@ impl AppServerConnectionConfig {
         }
         Ok(())
     }
+}
+
+/// relay 자식은 codex 가 아니라 `akra` 이다. 같은 사용자의 Gateway 에 붙으므로 환경을 바꾸지 않는다.
+pub(super) fn gateway_relay_command(relay_executable: &Path, endpoint: &str) -> Command {
+    let mut command = Command::new(relay_executable);
+    command
+        .arg(super::gateway_relay::GATEWAY_RELAY_COMMAND)
+        .arg(endpoint);
+    command
 }
 
 #[cfg(unix)]
@@ -1370,7 +1389,10 @@ impl AppServerConnection {
          * stdout/stderr는 blocking read가 필요하므로 reader thread가 mpsc sender로 AppServerLine을 넘기고,
          * 이 connection object는 request id matching과 stream notification reduction만 수행한다.
          */
-        config.ensure_executable_is_pinned()?;
+        // relay 자식은 codex 를 띄우지 않는다. codex 는 Gateway 의 upstream 이 띄운다.
+        if !config.uses_gateway_relay() {
+            config.ensure_executable_is_pinned()?;
+        }
         let mut command = match &config.transport {
             AppServerTransport::OwnProcess => app_server_command(&config),
             AppServerTransport::GatewayProxy { socket_argument } => {
@@ -1382,6 +1404,10 @@ impl AppServerConnection {
                     .arg(socket_argument);
                 command
             }
+            AppServerTransport::GatewayRelay {
+                relay_executable,
+                endpoint,
+            } => gateway_relay_command(relay_executable, endpoint),
         };
         command
             .stdin(Stdio::piped())
@@ -1420,8 +1446,15 @@ impl AppServerConnection {
                     AppServerStdinWriter::spawn(stdin, transport_failure.clone()),
                     Box::new(stdout),
                 ),
-                AppServerTransport::GatewayProxy { .. } => {
-                    let proxy = super::proxy_transport::open(stdin, stdout)?;
+                AppServerTransport::GatewayProxy { .. }
+                | AppServerTransport::GatewayRelay { .. } => {
+                    let proxy = super::proxy_transport::open(stdin, stdout).with_context(|| {
+                        if config.uses_gateway_relay() {
+                            "the Akra Gateway relay did not open; start the Gateway (Akra Desktop or akra-gateway) and retry"
+                        } else {
+                            "the Gateway upstream proxy did not open"
+                        }
+                    })?;
                     (
                         AppServerStdinWriter::spawn(proxy.frames, transport_failure.clone()),
                         Box::new(proxy.lines),

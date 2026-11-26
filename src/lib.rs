@@ -66,6 +66,20 @@ pub(crate) mod trusted_executable;
  * app-server shell을 시작한다. 그래서 bin target들은 이름이 달라도 동일한 실행 정책을 공유한다.
  */
 pub fn run() -> anyhow::Result<i32> {
+    // TUI 의 app-server 연결이 띄우는 relay 자식이다 (plan 18 K6-1). 설정을 읽지 않고 바이트만 나른다.
+    let mut args = std::env::args_os().skip(1);
+    if args.next().as_deref()
+        == Some(std::ffi::OsStr::new(
+            adapter::outbound::app_server::gateway_relay::GATEWAY_RELAY_COMMAND,
+        ))
+    {
+        let endpoint = args
+            .next()
+            .context("the Gateway relay needs an endpoint")?
+            .into_string()
+            .map_err(|_| anyhow::anyhow!("the Gateway relay endpoint is not UTF-8"))?;
+        return adapter::outbound::app_server::gateway_relay::run_relay(&endpoint);
+    }
     configuration::reject_removed_environment_variables()?;
     let invocation = configuration::ParsedInvocation::parse(std::env::args_os().skip(1))?;
     /*

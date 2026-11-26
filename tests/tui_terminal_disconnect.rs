@@ -34,6 +34,193 @@ fn native_tui_and_app_server_exit_after_their_controlling_pty_disconnects() {
     fixture.wait_for_app_servers_to_exit(&app_server_pids, DISCONNECT_TIMEOUT);
 }
 
+/// plan 18 K6-1: with a Gateway running, the TUI opens its conversation through the Gateway relay. It does
+/// not start its own app-server, and the relay ends with the TUI.
+#[test]
+fn native_tui_opens_its_conversation_through_a_running_gateway() {
+    let fixture = IsolatedTuiFixture::new().with_short_akra_home();
+    let gateway = FakeGateway::start(&fixture.akra_home.join("run"));
+    let (mut master, slave) = open_pty(100, 30).expect("PTY fixture should open");
+    set_nonblocking(&master).expect("PTY master should become nonblocking");
+
+    let mut child = spawn_native_tui(&fixture, &slave);
+    drop(slave);
+
+    let deadline = Instant::now() + STARTUP_TIMEOUT;
+    let mut output = Vec::new();
+    loop {
+        read_terminal_output(&mut master, &mut output);
+        assert!(
+            child.try_wait().is_none(),
+            "native TUI exited before terminal startup; output: {}",
+            String::from_utf8_lossy(&output)
+        );
+        let terminal_started = output
+            .windows(b"Akra".len())
+            .any(|window| window == b"Akra");
+        if terminal_started
+            && gateway
+                .methods()
+                .iter()
+                .any(|method| method == "account/read")
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "native TUI did not start through the Gateway; Gateway methods: {:?}; own app-server methods: {:?}; output: {}",
+            gateway.methods(),
+            fixture.logged_app_server_methods(),
+            String::from_utf8_lossy(&output)
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        fixture.app_server_pids().is_empty(),
+        "the TUI started its own app-server although the Gateway runs"
+    );
+    assert_eq!(
+        gateway.methods().first().map(String::as_str),
+        Some("initialize")
+    );
+
+    drop(master);
+    let (status, stderr) = child
+        .wait_for_exit(DISCONNECT_TIMEOUT)
+        .expect("native TUI should exit after its controlling PTY disconnects");
+    assert!(
+        status.success(),
+        "native TUI should exit cleanly: {status}; stderr: {stderr}"
+    );
+    let deadline = Instant::now() + DISCONNECT_TIMEOUT;
+    while gateway.open_sessions() > 0 {
+        assert!(
+            Instant::now() < deadline,
+            "the relay session outlived the TUI"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn read_terminal_output(master: &mut File, output: &mut Vec<u8>) {
+    let mut buffer = [0_u8; 4096];
+    match master.read(&mut buffer) {
+        Ok(read) => {
+            let before = count_cursor_queries(output);
+            output.extend_from_slice(&buffer[..read]);
+            for _ in before..count_cursor_queries(output) {
+                master
+                    .write_all(b"\x1b[1;1R")
+                    .expect("PTY should accept a cursor-position response");
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+        Err(error) => panic!("PTY startup output should remain readable: {error}"),
+    }
+}
+
+fn count_cursor_queries(output: &[u8]) -> usize {
+    output
+        .windows(b"\x1b[6n".len())
+        .filter(|window| *window == b"\x1b[6n")
+        .count()
+}
+
+/// A fake Gateway on the client endpoint of `AKRA_HOME`. It answers the app-server calls of TUI startup
+/// itself, as the real Gateway relays them to its upstream.
+struct FakeGateway {
+    state: std::sync::Arc<std::sync::Mutex<FakeGatewayState>>,
+}
+
+#[derive(Default)]
+struct FakeGatewayState {
+    methods: Vec<String>,
+    open_sessions: usize,
+}
+
+impl FakeGateway {
+    fn start(run_dir: &Path) -> Self {
+        create_private_directory(run_dir);
+        let socket = run_dir.join("gateway.sock");
+        let state = std::sync::Arc::new(std::sync::Mutex::new(FakeGatewayState::default()));
+        let served = state.clone();
+        let (ready, bound) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("fake Gateway runtime");
+            runtime.block_on(async move {
+                let listener =
+                    tokio::net::UnixListener::bind(&socket).expect("fake Gateway should bind");
+                ready.send(()).expect("test waits for the fake Gateway");
+                loop {
+                    let Ok((stream, _)) = listener.accept().await else {
+                        return;
+                    };
+                    tokio::spawn(serve_gateway_session(stream, served.clone()));
+                }
+            });
+        });
+        bound.recv().expect("fake Gateway should start");
+        Self { state }
+    }
+
+    fn methods(&self) -> Vec<String> {
+        self.state.lock().unwrap().methods.clone()
+    }
+
+    fn open_sessions(&self) -> usize {
+        self.state.lock().unwrap().open_sessions
+    }
+}
+
+async fn serve_gateway_session(
+    stream: tokio::net::UnixStream,
+    state: std::sync::Arc<std::sync::Mutex<FakeGatewayState>>,
+) {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    // The TUI's startup probe connects and leaves without a handshake.
+    let Ok(mut socket) = tokio_tungstenite::accept_async(stream).await else {
+        return;
+    };
+    state.lock().unwrap().open_sessions += 1;
+    while let Some(Ok(message)) = socket.next().await {
+        let Message::Text(text) = message else {
+            continue;
+        };
+        let request: serde_json::Value = serde_json::from_str(&text).expect("JSON request");
+        let method = request["method"].as_str().unwrap_or_default().to_string();
+        state.lock().unwrap().methods.push(method.clone());
+        if request.get("id").is_none() {
+            continue;
+        }
+        let reply = match method.as_str() {
+            "initialize" => serde_json::json!({"id": request["id"], "result": {
+                "userAgent": "codex-app-server/gateway-relay-fixture",
+                "platformFamily": "unix",
+                "platformOs": std::env::consts::OS,
+            }}),
+            "account/read" => serde_json::json!({"id": request["id"], "result": {
+                "account": {"type": "chatgpt", "email": "relay-fixture@example.com", "planType": "test"},
+                "requiresOpenAIAuth": false,
+            }}),
+            "thread/list" => {
+                serde_json::json!({"id": request["id"], "result": {"data": [], "nextCursor": null}})
+            }
+            other => serde_json::json!({"id": request["id"], "error": {
+                "message": format!("unexpected fixture method {other}"),
+            }}),
+        };
+        if socket.send(Message::text(reply.to_string())).await.is_err() {
+            break;
+        }
+    }
+    state.lock().unwrap().open_sessions -= 1;
+}
+
 fn open_pty(columns: u16, rows: u16) -> io::Result<(File, File)> {
     let mut master_fd: RawFd = -1;
     let mut slave_fd: RawFd = -1;
@@ -259,6 +446,7 @@ impl Drop for ChildGuard {
 
 struct IsolatedTuiFixture {
     root: PathBuf,
+    short_akra_home: Option<PathBuf>,
     trusted_launcher_root: PathBuf,
     fake_bin: PathBuf,
     workspace: PathBuf,
@@ -306,6 +494,7 @@ impl IsolatedTuiFixture {
 
         Self {
             root,
+            short_akra_home: None,
             trusted_launcher_root,
             fake_bin,
             workspace,
@@ -315,6 +504,20 @@ impl IsolatedTuiFixture {
             app_server_pid_log,
             app_server_request_log,
         }
+    }
+
+    /// The Gateway socket lives under `AKRA_HOME`. A unix socket path has at most 103 bytes on macOS, and
+    /// the system temp folder there is long, so this home sits under `/tmp`.
+    fn with_short_akra_home(mut self) -> Self {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after the epoch")
+            .subsec_nanos();
+        let short = PathBuf::from(format!("/tmp/akra-k61-{}-{nonce}", std::process::id()));
+        create_private_directory(&short);
+        self.akra_home = short.clone();
+        self.short_akra_home = Some(short);
+        self
     }
 
     fn process_path(&self) -> std::ffi::OsString {
@@ -398,6 +601,9 @@ impl Drop for IsolatedTuiFixture {
             }
         }
         let _ = fs::remove_dir_all(&self.root);
+        if let Some(short_akra_home) = &self.short_akra_home {
+            let _ = fs::remove_dir_all(short_akra_home);
+        }
         let _ = fs::remove_dir_all(&self.trusted_launcher_root);
     }
 }
