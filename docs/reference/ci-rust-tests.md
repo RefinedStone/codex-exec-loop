@@ -42,6 +42,9 @@ adapter::inbound::gateway::tests::human_confirmation::native_process::native_hel
 
 ## 보류 근거와 재개 조건
 
+2026-11-24~26 CI 표본에 따른 제안 판단(측정 도구로만 사용)은
+[CI 빌드 비용 비교](../validation/ci-build-cost.md#판단-제안)에 있다. 사용자 확정 전까지 아래 보류가 유효하다.
+
 [#2690의 기존 성공 실행](https://github.com/RefinedStone/codex-exec-loop/actions/runs/45231960486)은
 Linux lib 실행 552.65초, architecture 실행 103.04초를 보고한다. baseline commit은
 c63bec6e59b8c20e7247eb2ba597376d24805369이며 이 검토의 prerelease와 같지 않다.

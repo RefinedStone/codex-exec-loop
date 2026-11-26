@@ -104,3 +104,5 @@ summary의 gate/workflow/runner 시간과 미완료·duration 누락 개수를 �
 계측 경로와 비교 형식을 구현한 것이며, 반복 cold/warm 실험이나 로컬 Rust 전체 빌드를 새로 실행하지 않았다.
 사용자의 요청에 따라 단계별 CI를 조회하지 않고 최종 단계에서 한 번만 확인한다.
 속도 개선의 확정값은 같은 조건의 후속 표본이 쌓인 뒤 기록한다.
+
+2026-11-24~26 CI 표본의 cold·캐시 재사용·소스 변경 비교와 `lanes`(lane·명령·target 캐시별 빌드/시험 중앙값·p90) 사용법은 [CI 빌드 비용 비교](../validation/ci-build-cost.md)에 있다.
