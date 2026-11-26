@@ -15,7 +15,8 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const SERVER_TEST: &str = "application::service::evidence_vault_unlock::process_initialization_tests::credential_server_process";
@@ -28,6 +29,7 @@ const MODE_ENV: &str = "AKRA_TEST_VAULT_KEY_MODE";
 const GATE_ENV: &str = "AKRA_TEST_VAULT_KEY_LOAD_GATE";
 const LIFETIME: Duration = Duration::from_secs(30);
 const MAX_FRAME: u64 = 16 * 1024;
+const STDERR_TAIL: usize = 4 * 1024;
 const PROOF: &[u8] = b"synthetic-key-initialization-proof";
 
 // 키 원문이 포함되는 DTO에는 Debug를 구현하지 않는다.
@@ -61,6 +63,28 @@ pub(super) enum Notice {
     Finished(WorkerResult),
     Snapshot(Snapshot),
     Verified(bool),
+}
+impl Notice {
+    /// 키 바이트, key_id, 암호문 없이 종류와 worker, 안전한 실패 분류만 적는다.
+    fn describe(&self) -> String {
+        match self {
+            Self::Ready { .. } => "Ready".to_string(),
+            Self::LoadWaiting { worker } => format!("LoadWaiting {{ worker: {worker} }}"),
+            Self::BeforeStoreWaiting { worker } => {
+                format!("BeforeStoreWaiting {{ worker: {worker} }}")
+            }
+            Self::StoreWaiting { worker, .. } => format!("StoreWaiting {{ worker: {worker} }}"),
+            Self::Finished(result) => format!(
+                "Finished {{ worker: {}, failure: {:?}, key_id present: {}, ciphertext present: {} }}",
+                result.worker,
+                result.failure,
+                result.key_id.is_some(),
+                result.ciphertext.is_some(),
+            ),
+            Self::Snapshot(snapshot) => format!("{snapshot:?}"),
+            Self::Verified(matches) => format!("Verified({matches})"),
+        }
+    }
 }
 #[derive(Serialize, Deserialize)]
 pub(super) struct WorkerResult {
@@ -109,14 +133,18 @@ fn configure(stream: &TcpStream) -> io::Result<()> {
     stream.set_nodelay(true)
 }
 
-struct ManagedChild(Child);
+struct ManagedChild {
+    child: Child,
+    stderr: Arc<Mutex<Vec<u8>>>,
+    reader: Option<JoinHandle<()>>,
+}
 impl ManagedChild {
     fn spawn(test: &str, environment: &[(&str, OsString)]) -> Self {
         let mut command = Command::new(std::env::current_exe().expect("test executable"));
         command
             .args(["--exact", test, "--nocapture", "--test-threads=1"])
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped());
         // 부모의 역할이나 시험 설정을 다른 역할의 자식에게 물려주지 않는다.
         for name in [
             CONTROL_ENV,
@@ -131,13 +159,60 @@ impl ManagedChild {
         for (name, value) in environment {
             command.env(name, value);
         }
-        Self(command.spawn().expect("synthetic child process"))
+        let mut child = command.spawn().expect("synthetic child process");
+        let mut pipe = child.stderr.take().expect("synthetic child stderr");
+        let stderr = Arc::new(Mutex::new(Vec::new()));
+        let tail = stderr.clone();
+        // pipe가 차서 자식이 멈추지 않도록 계속 읽고, 마지막 STDERR_TAIL byte만 보존한다.
+        let reader = std::thread::spawn(move || {
+            let mut chunk = [0; 1024];
+            while let Ok(count @ 1..) = pipe.read(&mut chunk) {
+                let mut tail = tail.lock().unwrap_or_else(|error| error.into_inner());
+                tail.extend_from_slice(&chunk[..count]);
+                let excess = tail.len().saturating_sub(STDERR_TAIL);
+                tail.drain(..excess);
+            }
+        });
+        Self {
+            child,
+            stderr,
+            reader: Some(reader),
+        }
+    }
+
+    /// 실패 진단에만 쓴다. `until`까지 종료를 기다린 뒤 상태와 stderr 끝부분을 돌려준다.
+    fn diagnostics(&mut self, until: Instant) -> String {
+        let status = loop {
+            match self.child.try_wait() {
+                Ok(None) if Instant::now() < until => std::thread::sleep(Duration::from_millis(5)),
+                Ok(status) => break status,
+                Err(_) => break None,
+            }
+        };
+        if status.is_some()
+            && let Some(reader) = self.reader.take()
+        {
+            let _ = reader.join();
+        }
+        let tail = self
+            .stderr
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        format!(
+            "status={}, stderr tail={:?}",
+            status.map_or_else(|| "running".to_string(), |status| status.to_string()),
+            String::from_utf8_lossy(&tail),
+        )
     }
 
     fn wait_success(&mut self, deadline: Instant) {
         loop {
-            if let Some(status) = self.0.try_wait().expect("child status") {
-                assert!(status.success(), "synthetic child failed: {status}");
+            if let Some(status) = self.child.try_wait().expect("child status") {
+                assert!(
+                    status.success(),
+                    "synthetic child failed: {}",
+                    self.diagnostics(Instant::now())
+                );
                 return;
             }
             assert!(Instant::now() < deadline, "synthetic child deadline");
@@ -146,15 +221,15 @@ impl ManagedChild {
     }
 
     fn kill_and_wait(&mut self) {
-        self.0.kill().expect("kill paused synthetic worker");
-        let status = self.0.wait().expect("reap paused synthetic worker");
+        self.child.kill().expect("kill paused synthetic worker");
+        let status = self.child.wait().expect("reap paused synthetic worker");
         assert!(!status.success(), "the paused worker must be terminated");
     }
 }
 impl Drop for ManagedChild {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -304,8 +379,9 @@ impl Harness {
     pub fn release_loads(&mut self, workers: &[u8]) {
         let mut waiting = HashSet::new();
         for _ in workers {
-            let Notice::LoadWaiting { worker } = self.next() else {
-                panic!("expected initial absent-key observation")
+            let worker = match self.next() {
+                Notice::LoadWaiting { worker } => worker,
+                other => self.unexpected("initial absent-key observation", &other),
             };
             assert!(
                 waiting.insert(worker),
@@ -320,14 +396,26 @@ impl Harness {
         self.controller.next()
     }
 
+    /// 예상 밖 notice를 안전하게 요약하고, 모든 자식의 종료 상태와 stderr 끝부분을 붙인다.
+    pub fn unexpected(&mut self, expected: &str, notice: &Notice) -> ! {
+        let until = Instant::now() + Duration::from_secs(1);
+        let mut report = format!("expected {expected}, received {}", notice.describe());
+        for (worker, child) in &mut self.workers {
+            report.push_str(&format!("\nworker {worker}: {}", child.diagnostics(until)));
+        }
+        report.push_str(&format!("\nserver: {}", self.server.diagnostics(until)));
+        panic!("{report}")
+    }
+
     pub fn apply_next_store(&mut self, acknowledge: bool) {
         self.controller
             .send(Control::CommitNextStore { acknowledge });
     }
 
     pub fn result(&mut self, worker: u8) -> WorkerResult {
-        let Notice::Finished(result) = self.next() else {
-            panic!("expected worker result without another store")
+        let result = match self.next() {
+            Notice::Finished(result) => result,
+            other => self.unexpected("worker result without another store", &other),
         };
         assert_eq!(result.worker, worker);
         self.wait_worker(worker);
@@ -351,17 +439,21 @@ impl Harness {
             .1
             .kill_and_wait();
         assert!(
-            self.server.0.try_wait().expect("server status").is_none(),
+            self.server
+                .child
+                .try_wait()
+                .expect("server status")
+                .is_none(),
             "credential server survives worker death"
         );
     }
 
     pub fn snapshot(&mut self) -> Snapshot {
         self.controller.send(Control::Snapshot);
-        let Notice::Snapshot(snapshot) = self.next() else {
-            panic!("expected durable snapshot")
-        };
-        snapshot
+        match self.next() {
+            Notice::Snapshot(snapshot) => snapshot,
+            other => self.unexpected("durable snapshot", &other),
+        }
     }
 
     pub fn opens(&mut self, result: &WorkerResult) -> bool {
@@ -372,10 +464,10 @@ impl Harness {
                 .expect("successful sealing proof")
                 .clone(),
         });
-        let Notice::Verified(matches) = self.next() else {
-            panic!("expected proof verification")
-        };
-        matches
+        match self.next() {
+            Notice::Verified(matches) => matches,
+            other => self.unexpected("proof verification", &other),
+        }
     }
 
     pub fn assert_runtime_empty(&self) {
@@ -396,13 +488,24 @@ struct CredentialClient {
 }
 impl CredentialClient {
     fn request(&self, request: CredentialRequest) -> Result<CredentialReply, VaultKeyStoreError> {
+        let kind = match request {
+            CredentialRequest::Load { .. } => "load",
+            CredentialRequest::BeforeStore { .. } => "before-store",
+            CredentialRequest::Store { .. } => "store",
+            CredentialRequest::Finished(_) => "finished",
+        };
         let exchange = || -> io::Result<CredentialReply> {
             let mut stream = TcpStream::connect_timeout(&self.address, LIFETIME)?;
             configure(&stream)?;
             write_frame(&mut stream, &request)?;
             read_frame(&mut BufReader::new(stream))
         };
-        exchange().map_err(|_| {
+        exchange().map_err(|error| {
+            // 요청 본문(키)은 적지 않는다. 부모가 이 줄을 worker stderr 끝부분으로 보고한다.
+            eprintln!(
+                "synthetic worker {} {kind} RPC failed: {error}",
+                self.worker
+            );
             VaultKeyStoreError::Unavailable("synthetic credential RPC failed".to_string())
         })
     }

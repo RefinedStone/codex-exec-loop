@@ -45,7 +45,7 @@ impl Journal {
         scope: String,
     ) -> Result<Self, VaultKeyStoreError> {
         let mut opened = crate::private_sqlite::open_or_create(runtime, FILES, Synchronous::Extra)
-            .map_err(|_| unavailable())?;
+            .map_err(|error| failed("open", error))?;
         let (connection, guard) = opened.parts();
         ensure_schema(connection, guard)?;
         Ok(Self { opened, scope })
@@ -53,23 +53,23 @@ impl Journal {
 
     pub(super) fn verify_identity(&mut self) -> Result<(), VaultKeyStoreError> {
         let (_, guard) = self.opened.parts();
-        verify(guard)
+        verify(guard, "identity")
     }
 
     pub(super) fn snapshot(&mut self) -> Result<Option<State>, VaultKeyStoreError> {
         let (connection, guard) = self.opened.parts();
-        verify(guard)?;
+        verify(guard, "snapshot")?;
         let state = read_state(connection, &self.scope)?;
-        verify(guard)?;
+        verify(guard, "snapshot")?;
         Ok(state)
     }
 
     pub(super) fn begin(&mut self) -> Result<JournalTransaction<'_>, VaultKeyStoreError> {
         let (connection, guard) = self.opened.parts();
-        verify(guard)?;
+        verify(guard, "begin")?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|_| unavailable())?;
+            .map_err(|error| failed("begin", error))?;
         Ok(JournalTransaction {
             transaction,
             guard,
@@ -86,7 +86,7 @@ pub(super) struct JournalTransaction<'a> {
 
 impl JournalTransaction<'_> {
     pub(super) fn snapshot(&self) -> Result<Option<State>, VaultKeyStoreError> {
-        verify(self.guard)?;
+        verify(self.guard, "snapshot")?;
         read_state(&self.transaction, self.scope)
     }
 
@@ -101,7 +101,7 @@ impl JournalTransaction<'_> {
         let generation = previous
             .map_or(Some(1), |state| state.generation.checked_add(1))
             .ok_or_else(unavailable)?;
-        verify(self.guard)?;
+        verify(self.guard, "pending write")?;
         self.transaction
             .execute(
                 "INSERT INTO vault_key_initialization(scope, generation, phase, fingerprint)
@@ -110,7 +110,7 @@ impl JournalTransaction<'_> {
                  phase = excluded.phase, fingerprint = excluded.fingerprint",
                 params![self.scope, generation, fingerprint.as_slice()],
             )
-            .map_err(|_| unavailable())?;
+            .map_err(|error| failed("pending write", error))?;
         Ok(State {
             generation,
             phase: Phase::Pending,
@@ -119,7 +119,7 @@ impl JournalTransaction<'_> {
     }
 
     pub(super) fn settle(&self, expected: &State) -> Result<(), VaultKeyStoreError> {
-        verify(self.guard)?;
+        verify(self.guard, "settle write")?;
         let changed = self
             .transaction
             .execute(
@@ -131,7 +131,7 @@ impl JournalTransaction<'_> {
                     expected.fingerprint.as_slice()
                 ],
             )
-            .map_err(|_| unavailable())?;
+            .map_err(|error| failed("settle write", error))?;
         if changed != 1 {
             return Err(unavailable());
         }
@@ -139,30 +139,44 @@ impl JournalTransaction<'_> {
     }
 
     pub(super) fn commit(self) -> Result<(), VaultKeyStoreError> {
-        verify(self.guard)?;
-        self.transaction.commit().map_err(|_| unavailable())?;
-        verify(self.guard)
+        verify(self.guard, "commit")?;
+        self.transaction
+            .commit()
+            .map_err(|error| failed("commit", error))?;
+        verify(self.guard, "commit")
     }
 }
 
-fn verify(guard: &PrivateStoreGuard) -> Result<(), VaultKeyStoreError> {
-    guard.verify_identity().map_err(|_| unavailable())
+fn verify(guard: &PrivateStoreGuard, stage: &'static str) -> Result<(), VaultKeyStoreError> {
+    guard
+        .verify_identity()
+        .map_err(|error| failed(stage, error))
+}
+
+/// 제품 오류는 고정 문구만 쓴다. 시험 프로세스에서만 실패 경계와 하위 오류를 stderr에 남긴다.
+/// journal에는 키 재료가 없고 SQL 인자는 오류 문구에 들어가지 않는다.
+fn failed(stage: &'static str, error: impl std::fmt::Debug) -> VaultKeyStoreError {
+    #[cfg(test)]
+    eprintln!("vault key initialization journal {stage} failed: {error:?}");
+    #[cfg(not(test))]
+    let _ = (stage, error);
+    unavailable()
 }
 
 fn ensure_schema(
     connection: &mut Connection,
     guard: &PrivateStoreGuard,
 ) -> Result<(), VaultKeyStoreError> {
-    verify(guard)?;
+    verify(guard, "schema")?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|_| unavailable())?;
+        .map_err(|error| failed("schema", error))?;
     let application_id: i64 = transaction
         .query_row("PRAGMA application_id", [], |row| row.get(0))
-        .map_err(|_| unavailable())?;
+        .map_err(|error| failed("schema", error))?;
     let version: i64 = transaction
         .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .map_err(|_| unavailable())?;
+        .map_err(|error| failed("schema", error))?;
     if application_id == 0 && version == 0 {
         let objects: i64 = transaction
             .query_row(
@@ -170,26 +184,28 @@ fn ensure_schema(
                 [],
                 |row| row.get(0),
             )
-            .map_err(|_| unavailable())?;
+            .map_err(|error| failed("schema", error))?;
         if objects != 0 {
-            return Err(unavailable());
+            return Err(failed("schema", "unexpected objects in a new journal"));
         }
         transaction
             .execute_batch(TABLE_SQL)
-            .map_err(|_| unavailable())?;
+            .map_err(|error| failed("schema", error))?;
         transaction
             .pragma_update(None, "application_id", APPLICATION_ID)
-            .map_err(|_| unavailable())?;
+            .map_err(|error| failed("schema", error))?;
         transaction
             .pragma_update(None, "user_version", SCHEMA_VERSION)
-            .map_err(|_| unavailable())?;
+            .map_err(|error| failed("schema", error))?;
     } else if application_id != APPLICATION_ID || version != SCHEMA_VERSION {
-        return Err(unavailable());
+        return Err(failed("schema", "unexpected application id or version"));
     }
     validate_schema(&transaction)?;
-    verify(guard)?;
-    transaction.commit().map_err(|_| unavailable())?;
-    verify(guard)
+    verify(guard, "schema")?;
+    transaction
+        .commit()
+        .map_err(|error| failed("schema", error))?;
+    verify(guard, "schema")
 }
 
 fn validate_schema(connection: &Connection) -> Result<(), VaultKeyStoreError> {
@@ -198,7 +214,7 @@ fn validate_schema(connection: &Connection) -> Result<(), VaultKeyStoreError> {
             "SELECT type, name, sql FROM sqlite_schema
          WHERE name NOT GLOB 'sqlite_*' ORDER BY name",
         )
-        .map_err(|_| unavailable())?;
+        .map_err(|error| failed("schema validation", error))?;
     let objects = statement
         .query_map([], |row| {
             Ok((
@@ -207,15 +223,15 @@ fn validate_schema(connection: &Connection) -> Result<(), VaultKeyStoreError> {
                 row.get::<_, String>(2)?,
             ))
         })
-        .map_err(|_| unavailable())?
+        .map_err(|error| failed("schema validation", error))?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| unavailable())?;
+        .map_err(|error| failed("schema validation", error))?;
     if objects.len() != 1
         || objects[0].0 != "table"
         || objects[0].1 != "vault_key_initialization"
         || objects[0].2 != TABLE_SQL
     {
-        return Err(unavailable());
+        return Err(failed("schema validation", "unexpected schema objects"));
     }
     Ok(())
 }
@@ -234,7 +250,7 @@ fn read_state(connection: &Connection, scope: &str) -> Result<Option<State>, Vau
             },
         )
         .optional()
-        .map_err(|_| unavailable())?;
+        .map_err(|error| failed("state read", error))?;
     let Some((generation, phase, fingerprint)) = raw else {
         return Ok(None);
     };

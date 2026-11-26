@@ -15,12 +15,9 @@ fn sealing_worker_process() {
 }
 
 fn expect_store(harness: &mut Harness, worker: u8) -> String {
-    let Notice::StoreWaiting {
-        worker: actual,
-        key_id,
-    } = harness.next()
-    else {
-        panic!("expected a paused credential store")
+    let (actual, key_id) = match harness.next() {
+        Notice::StoreWaiting { worker, key_id } => (worker, key_id),
+        other => harness.unexpected("a paused credential store", &other),
     };
     assert_eq!(actual, worker);
     key_id
@@ -52,7 +49,7 @@ fn two_processes_share_one_durable_initialization_key() {
         match harness.next() {
             Notice::StoreWaiting { .. } => harness.apply_next_store(true),
             Notice::Finished(result) => results.push(result),
-            _ => panic!("unexpected initialization notice"),
+            other => harness.unexpected("a credential store or worker result", &other),
         }
     }
     harness.wait_worker(1);
@@ -203,8 +200,12 @@ fn death_after_durable_intent_but_before_store_rpc_holds_with_zero_store_request
     let mut harness = Harness::new(1);
     harness.spawn(1, WorkerMode::PauseBeforeStore);
     harness.release_loads(&[1]);
-    let Notice::BeforeStoreWaiting { worker } = harness.next() else {
-        panic!("expected the committed-intent checkpoint before credential STORE")
+    let worker = match harness.next() {
+        Notice::BeforeStoreWaiting { worker } => worker,
+        other => harness.unexpected(
+            "the committed-intent checkpoint before credential STORE",
+            &other,
+        ),
     };
     assert_eq!(worker, 1);
     harness.kill_worker(1);
