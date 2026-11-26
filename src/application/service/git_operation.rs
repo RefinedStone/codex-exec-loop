@@ -5,9 +5,13 @@
  * 브랜치를 옮기는 작업이면 백업 ref 를 쓴다 → git 명령을 실행한다 → 일지에 끝을 적는다. 되돌리기는 같은 길로 거꾸로
  * 가는 작업 하나이다.
  *
- * 턴이 실행 중인 작업 트리를 이 서비스는 알지 못한다. Desktop 의 턴은 Gateway 가 app-server 로 그대로 넘기고 커널을
- * 거치지 않는다. 그 확인은 지금 화면이 한다 (plan 27 §9.3).
+ * Gateway 가 넘기는 턴은 `TurnActivityRegistry` 가 기억한다. 계획은 이 작업 트리에 폴더가 있는 스레드의 턴이 실행
+ * 중이면 막는다 (#2850). 그래서 Desktop 밖의 클라이언트(CLI 등)의 요청도 거절한다. Gateway 를 거치지 않는 턴과
+ * 폴더를 모르는 턴은 막지 못한다.
+ *
+ * 큐는 저장소마다 하나이다 (plan 27 §3.4). 같은 저장소의 모든 작업 트리가 같은 큐를 쓴다.
  */
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, bail};
@@ -20,6 +24,7 @@ use crate::application::port::outbound::git_operation_journal_port::GitOperation
 use crate::application::port::outbound::git_workspace_port::{
     GitWorkspaceCondition, GitWorkspacePort,
 };
+use crate::application::service::turn_activity::TurnActivityRegistry;
 use crate::domain::git_graph::{
     GIT_BACKUP_REF_PREFIX, GitGraphRefKind, GitGraphWorktree, is_git_commit_id,
 };
@@ -27,7 +32,7 @@ use crate::domain::git_operation::{
     GIT_AGENT_BRANCH_PREFIX, GIT_OPERATION_LIST_LIMIT, GitHeadPosition, GitOperation,
     GitOperationBlocker, GitOperationBlockerCode, GitOperationExpectation, GitOperationPlan,
     GitOperationRecord, GitOperationStatus, git_backup_ref_name, git_backups_to_prune,
-    git_operation_id, same_git_worktree_path,
+    git_operation_id, git_worktree_containing, same_git_worktree_path,
 };
 
 /// 지금 시각(Unix 초)과 작업 id 를 가르는 임의의 수이다.
@@ -38,9 +43,9 @@ pub struct GitOperationService {
     workspace: Arc<dyn GitWorkspacePort>,
     journal: Arc<dyn GitOperationJournalPort>,
     stamp: GitOperationStamp,
-    // shortcut: 모든 저장소가 큐 하나를 쓴다 (§3.4 는 저장소마다 하나이다), 긴 작업(G4 cherry-pick)이 다른 저장소를
-    // 기다리게 하면 저장소 신원으로 나눈다.
-    queue: Mutex<()>,
+    turns: Arc<TurnActivityRegistry>,
+    /// 저장소(대표 작업 트리)마다 큐 하나이다.
+    queues: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
 
 impl GitOperationService {
@@ -49,14 +54,35 @@ impl GitOperationService {
         workspace: Arc<dyn GitWorkspacePort>,
         journal: Arc<dyn GitOperationJournalPort>,
         stamp: GitOperationStamp,
+        turns: Arc<TurnActivityRegistry>,
     ) -> Self {
         Self {
             history,
             workspace,
             journal,
             stamp,
-            queue: Mutex::new(()),
+            turns,
+            queues: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// 저장소의 큐이다. 저장소의 신원은 대표 작업 트리(`git worktree list` 의 첫째)이다. 읽지 못하면 폴더이다.
+    fn repository_queue(&self, repository_dir: &str) -> Arc<Mutex<()>> {
+        let identity = self
+            .history
+            .read_refs(repository_dir)
+            .ok()
+            .flatten()
+            .and_then(|refs| refs.worktrees.first().map(|main| main.path.clone()))
+            .unwrap_or_else(|| repository_dir.to_string());
+        // shortcut: lower-case keys merge case-different paths on case-sensitive file systems; that only serializes more.
+        let key = identity.replace('\\', "/").to_ascii_lowercase();
+        self.queues
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entry(key)
+            .or_default()
+            .clone()
     }
 }
 
@@ -71,8 +97,8 @@ impl GitOperationPort for GitOperationService {
         operation: GitOperation,
         expectation: GitOperationExpectation,
     ) -> Result<GitOperationOutcome> {
-        let _queue = self
-            .queue
+        let queue = self.repository_queue(repository_dir);
+        let _queue = queue
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let plan = self.build_plan(repository_dir, operation)?.plan;
@@ -90,8 +116,8 @@ impl GitOperationPort for GitOperationService {
     }
 
     fn undo(&self, repository_dir: &str, op_id: &str) -> Result<GitOperationOutcome> {
-        let _queue = self
-            .queue
+        let queue = self.repository_queue(repository_dir);
+        let _queue = queue
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let records = self.journal.load(repository_dir)?;
@@ -198,6 +224,7 @@ impl GitOperationService {
                 format!("a {name} is in progress in this worktree"),
             );
         }
+        self.block_running_turn(&refs, repository_dir, &mut plan);
         match &operation {
             GitOperation::Reset { target } => {
                 self.plan_reset(repository_dir, &head, &condition, target, &mut plan)?;
@@ -216,6 +243,29 @@ impl GitOperationService {
             plan,
             refs: Some(refs),
         })
+    }
+
+    /// 이 작업 트리에 폴더가 있는 스레드의 턴이 실행 중이면 막는다.
+    fn block_running_turn(
+        &self,
+        refs: &GitHistoryRefs,
+        repository_dir: &str,
+        plan: &mut GitOperationPlan,
+    ) {
+        let Some(target) = git_worktree_containing(&refs.worktrees, repository_dir) else {
+            return;
+        };
+        let busy = self.turns.running_folders().iter().any(|folder| {
+            git_worktree_containing(&refs.worktrees, folder)
+                .is_some_and(|worktree| same_git_worktree_path(&worktree.path, &target.path))
+        });
+        if busy {
+            block(
+                plan,
+                GitOperationBlockerCode::TurnRunning,
+                "a thread whose folder is in this worktree has a turn in progress; wait until it ends",
+            );
+        }
     }
 
     fn plan_reset(
@@ -645,7 +695,7 @@ mod tests {
     }
 
     impl GitHistoryPort for FakeRepository {
-        fn read_refs(&self, _repository_dir: &str) -> Result<Option<GitHistoryRefs>> {
+        fn read_refs(&self, repository_dir: &str) -> Result<Option<GitHistoryRefs>> {
             let state = self.state.lock().unwrap();
             let mut refs: Vec<GitGraphRef> = state
                 .branches
@@ -668,8 +718,14 @@ mod tests {
                     head: false,
                 }
             }));
+            // `/second` 은 다른 저장소이다. 나머지 폴더는 모두 `/repo` 저장소이다.
+            let main = if repository_dir.starts_with("/second") {
+                "/second"
+            } else {
+                "/repo"
+            };
             let mut worktrees = vec![GitGraphWorktree {
-                path: "/repo".to_string(),
+                path: main.to_string(),
                 head: Some(state.head_commit.clone()),
                 branch: state.head_branch.clone(),
             }];
@@ -837,6 +893,7 @@ mod tests {
     struct Fixture {
         repository: Arc<FakeRepository>,
         journal: Arc<MemoryJournal>,
+        turns: Arc<TurnActivityRegistry>,
         service: GitOperationService,
     }
 
@@ -846,15 +903,18 @@ mod tests {
         let repository = FakeRepository::new();
         let journal = Arc::new(MemoryJournal::default());
         let nonce = AtomicU32::new(0);
+        let turns = Arc::new(TurnActivityRegistry::default());
         let service = GitOperationService::new(
             repository.clone(),
             repository.clone(),
             journal.clone(),
             Arc::new(move || (NOW, nonce.fetch_add(1, Ordering::SeqCst))),
+            turns.clone(),
         );
         Fixture {
             repository,
             journal,
+            turns,
             service,
         }
     }
@@ -874,6 +934,67 @@ mod tests {
             GitOperationOutcome::Done { record } => record,
             other => panic!("the operation did not finish: {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_running_turn_in_this_worktree_blocks_the_plan_and_the_execution() {
+        let fixture = fixture();
+        fixture
+            .repository
+            .edit(|state| state.other_worktree_branch = Some("topic".to_string()));
+        let observer = fixture.turns.observer();
+        observer.thread_folder("here", "/repo/src");
+        observer.turn_running("here", true);
+
+        let plan = fixture.service.plan("/repo", reset_to('a')).unwrap();
+        assert_eq!(codes(&plan), [GitOperationBlockerCode::TurnRunning]);
+        let outcome = fixture
+            .service
+            .execute("/repo", reset_to('a'), plan.expectation.clone())
+            .unwrap();
+        assert!(matches!(outcome, GitOperationOutcome::Stale { .. }));
+        assert!(fixture.repository.calls().is_empty());
+
+        // A turn in another worktree of the same repository leaves this worktree alone.
+        observer.turn_running("here", false);
+        let other = fixture.turns.observer();
+        other.thread_folder("there", "/repo-other");
+        other.turn_running("there", true);
+        let plan = fixture.service.plan("/repo", reset_to('a')).unwrap();
+        assert!(plan.blockers.is_empty(), "{:?}", plan.blockers);
+        done(
+            fixture
+                .service
+                .execute("/repo", reset_to('a'), plan.expectation)
+                .unwrap(),
+        );
+    }
+
+    #[test]
+    fn each_repository_has_its_own_queue() {
+        let fixture = fixture();
+        let service = Arc::new(fixture.service);
+        assert!(Arc::ptr_eq(
+            &service.repository_queue("/repo"),
+            &service.repository_queue("/repo-other"),
+        ));
+        let busy = service.repository_queue("/repo");
+        let _held = busy.lock().unwrap();
+        let (sent, received) = std::sync::mpsc::channel();
+        let other = service.clone();
+        std::thread::spawn(move || {
+            let plan = other.plan("/second", reset_to('a')).unwrap();
+            sent.send(
+                other
+                    .execute("/second", reset_to('a'), plan.expectation)
+                    .map(|_| ()),
+            )
+            .unwrap();
+        });
+        received
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("another repository must not wait for this queue")
+            .unwrap();
     }
 
     #[test]

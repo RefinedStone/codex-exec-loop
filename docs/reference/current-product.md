@@ -1350,9 +1350,15 @@ The Gateway records the external documents that a thread mentions, without a mod
   "실행". When the Gateway answers `stale`, the panel shows the new plan and does not run it. A
   finished operation shows one notice line with "되돌리기", and "작업 기록" lists the journal. "실행"
   and "되돌리기" are off while the open thread, or another thread whose folder is in the same
-  worktree, has a turn in progress; this check exists only in Desktop
-  (`desktop/src/renderer/git/GitOperationViews.tsx`). "되돌리기" of a reset or a checkout shows only in
-  the worktree that ran it.
+  worktree, has a turn in progress (`desktop/src/renderer/git/GitOperationViews.tsx`). The daemon also
+  refuses (#2850): the Gateway remembers, per client connection, each thread's folder and whether its
+  turn runs (from the app-server messages it relays), and a plan gets the `turn_running` blocker while
+  a thread whose folder is in the target worktree has a turn in progress. So requests from the CLI or
+  any other client are refused too. Turns that do not pass through a Gateway connection (the kernel's
+  own app-server connection) and threads whose folder the Gateway has not seen are not counted; when
+  a connection closes, the Gateway forgets what it saw on it. Operations wait in one queue per
+  repository (all worktrees of a repository share it), so a long operation in one repository does
+  not hold another. "되돌리기" of a reset or a checkout shows only in the worktree that ran it.
 - Planning: `src/application/service/planning/`, `src/domain/planning/`
 - Parallel: `src/application/service/parallel_mode/`, `src/domain/parallel_mode/`
 - App-server adapter: `src/adapter/outbound/app_server/`

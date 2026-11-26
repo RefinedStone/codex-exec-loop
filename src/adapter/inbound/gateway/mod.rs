@@ -29,6 +29,7 @@ mod session;
 mod storage_context;
 #[cfg(test)]
 mod tests;
+mod turn_activity;
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -144,6 +145,7 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         providers,
         git_graph,
         git_operations,
+        turn_activity,
         conversation_workspaces,
         issue_handoff,
         dots,
@@ -180,6 +182,7 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
             delegations,
             git_graph: Some(git_graph),
             git_operations: Some(git_operations),
+            turn_activity: Some(turn_activity),
             conversation_workspaces: Some(conversation_workspaces),
             issue_handoff: Some(issue_handoff),
             dots,

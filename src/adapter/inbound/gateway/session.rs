@@ -77,6 +77,9 @@ pub(super) struct GatewayServices {
     pub(super) git_graph: Option<Arc<dyn GitGraphPort>>,
     /// git 작업 엔진이다 (plan 27 G3). `git_graph` 와 같은 `akra/git/*` 에서 답한다. `local` 접속에만 답한다.
     pub(super) git_operations: Option<Arc<dyn GitOperationPort>>,
+    /// Gateway 가 넘기는 턴의 기록이다 (#2850). `local` 접속의 upstream 메시지로 채운다.
+    pub(super) turn_activity:
+        Option<Arc<crate::application::service::turn_activity::TurnActivityRegistry>>,
     pub(super) conversation_workspaces: Option<Arc<dyn crate::application::port::inbound::conversation_workspace_port::ConversationWorkspacePort>>,
     /// 이슈 인계의 공유본이다 (#2428). 이 기기의 정책 파일과 `gh` 를 쓰므로 `local` 접속에만 답한다.
     pub(super) issue_handoff: Option<Arc<dyn IssueHandoffPort>>,
@@ -179,6 +182,12 @@ where
         .as_ref()
         .map(KernelRequests::conversation_context);
     let delegation_driver = is_local.then(|| services.delegations.connection(outbox.clone()));
+    // 이 기기의 git 작업만 이 기록을 읽는다. 접속이 끝나면 관찰자가 이 접속의 기록을 지운다.
+    let turn_activity = services
+        .turn_activity
+        .as_ref()
+        .filter(|_| is_local)
+        .map(|registry| registry.observer());
     let provider_session = if is_local {
         services
             .resource_versions
@@ -492,6 +501,9 @@ where
                         }
                         if let Some(context) = &storage_conversation {
                             context.upstream_message(text.as_str());
+                        }
+                        if let Some(observer) = &turn_activity {
+                            super::turn_activity::observe_upstream(observer, text.as_str());
                         }
                         record(RecordDirection::Gateway, text.as_str());
                     }

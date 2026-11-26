@@ -250,6 +250,7 @@ const BLOCKER_TEXT: Record<string, string> = {
   nothing_to_do: "이미 그 자리입니다.",
   branch_checked_out: "다른 작업 트리가 그 브랜치를 체크아웃했습니다. 그 작업 트리에서 하십시오.",
   agent_worktree: "병렬 작업 슬롯의 브랜치입니다. 병렬 런타임이 관리합니다.",
+  turn_running: "이 작업 트리에 폴더가 있는 스레드의 턴이 실행 중입니다. 턴이 끝난 뒤에 하십시오.",
 };
 
 /** 막는 이유를 한국어 한 문장으로 쓴다. 모르는 종류는 Gateway 의 글을 쓴다. */

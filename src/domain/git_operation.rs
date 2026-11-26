@@ -89,6 +89,8 @@ pub enum GitOperationBlockerCode {
     BranchCheckedOut,
     /// 병렬 작업 슬롯의 브랜치나 작업 트리이다.
     AgentWorktree,
+    /// 이 작업 트리에 폴더가 있는 스레드의 턴이 실행 중이다 (#2850).
+    TurnRunning,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -230,6 +232,31 @@ pub fn same_git_worktree_path(left: &str, right: &str) -> bool {
         }
     }
     comparable(left) == comparable(right)
+}
+
+/// `folder` 를 담은 작업 트리이다. 겹치면 가장 깊은 것이다. `/repo-other` 는 `/repo` 안이 아니다.
+pub fn git_worktree_containing<'a>(
+    worktrees: &'a [crate::domain::git_graph::GitGraphWorktree],
+    folder: &str,
+) -> Option<&'a crate::domain::git_graph::GitGraphWorktree> {
+    worktrees
+        .iter()
+        .filter(|worktree| git_path_contains(&worktree.path, folder))
+        .max_by_key(|worktree| worktree.path.len())
+}
+
+fn git_path_contains(root: &str, folder: &str) -> bool {
+    let root = root.replace('\\', "/");
+    let root = root.trim_end_matches('/');
+    let folder = folder.replace('\\', "/");
+    if same_git_worktree_path(root, &folder) {
+        return true;
+    }
+    // Compare the root-length prefix with the same case rule, then require a separator.
+    folder
+        .get(..root.len())
+        .is_some_and(|prefix| same_git_worktree_path(prefix, root))
+        && folder.as_bytes().get(root.len()) == Some(&b'/')
 }
 
 /// 일지의 줄들을 작업마다 하나로 접는다. 같은 id 의 뒤 줄이 앞 줄을 대신한다. 순서는 처음 나온 순서이다.
