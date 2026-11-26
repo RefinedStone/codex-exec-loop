@@ -2017,6 +2017,18 @@ mod tests {
                 origin: TurnOrigin::AutoFollow,
                 op_id: None,
             },
+            KernelEvent::TaskExecutionLinked {
+                task_id: "task-1".to_string(),
+                thread_id: "thread-1".to_string(),
+                op_id: 7,
+            },
+            KernelEvent::TurnUsageObserved {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                op_id: Some(7),
+                last: Default::default(),
+                total: Default::default(),
+            },
             KernelEvent::TurnStarted {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
