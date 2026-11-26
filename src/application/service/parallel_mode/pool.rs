@@ -45,6 +45,7 @@ lease mirror, board projection은 하위 모듈로 나눠 git 조작과 화면 p
 mod allocation_lock;
 mod board;
 mod cleanup;
+mod inventory;
 mod lease_store;
 mod normalization_recovery;
 mod paths;

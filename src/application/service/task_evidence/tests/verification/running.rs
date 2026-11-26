@@ -3,7 +3,8 @@
 use super::*;
 use crate::application::port::inbound::task_evidence_query_port::TaskEvidenceSourceKind;
 use crate::application::port::outbound::parallel_mode_runtime_port::{
-    ParallelPoolMutationPermit, ParallelWorkerTreeRequest, ParallelWorkerTreeSnapshot,
+    ParallelCommandOutput, ParallelPoolMutationPermit, ParallelWorkerTreeRequest,
+    ParallelWorkerTreeSnapshot,
 };
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityRuntimeProjectionSnapshot;
 
@@ -224,6 +225,31 @@ impl ParallelModeRuntimePort for RunningRuntime {
             )),
             _ => panic!("unexpected metadata command: {args:?}"),
         }
+    }
+    fn run_git_command(
+        &self,
+        args: &[std::ffi::OsString],
+        stdin: Option<&[u8]>,
+    ) -> std::result::Result<ParallelCommandOutput, String> {
+        // The shared cleanup identity guard retains raw inventory failures. Keep this
+        // in-memory fixture on the same held-lease and known-workspace checks as metadata.
+        assert!(stdin.is_none());
+        let args = args
+            .iter()
+            .map(|arg| arg.to_str().expect("fixture arguments should be UTF-8"))
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            args.as_slice(),
+            ["-C", _, "worktree", "list", "--porcelain"]
+        ));
+        let stdout = self
+            .run_command("git", &args, None)
+            .expect("fixture worktree inventory should exist");
+        Ok(ParallelCommandOutput {
+            exit_code: Some(0),
+            stdout: stdout.into_bytes(),
+            stderr: Vec::new(),
+        })
     }
     fn snapshot_parallel_worker_tree(
         &self,
