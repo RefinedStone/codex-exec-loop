@@ -1,5 +1,5 @@
 // 대화 화면이다. 도구 호출은 한 줄 요약으로 접고, 계획은 체크 목록으로, 변경은 요약 카드로 보여 준다.
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { Markdown } from "../conversation/Markdown";
 import { Icon, type IconName } from "../design/icons";
@@ -93,7 +93,9 @@ function Changes({ files }: { files: ChangedFile[] }) {
       <ul>
         {files.map((file) => (
           <li key={file.path}>
-            <code>{file.path}</code>
+            <button type="button" className="changes-file" title="변경 패널에서 이 파일 열기" onClick={() => useBlueprint.setState({ panel: "review", reviewPath: file.path })}>
+              <code>{file.path}</code>
+            </button>
             <span className="counts">
               <span className="count-add">+{file.added}</span> <span className="count-del">−{file.removed}</span>
             </span>
@@ -207,6 +209,7 @@ const USER_SCROLL_WINDOW_MS = 600;
 
 export function Conversation({ threadId }: { threadId: string }) {
   const turns = useBlueprint((state) => state.turns[threadId]) ?? [];
+  const newFrom = useBlueprint((state) => state.newFrom[threadId]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
   const follow = useRef(true);
@@ -259,7 +262,14 @@ export function Conversation({ threadId }: { threadId: string }) {
       <div className="conversation" ref={scrollRef} onScroll={onScroll} onWheel={markUserScroll} onPointerDown={markUserScroll} onKeyDown={markUserScroll} onTouchMove={markUserScroll}>
         <div className="column">
           {turns.map((turn) => (
-            <Turn key={turn.id} turn={turn} threadId={threadId} />
+            <Fragment key={turn.id}>
+              {turn.id === newFrom && (
+                <div className="new-divider" role="separator">
+                  새 내용
+                </div>
+              )}
+              <Turn turn={turn} threadId={threadId} />
+            </Fragment>
           ))}
         </div>
       </div>

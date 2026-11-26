@@ -5,7 +5,31 @@ import { PlanList } from "./Conversation";
 import { Icon } from "../design/icons";
 import { Picker } from "../design/Picker";
 import { EFFORTS, MENTION_FILES, MODELS, PERMISSIONS, SLASH_COMMANDS, type PlanStep } from "./mockData";
-import { answerApproval, editQueued, interrupt, notConnected, removeQueued, sendMessage, startThread, toast, useBlueprint } from "./store";
+import { answerApproval, editQueued, interrupt, markDone, notConnected, removeQueued, sendMessage, startThread, toast, useBlueprint } from "./store";
+
+/** PR 이 머지된 스레드에 정리를 제안한다. 스스로 정리하지 않는다 (plan 20 의 제안). */
+function WrapUpOffer({ threadId }: { threadId: string }) {
+  const thread = useBlueprint((state) => state.threads.find((item) => item.id === threadId));
+  const [later, setLater] = useState(false);
+  if (!thread?.pullRequest?.merged || thread.done || later) return null;
+  return (
+    <div className="offer">
+      <strong>PR #{thread.pullRequest.number} 이 머지되었습니다. 완료로 정리할까요?</strong>
+      <p>
+        스레드는 사이드바의 "완료" 목록으로 갑니다. 되돌릴 수 있습니다.
+        {thread.worktree && " worktree 는 커밋하지 않은 변경이 없을 때만 지웁니다."}
+      </p>
+      <div className="offer-buttons">
+        <button type="button" className="button primary" onClick={() => markDone(threadId)}>
+          완료로 정리
+        </button>
+        <button type="button" className="button" onClick={() => setLater(true)}>
+          나중에
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function ApprovalCard({ threadId }: { threadId: string }) {
   const approval = useBlueprint((state) => state.approvals[threadId]);
@@ -181,11 +205,12 @@ export function Composer({ threadId }: { threadId: string | null }) {
     input.current?.focus();
   }, [threadId]);
 
-  // 업무 패널이 넘긴 글은 새 스레드 입력창에 채운다. 바로 보내지 않는다.
+  // 넘긴 글은 그 대상의 입력창에 채운다 (업무 패널은 새 스레드, 전달 띠는 그 스레드). 바로 보내지 않는다.
   useEffect(() => {
-    if (handOff !== null && threadId === null) {
-      setDraft(handOff);
+    if (handOff !== null && handOff.threadId === threadId) {
+      setDraft(handOff.text);
       useBlueprint.setState({ handOff: null });
+      input.current?.focus();
     }
   }, [handOff, threadId]);
 
@@ -231,6 +256,7 @@ export function Composer({ threadId }: { threadId: string | null }) {
     <div className="composer-area">
       <div className="column">
         {threadId && <ApprovalCard threadId={threadId} />}
+        {threadId && <WrapUpOffer threadId={threadId} />}
         {livePlan && <PlanStrip steps={livePlan} />}
         {threadId && <QueuedCards threadId={threadId} />}
         <div className="composer">

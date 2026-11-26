@@ -8,7 +8,7 @@ import { Icon } from "../design/icons";
 import { PROJECTS } from "./mockData";
 import { PANELS, RightPanel } from "./RightPanel";
 import { Sidebar } from "./Sidebar";
-import { togglePanel, useBlueprint } from "./store";
+import { togglePanel, useBlueprint, useDelivery } from "./store";
 import { CommandPalette, Fleet, Home, ShortcutsDialog, TerminalDock, Toasts, useShortcuts } from "./Views";
 
 function TopBar() {
@@ -17,6 +17,7 @@ function TopBar() {
   const terminalOpen = useBlueprint((state) => state.terminalOpen);
   const thread = useBlueprint((state) => (state.view === "thread" ? state.threads.find((item) => item.id === state.openThreadId) : undefined));
   const project = PROJECTS.find((item) => item.id === thread?.projectId);
+  const delivery = useDelivery(thread);
   return (
     <header className={sidebarOpen ? "top-bar" : "top-bar no-sidebar"}>
       <button type="button" className="icon-button" title="사이드바 (⌘B)" onClick={() => useBlueprint.setState({ sidebarOpen: !sidebarOpen })}>
@@ -32,7 +33,10 @@ function TopBar() {
             {thread.branch}
           </span>
           {thread.pullRequest && (
-            <span className={`badge badge-${thread.pullRequest.checks === "fail" ? "bad" : "ok"}`}>PR #{thread.pullRequest.number}</span>
+            <span className={`badge badge-${thread.pullRequest.checks === "fail" ? "bad" : "ok"}`}>
+              PR #{thread.pullRequest.number}
+              {thread.pullRequest.merged && " · 머지됨"}
+            </span>
           )}
         </div>
       )}
@@ -46,6 +50,7 @@ function TopBar() {
           <span className="counts">
             <span className="count-add">+{thread.added}</span> <span className="count-del">−{thread.removed}</span>
           </span>
+          {delivery?.next && <span className="chip-next">다음: {delivery.next.label}</span>}
         </button>
       )}
       {PANELS.filter((item) => item.id !== "review").map((item) => (
@@ -87,7 +92,8 @@ export function BlueprintApp() {
             {view === "thread" && thread && (
               <>
                 <Conversation threadId={thread.id} />
-                <Composer threadId={thread.id} />
+                {/* 스레드마다 입력창을 새로 만든다. 넘긴 글이 다른 스레드의 입력창에 남지 않는다. */}
+                <Composer key={thread.id} threadId={thread.id} />
               </>
             )}
             {terminalOpen && <TerminalDock branch={thread?.branch ?? "main"} />}
