@@ -84,6 +84,7 @@ pub mod repository_identity_port;
 pub mod work_context_store_port;
 // MCP hub backend port 는 MCP 서버 등록부와 필요할 때만 여는 연결을 추상화한다.
 pub mod mcp_hub_backend_port;
+pub mod mcp_write_approval_port;
 // parallel agent worker port는 병렬 lane에서 실제 agent 작업을 시작하는 경계다.
 pub mod parallel_agent_worker_port;
 // parallel agent profile repository port는 workspace별 agent profile JSON 저장 경계를 분리한다.

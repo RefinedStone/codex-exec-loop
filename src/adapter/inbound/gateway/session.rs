@@ -190,6 +190,12 @@ where
         .map(|registry| {
             super::turn_activity::TurnActivityTracker::new(registry.clone().observe_connection())
         });
+    // Desktop 이 MCP hub 쓰기 도구의 승인 요청을 받는다 (#2830). 접속이 끝나면 구독도 끝난다.
+    let _mcp_write_approvals = services
+        .mcp_hub
+        .as_ref()
+        .filter(|_| is_local)
+        .and_then(|hub| hub.subscribe_write_approvals(outbox.clone()));
     let provider_session = if is_local {
         services
             .resource_versions

@@ -495,11 +495,20 @@ pub(crate) fn build_gateway_backend(
         RepositoryKernelRegistry::sharing_app_server(upstream.kernel_socket())
             .with_provider_services(providers.clone()),
     );
-    let hub = Arc::new(CodexMcpHubBackend::resident_from_environment()?);
-    let mcp_hub = Arc::new(GatewayMcpHub::new(
-        hub.home().display().to_string(),
-        hub.clone(),
-    ));
+    // 쓰기 도구는 Gateway 에 붙은 Desktop 의 승인을 받는다 (#2830).
+    let write_approvals = Arc::new(
+        crate::application::service::mcp_write_approval::McpWriteApprovalBroker::new(
+            crate::application::service::mcp_write_approval::MCP_WRITE_APPROVAL_TIMEOUT,
+        ),
+    );
+    let hub = Arc::new(
+        CodexMcpHubBackend::resident_from_environment()?
+            .with_write_approver(write_approvals.clone()),
+    );
+    let mcp_hub = Arc::new(
+        GatewayMcpHub::new(hub.home().display().to_string(), hub.clone())
+            .with_write_approvals(write_approvals),
+    );
     let upstream: Arc<dyn GatewayUpstreamPort> = Arc::new(upstream);
     let work_context: Arc<dyn WorkContextPort> = Arc::new(
         WorkContextService::new(

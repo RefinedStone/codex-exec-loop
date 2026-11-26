@@ -43,6 +43,7 @@ import { JsonRpcClient, JsonRpcError, type JsonRpcId, NO_RESPONSE } from "../rpc
 import { checkCodexVersion } from "./codexVersion";
 import { ChatHistory } from "./chatHistory";
 import { ACCOUNT_LIMITS_READ, applyAccountLimitsNotification, applyAccountLimitsRead, setAccountLimitsStatus, useAccountLimits } from "./accountLimits";
+import { applyMcpWriteApprovalNotification, clearMcpWriteApprovals, MCP_WRITE_APPROVAL_ANSWER, removeMcpWriteApproval } from "./mcpWriteApprovals";
 import { NextTurnQueue } from "./nextTurnQueue";
 import { NextTurnSettingsController } from "./nextTurnSettings";
 import { ThreadCompactionController } from "./threadCompaction";
@@ -851,7 +852,14 @@ export class DesktopSession {
     pending?.answer(NO_RESPONSE);
   }
 
+  /** MCP hub 쓰기 도구 호출에 답한다 (#2830). 다른 창이 먼저 답했으면 Gateway 가 받지 않는다. */
+  async answerMcpWrite(id: string, approve: boolean): Promise<void> {
+    removeMcpWriteApproval(id);
+    await this.client.request(MCP_WRITE_APPROVAL_ANSWER, { id, approve });
+  }
+
   private dropPendingApprovals(): void {
+    if (!this.readOnly) clearMcpWriteApprovals();
     for (const pending of this.approvalAnswers.values()) {
       pending.answer(NO_RESPONSE);
     }
@@ -1140,6 +1148,8 @@ export class DesktopSession {
       if (useAccountLimits.getState().status === "unavailable" && !this.accountLimitsReading) void this.readAccountLimits();
       return;
     }
+    // MCP hub 쓰기 승인은 이 기기의 Gateway(local 접속)만 보낸다 (#2830).
+    if (!this.readOnly && applyMcpWriteApprovalNotification(method, params)) return;
     if (method === "akra/providerCredentials/changed") {
       if (!this.readOnly && params && typeof params === "object") {
         const change = params as { provider?: unknown; profileId?: unknown; revision?: unknown; lagged?: unknown };

@@ -10,10 +10,14 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
 use super::recorder::{RecordDirection, SessionRecording};
+use crate::application::port::inbound::mcp_write_approval_inbox_port::{
+    McpWriteApprovalEvent, McpWriteApprovalInboxPort, McpWriteApprovalSubscription,
+};
 use crate::application::port::outbound::mcp_hub_backend_port::McpHubBackendPort;
 use crate::domain::mcp_hub::{
     MCP_HUB_GATEWAY_CALL, MCP_HUB_GATEWAY_CATALOGS, MCP_HUB_GATEWAY_OTHER_HUB,
-    MCP_HUB_GATEWAY_RELOAD, MCP_HUB_GATEWAY_STATUSES,
+    MCP_HUB_GATEWAY_RELOAD, MCP_HUB_GATEWAY_STATUSES, MCP_HUB_GATEWAY_WRITE_APPROVAL_ANSWER,
+    MCP_HUB_GATEWAY_WRITE_APPROVAL_REQUESTED, MCP_HUB_GATEWAY_WRITE_APPROVAL_RESOLVED,
 };
 
 pub(super) use crate::domain::mcp_hub::MCP_HUB_GATEWAY_METHOD_PREFIX as MCP_METHOD_PREFIX;
@@ -26,11 +30,53 @@ const MCP_HUB_ERROR: i64 = -32000;
 pub(crate) struct GatewayMcpHub {
     home: String,
     backend: Arc<dyn McpHubBackendPort>,
+    write_approvals: Option<Arc<dyn McpWriteApprovalInboxPort>>,
 }
 
 impl GatewayMcpHub {
     pub(crate) fn new(home: String, backend: Arc<dyn McpHubBackendPort>) -> Self {
-        Self { home, backend }
+        Self {
+            home,
+            backend,
+            write_approvals: None,
+        }
+    }
+
+    pub(crate) fn with_write_approvals(
+        mut self,
+        approvals: Arc<dyn McpWriteApprovalInboxPort>,
+    ) -> Self {
+        self.write_approvals = Some(approvals);
+        self
+    }
+
+    /// local 접속 하나가 쓰기 승인 요청을 받는다. 돌려준 값을 버리면(접속이 끝나면) 받지 않는다.
+    pub(super) fn subscribe_write_approvals(
+        &self,
+        outbox: mpsc::Sender<Message>,
+    ) -> Option<McpWriteApprovalSubscription> {
+        let approvals = self.write_approvals.as_ref()?;
+        Some(approvals.subscribe(Box::new(move |event| {
+            let notification = match event {
+                McpWriteApprovalEvent::Requested {
+                    id,
+                    server,
+                    tool,
+                    arguments,
+                } => json!({
+                    "jsonrpc": "2.0",
+                    "method": MCP_HUB_GATEWAY_WRITE_APPROVAL_REQUESTED,
+                    "params": { "id": id, "server": server, "tool": tool, "arguments": arguments },
+                }),
+                McpWriteApprovalEvent::Resolved { id } => json!({
+                    "jsonrpc": "2.0",
+                    "method": MCP_HUB_GATEWAY_WRITE_APPROVAL_RESOLVED,
+                    "params": { "id": id },
+                }),
+            };
+            // A full outbox drops this notice; the request then times out and the tool does not run.
+            let _ = outbox.try_send(Message::text(notification.to_string()));
+        })))
     }
 
     /// Gateway 의 한가한 커널 정리 주기에 함께 부른다.
@@ -64,6 +110,11 @@ struct HubParams {
     tool: Option<String>,
     #[serde(default)]
     arguments: Option<Value>,
+    /// 쓰기 승인 답의 요청 id 와 허락이다.
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    approve: Option<bool>,
 }
 
 /// 요청 하나를 블로킹 작업으로 처리하고 답을 접속의 보내기 함으로 보낸다.
@@ -127,6 +178,18 @@ fn respond(hub: &GatewayMcpHub, id: Value, method: &str, text: &str) -> String {
             };
             let arguments = params.arguments.unwrap_or_else(|| json!({}));
             hub.backend.call_tool(&server, &tool, arguments)
+        }
+        MCP_HUB_GATEWAY_WRITE_APPROVAL_ANSWER => {
+            let (Some(request), Some(approve), Some(approvals)) =
+                (params.id, params.approve, hub.write_approvals.as_ref())
+            else {
+                return error_response(
+                    id,
+                    JSON_RPC_INVALID_PARAMS,
+                    "`id` and `approve` are required",
+                );
+            };
+            Ok(json!({ "accepted": approvals.answer(&request, approve) }))
         }
         MCP_HUB_GATEWAY_RELOAD => hub
             .backend

@@ -14,6 +14,7 @@ import { BrowserPanel } from "./browser/BrowserPanel";
 import { ApprovalPrompt } from "./conversation/ApprovalPrompt";
 import { AreaBoundary } from "./views/AreaBoundary";
 import { appendQuote } from "./conversation/quote";
+import { McpWriteApprovals } from "./conversation/McpWriteApprovals";
 import { pullRequestBadgeClass } from "./conversation/BranchCommits";
 import { Composer, type ComposerActions } from "./conversation/Composer";
 import { ConversationView } from "./conversation/ConversationView";
@@ -1005,6 +1006,7 @@ export function App() {
       {taskEditor && session.current && <TaskEditor key={taskEditor.workspace}
         workspace={taskEditor.workspace} source={taskEditor.source} controller={session.current.taskAuthoring}
         onClose={() => setTaskEditor(null)} onSaved={() => { void session.current?.refreshKernel(); }} />}
+      <McpWriteApprovals onAnswer={async (id, approve) => session.current?.answerMcpWrite(id, approve)} />
       <Toasts />
     </div>
   );

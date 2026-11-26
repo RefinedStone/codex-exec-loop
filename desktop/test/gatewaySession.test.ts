@@ -831,6 +831,31 @@ describe("server request parsing", () => {
   });
 });
 
+describe("MCP hub write approvals (#2830)", () => {
+  it("shows a Gateway write request, answers it once and drops it when another window answers", async () => {
+    const { useMcpWriteApprovals } = await import("../src/renderer/session/mcpWriteApprovals");
+    const { bridge, pending, emit } = controlledResumeBridge();
+    const store = sessionStore();
+    const session = new DesktopSession(bridge, store, "test", (callback) => setTimeout(callback, 0));
+    session.start();
+    cleanups.push(() => session.stop());
+    bridge.ready();
+    await waitFor(() => store.snapshot.connection?.phase === "connected");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    emit({ method: "akra/mcp/writeApproval/requested", params: { id: "w1", server: "notion", tool: "update", arguments: { page: "p1" } } });
+    emit({ method: "akra/mcp/writeApproval/requested", params: { id: "w2", server: "notion", tool: "update", arguments: {} } });
+    expect(useMcpWriteApprovals.getState().requests.map((request) => request.id)).toEqual(["w1", "w2"]);
+
+    await session.answerMcpWrite("w1", true);
+    expect(pending("akra/mcp/writeApproval/answer").map((request) => request.params)).toEqual([{ id: "w1", approve: true }]);
+    expect(useMcpWriteApprovals.getState().requests.map((request) => request.id)).toEqual(["w2"]);
+
+    emit({ method: "akra/mcp/writeApproval/resolved", params: { id: "w2" } });
+    expect(useMcpWriteApprovals.getState().requests).toEqual([]);
+  });
+});
+
 describe("account usage limits (#2821)", () => {
   const snapshot = {
     limitId: "codex", limitName: null, normalModelSlug: null, credits: null, individualLimit: null,

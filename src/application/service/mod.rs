@@ -22,6 +22,7 @@ pub mod review_center;
 pub mod manual_prompt_preparation;
 // MCP hub service 는 등록부 확인, 도구 검색, 결과 축약을 맡는다.
 pub mod mcp_hub;
+pub mod mcp_write_approval;
 // issue_handoff 는 원격 이슈를 AI 전달 정책으로 가려 인계의 공유본을 만든다 (#2428).
 pub mod issue_collection;
 pub mod issue_comment_command;

@@ -17,6 +17,7 @@ pub mod git_operation_port;
 // issue draft port 는 Desktop 의 이슈 초안, 미리보기, 게시 명령이다 (#2426).
 pub mod issue_draft_port;
 pub mod mcp_hub_port;
+pub mod mcp_write_approval_inbox_port;
 pub mod parallel_agent_profile_port;
 pub mod parallel_mode_admin_port;
 pub mod parallel_mode_control_port;

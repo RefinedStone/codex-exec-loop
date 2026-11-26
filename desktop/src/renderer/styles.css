@@ -2525,3 +2525,22 @@ button.issues-title:hover {
   right: -6px;
   background: var(--bg-elevated);
 }
+
+/* MCP hub 쓰기 도구 승인 (#2830): 스레드와 상관없이 창 오른쪽 아래에 뜬다. */
+.mcp-write-approvals {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 40;
+  display: grid;
+  gap: 8px;
+  width: min(440px, calc(100vw - 32px));
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.mcp-write-approvals .approval-command {
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
