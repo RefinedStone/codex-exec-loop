@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadAppSettings } from "../src/main/appSettings";
-import { migrateUserData, prepareUserData } from "../src/main/userDataMigration";
+import { CREDENTIAL_APP_NAME, keepCredentialIdentity, migrateUserData, prepareUserData } from "../src/main/userDataMigration";
 
 const roots: string[] = [];
 function appData(): string {
@@ -96,5 +96,25 @@ describe("prepareUserData", () => {
     expect(prepareUserData(kept as never, undefined, busy as never)).toMatchObject({ kind: "kept-legacy", path: legacy });
     expect(kept.getPath("userData")).toBe(legacy);
     expect(existsSync(join(root, "Akra ADE"))).toBe(false);
+  });
+});
+
+describe("keepCredentialIdentity", () => {
+  it("keeps the pre-rename app name until ready, then shows the product name", async () => {
+    const names: string[] = [];
+    let ready!: () => void;
+    const app = {
+      setName: (name: string) => { names.push(name); },
+      whenReady: () => new Promise<void>((resolve) => { ready = resolve; }),
+    };
+
+    const restored = keepCredentialIdentity(app as never);
+    // Electron picks the OS key store entry from this name before ready.
+    expect(names).toEqual([CREDENTIAL_APP_NAME]);
+    expect(CREDENTIAL_APP_NAME).toBe(JSON.parse(readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8")).name);
+
+    ready();
+    await restored;
+    expect(names).toEqual([CREDENTIAL_APP_NAME, "Akra ADE"]);
   });
 });
