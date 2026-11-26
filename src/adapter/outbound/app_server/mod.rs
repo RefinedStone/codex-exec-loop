@@ -28,6 +28,7 @@ mod worker_continuation;
 mod worker_evidence;
 mod worker_launch;
 // gateway_upstream.rs: akra-gateway 용 upstream app-server(--listen) 감시와 세션별 proxy 자식 프로세스.
+pub(crate) mod gateway_relay;
 pub(crate) mod gateway_upstream;
 mod planning_worker;
 mod planning_worker_skill;
@@ -639,17 +640,36 @@ pub struct CodexAppServerAdapter {
     thread_turn_options_port: Arc<dyn ConversationThreadTurnOptionsPort>,
 }
 
-/// Gateway upstream app-server 의 소켓이다. 데몬 커널은 이 소켓으로 Desktop 과 같은 app-server 를 쓴다 (K3-5).
+/// 커널의 app-server 연결이 자기 app-server 대신 붙는 Gateway 의 자리이다. 그래서 같은 사용자의 클라이언트가
+/// app-server 하나를 함께 쓴다.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct GatewayUpstreamSocket(pub(crate) String);
+pub(crate) enum SharedAppServer {
+    /// Gateway upstream app-server 의 소켓이다. Gateway 안의 데몬 커널이 쓴다 (K3-5).
+    Upstream(String),
+    /// Gateway 의 클라이언트 endpoint 이다. Gateway 세션이 Desktop 의 접속처럼 중계한다. TUI 가 쓴다 (K6-1).
+    /// `relay_executable` 은 relay 자식으로 띄울 `akra` 이다.
+    Relay {
+        relay_executable: PathBuf,
+        endpoint: String,
+    },
+}
 
 impl CodexAppServerAdapter {
-    /// 이 adapter 의 연결이 자기 app-server 대신 Gateway upstream 에 붙는다.
-    pub(crate) fn through_gateway_upstream(mut self, socket: GatewayUpstreamSocket) -> Self {
-        self.connection_config
-            .set_transport(connection::AppServerTransport::GatewayProxy {
-                socket_argument: socket.0,
-            });
+    /// 이 adapter 의 연결이 자기 app-server 대신 Gateway 의 app-server 에 붙는다.
+    pub(crate) fn through_shared_app_server(mut self, shared: SharedAppServer) -> Self {
+        let transport = match shared {
+            SharedAppServer::Upstream(socket_argument) => {
+                connection::AppServerTransport::GatewayProxy { socket_argument }
+            }
+            SharedAppServer::Relay {
+                relay_executable,
+                endpoint,
+            } => connection::AppServerTransport::GatewayRelay {
+                relay_executable,
+                endpoint,
+            },
+        };
+        self.connection_config.set_transport(transport);
         self
     }
 

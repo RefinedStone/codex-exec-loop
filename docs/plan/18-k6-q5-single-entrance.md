@@ -2,7 +2,7 @@
 
 ## 문서 상태
 
-- 상태: **구현 중**. Q5-1, Q5-2a (2026-11-17), Q5-2b (2026-11-18), Q5-2c (2026-11-26), Q5-2d (2026-11-27, #2796), Q5-3 (2026-11-27, #2797)을 구현했다 (§7). 나머지 조각은 제안이다. 현재 제품 동작의 기준은
+- 상태: **구현 중**. Q5-1, Q5-2a (2026-11-17), Q5-2b (2026-11-18), Q5-2c (2026-11-26), Q5-2d (2026-11-27, #2796), Q5-3 (2026-11-27, #2797), K6-1 (2026-11-27, #2798)을 구현했다 (§7). 나머지 조각은 제안이다. 현재 제품 동작의 기준은
   `docs/reference/` 이다.
 - 상위 문서: [18 Akra 커널 아키텍처](18-akra-kernel-architecture.md) §5.4, §5.8, §5.9, §6 의 K6. 결정 KP-03, KP-04,
   KP-06. [19 Akra 커널 성질 목표](19-akra-kernel-quality-goals.md) §3.2, §5.3, §6 의 Q5, 성질 P4.
@@ -194,7 +194,7 @@ struct ThreadSessions {
 | Q5-2c (구현 2026-11-26, §7) | session 을 맵으로 둔다. 키는 커널이 주는 session 번호이다 (처음 제안은 thread id). 보는 자리는 맵의 키이다 | 유지 | 기존 시험, 커널 시뮬레이션 |
 | Q5-2d (구현 2026-11-27, §7) | 승인 검토 저장 실패를 알릴 턴을 session 마다 둔다. 정지가 뒤의 session 의 턴도 대상으로 적는다 | 유지 (기본값 1). 정지의 기록만 값 1 에서도 다르다 (§7) | core 시험 둘, 커널 시뮬레이션 |
 | Q5-3 (구현 2026-11-27, §7) | 자동 후속 차선. 큐 프롬프트를 자리가 날 때 낸다. 시뮬레이션에 값 2 를 넣는다 | 확장 (값 2 이상에서만 다르다) | 시뮬레이션의 새 불변식: 자동 후속을 이어 가는 thread 는 하나이다 |
-| K6-1 | TUI 의 대화를 app-server 중계로 읽는 client. 화면은 바꾸지 않는다 | 유지 | 가짜 Gateway 시험. 모델 턴은 없다 |
+| K6-1 (구현 2026-11-27, §7) | TUI 의 대화를 app-server 중계로 읽는 client. 화면은 바꾸지 않는다 | 유지 (Gateway 가 없으면 지금과 같다) | 가짜 Gateway 시험. 모델 턴은 없다 |
 | K6-2 | TUI 가 `akra/kernel/*` 로 붙는다. 잠금을 잡지 않는다. 하네스 화면은 Q-M5-1 의 답대로 한다 | 전환 | 터미널 검증 계약 (`docs/validation/terminal-ui-testing-methodology.md`) |
 | K6-3 | 직접 경로와 잠금의 `tui` 종류를 지운다 | 유지 | 입구 경계 시험 |
 | Q5-4 | 병렬 제어부를 같은 체계로 | K4-9b 의 답에 따른다 | K4-9b 문서 |
@@ -401,3 +401,34 @@ app-server 는 턴을 thread 마다 하나씩 동시 턴 수까지 받는다 (I1
 - 차선을 가진 thread 의 자동 후속이 큐 머리로 집는 작업을, 다른 thread 의 thread 프롬프트 턴이 이미 하고 있는 경우는
   planning 큐의 상태(진행 중 작업)에 맡긴다. 커널은 반대 방향(큐 프롬프트가 기다림)만 막는다.
 - 동시 턴 수를 사용자 설정으로 여는 일 (Q-M5-2, 미등록 항목). 실제 app-server 에서 턴 둘을 돌려 확인해야 한다.
+
+### K6-1 (2026-11-27, #2798)
+
+- TUI 가 시작할 때 이 사용자의 Gateway endpoint 에 접속해 본다 (2초 상한). 받으면 TUI 의 app-server adapter 는 자기
+  app-server 대신 Gateway 중계를 쓴다. 받지 않으면 지금처럼 자기 app-server 를 띄운다. 결정은 시작 때 한 번이다.
+- 전송: `AppServerTransport::GatewayRelay`. 연결마다 `akra __gateway-app-server-relay <endpoint>` 자식을 띄운다. 자식은
+  stdio 와 Gateway endpoint 사이에서 바이트만 나른다 (`src/adapter/outbound/app_server/gateway_relay.rs`). 연결은 데몬
+  커널의 `GatewayProxy` 와 같은 WebSocket 전송(`proxy_transport`)을 쓴다. 그래서 연결 코드와 재연결 규칙은 그대로이고,
+  Gateway 세션은 TUI 를 Desktop 의 접속처럼 중계한다 (기록기, 턴 관찰 #2850 포함).
+- 자식은 `akra` 자신이다. Gateway 의 bridge 명령(`akra-gateway desktop-*-bridge`)처럼 다른 실행 파일을 찾지 않는다. Unix 의
+  `codex app-server proxy --sock` 는 Windows 의 named pipe 에 붙지 못한다.
+- 커널 이름 정리: `GatewayUpstreamSocket` 을 `SharedAppServer` (`Upstream`, `Relay`) 로 바꿨다. 커널 프로토콜은 바꾸지 않았다.
+- 연결 실패와 복구: 중계가 열리지 않으면 app-server 호출이 `the Akra Gateway relay did not open; start the Gateway (Akra
+  Desktop or akra-gateway) and retry` 로 실패한다. 다음 호출이 다시 연결하고 `reconnected to the Akra Gateway after the
+  previous relay closed` 알림을 남긴다. 둘 다 기존 오류·경고 표시를 지난다.
+
+확인: relay 단위 시험 다섯 (두 방향 바이트, 입력이 닫히면 Gateway 접속을 닫음, Gateway 찾기, 자식 명령의 모양, 시험 빌드는
+개발자의 Gateway 를 찾지 않음). `tests/gateway_relay.rs`: 실제 `akra` relay 자식과 가짜 Gateway 로 `initialize`,
+`thread/start`, `turn/start`, 스트림 알림을 주고받고, Gateway 의 close 1012 뒤 자식이 0 으로 끝난다. Gateway 가 없으면
+자식이 이유를 적고 1 로 끝난다. `tests/tui_terminal_disconnect.rs` (unix): 가짜 Gateway 가 도는 동안 실제 TUI 가 PTY 에서
+시작한다. 시작의 app-server 호출이 Gateway 로 가고, TUI 는 자기 app-server 를 띄우지 않고, TUI 가 끝나면 중계 세션도
+끝난다. 모델 턴은 없다.
+
+남긴 것:
+
+- Gateway 가 없을 때 TUI 가 Gateway 를 띄우는 일은 K6-2 이다. 지금은 TUI 가 도는 동안 Gateway 가 사라지면, Gateway 가
+  다시 뜰 때까지 대화 호출이 실패한다. TUI 를 다시 시작하면 자기 app-server 로 돈다.
+- 중계를 쓰면 TUI 의 app-server 는 Gateway upstream 이다. upstream 은 TUI 와 같은 고정 실행 파일과 보안 설정으로 뜬다.
+  TUI 프로세스의 환경 변수는 upstream 에 가지 않는다 (데몬 커널과 같다).
+- TUI 의 PTY 시험은 시작과 종료만 본다. 수동 프롬프트와 스트림은 relay 통합 시험이 본다. 화면에서 실패·복구 문구를
+  보는 PTY 시험은 없다.

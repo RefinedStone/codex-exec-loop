@@ -1053,6 +1053,12 @@ Akra Desktop (`desktop/`) runs from source as a development build; it has no pac
 - The kernel uses the Gateway upstream app-server through its own `codex app-server proxy`
   connection, so a client can `thread/resume` a thread that the kernel runs and receive its turn
   notifications live.
+- A TUI that starts while a Gateway runs opens its conversations through the Gateway relay instead of
+  its own app-server (plan 18 K6-1). The TUI still holds the repository kernel. The Gateway then sees the
+  TUI's turns like a Desktop client's. When the relay cannot open, the app-server call fails with
+  `the Akra Gateway relay did not open; start the Gateway (Akra Desktop or akra-gateway) and retry`;
+  the next call reconnects and shows `reconnected to the Akra Gateway after the previous relay closed`.
+  A TUI that starts without a Gateway runs its own app-server as before.
 - One Gateway runs per user: a second instance exits with `another akra-gateway is already running`.
   Child processes are contained (Windows job objects) and end with the Gateway.
 - `AKRA_GATEWAY_RECORD=1` records each session's text frames as JSONL under the user-private

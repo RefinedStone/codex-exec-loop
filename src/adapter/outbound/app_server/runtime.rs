@@ -37,10 +37,12 @@ impl SharedAppServerRuntime {
                     return Ok(());
                 }
 
-                Some(
+                Some(if adapter.connection_config.uses_gateway_relay() {
+                    "reconnected to the Akra Gateway after the previous relay closed".to_string()
+                } else {
                     "shared runtime reconnected after the previous app-server process exited"
-                        .to_string(),
-                )
+                        .to_string()
+                })
             }
             None => None,
         };
