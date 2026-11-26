@@ -1,15 +1,22 @@
 // 사이드바: 작업 폴더(스레드 cwd)별 스레드 목록이다 (D-16). 스레드마다 상태를 표시한다: 진행 중, 승인 대기, 실패, 읽지 않음.
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import type { ConnectionState } from "../../shared/bridge";
 import { Icon } from "../design/icons";
 import { remoteHostKey, remoteHostStore, useDesktopStore, type WorkspaceFolder, type WorkspaceThread } from "../session/desktopStore";
-import { closeChat, closeDot, isDotDockVisible, MOD_KEY, showChat, showDot, showHome, showView, toggleTheme, useUiStore } from "../session/uiStore";
+import { closeChat, closeDot, isDotDockVisible, MOD_KEY, showChat, showDot, showHome, showView, toast, toggleTheme, useUiStore } from "../session/uiStore";
 import { limitWindows, resetLabel, useAccountLimits, windowLabel } from "../session/accountLimits";
 import { DotAvatar } from "../views/DotChat";
 import { DiagnosticsDialog } from "../views/DiagnosticsDialog";
 import { useZoomFactor, zoomStyle } from "../views/useZoom";
+import { type ThreadActions, ThreadMenu, ThreadRenameInput } from "./ThreadMenu";
 import { allThreads, folderName, needsAttention, relativeAge, threadMark, type ThreadMark, type ThreadMarkSource } from "./threadStatus";
+
+export type { ThreadActions } from "./ThreadMenu";
+
+function failure(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
 
 const PHASE_LABEL: Record<ConnectionState["phase"], string> = {
   connecting: "연결 중",
@@ -37,13 +44,39 @@ export function useThreadMarks(): ThreadMarkSource {
   return useMemo(() => ({ activeThreadIds, unreadThreadIds, pendingApprovals }), [activeThreadIds, unreadThreadIds, pendingApprovals]);
 }
 
-function ThreadRow({ thread, onOpenThread }: { thread: WorkspaceThread; onOpenThread(threadId: string): void }) {
+function ThreadRow({ thread, folder, actions, onArchived, onOpenThread }: {
+  thread: WorkspaceThread;
+  folder: string;
+  actions?: ThreadActions;
+  onArchived(thread: WorkspaceThread): void;
+  onOpenThread(threadId: string): void;
+}) {
   const open = useDesktopStore((state) => state.openThreadId === thread.id);
   const selected = useUiStore((state) => state.view === "thread") && open;
   const mark = useDesktopStore((state) => threadMark(thread, state));
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const closeMenu = useCallback(() => setMenu(null), []);
+  if (renaming && actions) {
+    return (
+      <li className="thread-row">
+        <ThreadRenameInput title={thread.title} onCancel={() => setRenaming(false)} onSubmit={(name) => {
+          setRenaming(false);
+          actions.rename(thread.id, name).catch((cause: unknown) => toast(`이름을 바꾸지 못했습니다: ${failure(cause)}`));
+        }} />
+      </li>
+    );
+  }
   return (
     <li className="thread-row">
-      <button type="button" className={selected ? "thread selected" : "thread"} onClick={() => onOpenThread(thread.id)} data-testid="thread-entry">
+      {menu && actions && (
+        <ThreadMenu thread={thread} folder={folder} running={mark === "running"} position={menu} onClose={closeMenu}
+          onRename={() => setRenaming(true)}
+          onArchive={() => actions.archive(thread.id).then(() => onArchived(thread), (cause: unknown) => toast(`보관하지 못했습니다: ${failure(cause)}`))}
+          onOpenFolder={() => actions.openFolder(folder).then((opened) => { if (!opened) toast("폴더를 열지 못했습니다."); })} />
+      )}
+      <button type="button" className={selected ? "thread selected" : "thread"} onClick={() => onOpenThread(thread.id)} data-testid="thread-entry"
+        onContextMenu={actions ? (event) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY }); } : undefined}>
         <StatusMark mark={mark} />
         <span className="thread-text">
           <span className={mark === "unread" ? "thread-title unread" : "thread-title"}>
@@ -93,7 +126,13 @@ function AccountLimitsLine() {
   );
 }
 
-function FolderSection({ folder, connected, onOpenThread }: { folder: WorkspaceFolder; connected: boolean; onOpenThread(threadId: string): void }) {
+function FolderSection({ folder, connected, actions, onArchived, onOpenThread }: {
+  folder: WorkspaceFolder;
+  connected: boolean;
+  actions?: ThreadActions;
+  onArchived(thread: WorkspaceThread): void;
+  onOpenThread(threadId: string): void;
+}) {
   const [open, setOpen] = useState(true);
   return (
     <section className="project">
@@ -110,7 +149,7 @@ function FolderSection({ folder, connected, onOpenThread }: { folder: WorkspaceF
       {open && (
         <ul>
           {folder.threads.map((thread) => (
-            <ThreadRow key={thread.id} thread={thread} onOpenThread={onOpenThread} />
+            <ThreadRow key={thread.id} thread={thread} folder={folder.cwd} actions={connected ? actions : undefined} onArchived={onArchived} onOpenThread={onOpenThread} />
           ))}
         </ul>
       )}
@@ -325,7 +364,14 @@ function RemoteSection({ host, onOpenThread }: { host: string; onOpenThread(host
   );
 }
 
-export function Sidebar({ onOpenThread, onOpenRemoteThread, onReloadChats }: { onOpenThread(threadId: string): void; onOpenRemoteThread(host: string, threadId: string): void; onReloadChats(host: string): void }) {
+export function Sidebar({ onOpenThread, onOpenRemoteThread, onReloadChats, threadActions }: {
+  onOpenThread(threadId: string): void;
+  onOpenRemoteThread(host: string, threadId: string): void;
+  onReloadChats(host: string): void;
+  /** 로컬 스레드의 이름 바꾸기·보관이다 (#2841). 없으면 메뉴를 보이지 않는다. */
+  threadActions?: ThreadActions;
+}) {
+  const [archived, setArchived] = useState<WorkspaceThread | null>(null);
   const diagnosticOpen = useUiStore(state => state.overlay === "diagnostics");
   const folders = useDesktopStore((state) => state.folders);
   // 원격 구역은 사용자가 켰고 Gateway 에 원격 호스트가 있을 때만 보인다.
@@ -368,8 +414,19 @@ export function Sidebar({ onOpenThread, onOpenRemoteThread, onReloadChats }: { o
         {remoteAgents && remoteHosts && remoteHosts.split(",").map((host) => <ChatsSection key={`chats:${host}`} host={host} onReload={onReloadChats} />)}
         {remoteAgents && remoteHosts && remoteHosts.split(",").map((host) => <RemoteSection key={host} host={host} onOpenThread={onOpenRemoteThread} />)}
         {folders.length === 0 && <p className="empty-row">아직 스레드가 없습니다. 새 스레드에서 작업 폴더를 고르세요.</p>}
+        {archived && threadActions && (
+          <div className="archived-notice" role="status" data-testid="archived-notice">
+            <span>‘{archived.title}’ 을(를) 보관했습니다.</span>
+            <button type="button" className="button" data-testid="archived-undo" onClick={() => {
+              const thread = archived;
+              setArchived(null);
+              threadActions.unarchive(thread.id).catch((cause: unknown) => toast(`보관을 되돌리지 못했습니다: ${failure(cause)}`));
+            }}>되돌리기</button>
+            <button type="button" className="icon-button" title="닫기" onClick={() => setArchived(null)}><Icon name="close" size={12} /></button>
+          </div>
+        )}
         {folders.map((folder) => (
-          <FolderSection key={folder.cwd} folder={folder} connected={phase === "connected"} onOpenThread={onOpenThread} />
+          <FolderSection key={folder.cwd} folder={folder} connected={phase === "connected"} actions={threadActions} onArchived={setArchived} onOpenThread={onOpenThread} />
         ))}
       </div>
       <AccountLimitsLine />

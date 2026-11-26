@@ -67,6 +67,9 @@ const bridge: AkraBridge = {
     const folder: unknown = await ipcRenderer.invoke(IPC_CHANNELS.chooseFolder);
     return typeof folder === "string" ? folder : null;
   },
+  async openFolder(path: string): Promise<boolean> {
+    return (await ipcRenderer.invoke(IPC_CHANNELS.openFolder, path)) === true;
+  },
   gitStatus(cwd: string): Promise<GitStatusResult> {
     return ipcRenderer.invoke(IPC_CHANNELS.gitStatus, cwd) as Promise<GitStatusResult>;
   },

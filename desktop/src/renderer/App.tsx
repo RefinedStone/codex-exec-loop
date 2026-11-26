@@ -30,7 +30,7 @@ import { ConversationStoreContext, desktopSessionStore, openThreadCwd, remoteHos
 import { ATTENTION_TEXT, attentionEvents, isCurrentIssueDecisionAttention, issueDecisionAttentionEvents } from "./session/attention";
 import { type NavEntry, stepNav } from "./session/navHistory";
 import { closeChat, closeDot, dotDraftKey, fitSideColumns, handOffToNewThread, isDotDockVisible, MOD_KEY, openPanel, type PanelId, setDraft, showDot, showHome, showNavEntry, showRemoteAgentsWhenDotsAreOn, showView, toast, togglePanel, toggleTerminal, useUiStore, visit } from "./session/uiStore";
-import { Sidebar } from "./sidebar/Sidebar";
+import { Sidebar, type ThreadActions } from "./sidebar/Sidebar";
 import { folderName } from "./sidebar/threadStatus";
 import { TerminalDock } from "./terminal/TerminalDock";
 import { ChatDock } from "./views/ChatDock";
@@ -554,6 +554,19 @@ export function App() {
     [chatDockHost],
   );
   const reloadChats = useCallback((host: string) => void remoteSessions.current.get(host)?.reloadChats(), []);
+  // 로컬 스레드의 이름 바꾸기와 보관은 열린 세션으로 보낸다 (#2841).
+  const threadActions = useMemo<ThreadActions>(() => {
+    const live = () => {
+      if (!session.current) throw new Error("Gateway 에 연결되어 있지 않습니다.");
+      return session.current;
+    };
+    return {
+      rename: async (threadId, name) => live().renameThread(threadId, name),
+      archive: async (threadId) => live().archiveThread(threadId),
+      unarchive: async (threadId) => live().unarchiveThread(threadId),
+      openFolder: (path) => window.akra.openFolder(path),
+    };
+  }, []);
 
   const loadRemoteThread = useCallback((host: string, threadId: string) => {
     const state = remoteHostStore(host).getState();
@@ -857,7 +870,7 @@ export function App() {
 
   return (
     <div className="shell">
-      {sidebarOpen && <AreaBoundary area="사이드바"><Sidebar onOpenThread={openThread} onOpenRemoteThread={openRemoteThread} onReloadChats={reloadChats} /></AreaBoundary>}
+      {sidebarOpen && <AreaBoundary area="사이드바"><Sidebar onOpenThread={openThread} onOpenRemoteThread={openRemoteThread} onReloadChats={reloadChats} threadActions={threadActions} /></AreaBoundary>}
       <div className="workspace">
         <TopBar onNavigate={navigate} onFork={forkOpenThread} tree={tree} documentCount={documents.phase === "loaded" ? documents.documents.length : null} changedDocumentCount={documents.phase === "loaded" ? changedCount(documents.documents) : 0} delegationEnabled={delegationEnabled} enabledExtensions={enabledExtensions} blog={blog} />
         <SessionBanner />

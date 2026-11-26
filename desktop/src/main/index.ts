@@ -3,7 +3,7 @@ import { revealStoragePath } from "./storageReveal";
 import { spawn } from "node:child_process";
 import { lstat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { app, type BaseWindow, BrowserWindow, clipboard, dialog, ipcMain, Menu, type MenuItemConstructorOptions, net, powerMonitor, powerSaveBlocker, safeStorage, screen, shell, type IpcMainInvokeEvent, type WebContents, utilityProcess } from "electron";
@@ -922,6 +922,14 @@ ipcMain.handle(IPC_CHANNELS.chooseFolder, async (event) => {
   const options = { title: "작업 폴더 선택", properties: ["openDirectory" as const] };
   const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
   return result.canceled ? null : (result.filePaths[0] ?? null);
+});
+
+// 스레드의 작업 폴더를 파일 관리자로 연다 (#2841). 절대 경로이고 있는 폴더일 때만 연다. 파일은 열지 않는다 (실행 방지).
+ipcMain.handle(IPC_CHANNELS.openFolder, async (_event, path: unknown) => {
+  if (typeof path !== "string" || !isAbsolute(path)) return false;
+  const stat = await lstat(path).catch(() => null);
+  if (!stat?.isDirectory()) return false;
+  return (await shell.openPath(path)) === "";
 });
 
 /**

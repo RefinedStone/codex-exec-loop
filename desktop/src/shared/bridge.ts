@@ -35,6 +35,7 @@ export const IPC_CHANNELS = {
   remoteMessage: "akra:remote-message",
   remoteState: "akra:remote-state",
   chooseFolder: "akra:choose-folder",
+  openFolder: "akra:open-folder",
   gitStatus: "akra:git-status",
   gitFileDiff: "akra:git-file-diff",
   gitFileAction: "akra:git-file-action",
@@ -422,6 +423,8 @@ export interface AkraBridge {
   ready(): void;
   /** 시스템 폴더 선택 대화상자를 연다. 고르지 않으면 null 이다. */
   chooseFolder(): Promise<string | null>;
+  /** 있는 폴더를 운영체제의 파일 관리자로 연다. 열지 못하면 false 이다 (#2841). */
+  openFolder(path: string): Promise<boolean>;
   /** 작업 폴더의 바뀐 파일 목록을 읽는다 (R1). */
   gitStatus(cwd: string): Promise<GitStatusResult>;
   /** 바뀐 파일 하나의 diff 를 읽는다. 새 파일은 내용을 돌려준다. */
