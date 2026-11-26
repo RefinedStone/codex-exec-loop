@@ -24,6 +24,105 @@ pub(crate) fn validate_windows_path_identity(
     validate_windows_owner(path, opened)
 }
 
+/// A shared OS temporary parent may gain children during verification. Require the
+/// current owner and stable directory identity without requiring an owner-only DACL.
+/// This policy must not be used for files, stores, or owned temporary children.
+pub(crate) fn validate_windows_shared_directory_path_identity(
+    path: &Path,
+    opened: &File,
+) -> Result<()> {
+    validate_windows_shared_directory_with_security(path, opened, validate_windows_owner)
+}
+
+/// Shared private temporary roots additionally require a protected owner-only DACL
+/// on both handles. Keep this stricter boundary separate from the shared OS Temp parent.
+pub(crate) fn validate_windows_shared_private_directory(path: &Path, opened: &File) -> Result<()> {
+    validate_windows_shared_directory_with_security(
+        path,
+        opened,
+        validate_windows_private_owner_and_acl,
+    )
+}
+
+fn validate_windows_shared_directory_with_security(
+    path: &Path,
+    opened: &File,
+    verify_security: fn(&Path, &File) -> Result<()>,
+) -> Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let before = windows_file_identity_snapshot(opened)?;
+    validate_windows_shared_directory_snapshots(before, before)?;
+    verify_security(path, opened)?;
+    let reopened = std::fs::OpenOptions::new()
+        .read(true)
+        .access_mode(WINDOWS_GENERIC_READ | WINDOWS_READ_CONTROL)
+        .share_mode(WINDOWS_FILE_SHARE_ALL)
+        .custom_flags(WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT | WINDOWS_FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .with_context(|| {
+            format!(
+                "failed to reopen shared Windows directory {}",
+                path.display()
+            )
+        })?;
+    validate_windows_shared_directory_snapshots(
+        before,
+        windows_file_identity_snapshot(&reopened)?,
+    )?;
+    verify_security(path, &reopened)?;
+    // Recheck both handles after security queries without treating a new child as replacement.
+    validate_windows_shared_directory_snapshots(before, windows_file_identity_snapshot(opened)?)?;
+    validate_windows_shared_directory_snapshots(before, windows_file_identity_snapshot(&reopened)?)
+}
+
+fn validate_windows_shared_directory_snapshots(
+    expected: WindowsFileIdentitySnapshot,
+    current: WindowsFileIdentitySnapshot,
+) -> Result<()> {
+    // Child creation can grow NTFS directory metadata (observed size 0 -> 4096 -> 8192),
+    // in addition to updating write/change times. None of these three fields identifies
+    // a shared directory. Keep volume/file ID, creation time, attributes and link count strict.
+    // Existing file/store/owned-child validators still compare the complete snapshot.
+    let content_metadata_ignored = WindowsFileIdentitySnapshot {
+        size: expected.size,
+        last_write_time: expected.last_write_time,
+        change_time: expected.change_time,
+        ..current
+    };
+    let expected_directory = expected.attributes & WINDOWS_FILE_ATTRIBUTE_DIRECTORY != 0;
+    let current_directory = current.attributes & WINDOWS_FILE_ATTRIBUTE_DIRECTORY != 0;
+    let expected_reparse = expected.attributes & WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    let current_reparse = current.attributes & WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    if !expected_directory
+        || !current_directory
+        || expected_reparse
+        || current_reparse
+        || expected != content_metadata_ignored
+    {
+        return Err(anyhow!(
+            "shared Windows directory handles do not identify the same non-reparse object \
+             (attributes_changed={}, volume_changed={}, file_id_changed={}, \
+             creation_time_changed={}, link_count_changed={}, size_changed={}, \
+             last_write_time_changed={}, change_time_changed={}, \
+             expected_directory={}, current_directory={}, expected_reparse={}, current_reparse={})",
+            expected.attributes != current.attributes,
+            expected.volume_serial_number != current.volume_serial_number,
+            expected.file_index != current.file_index,
+            expected.creation_time != current.creation_time,
+            expected.number_of_links != current.number_of_links,
+            expected.size != current.size,
+            expected.last_write_time != current.last_write_time,
+            expected.change_time != current.change_time,
+            expected_directory,
+            current_directory,
+            expected_reparse,
+            current_reparse,
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_windows_path_identity_only(
     path: &Path,
     opened: &File,
@@ -510,53 +609,84 @@ pub(crate) fn validate_windows_private_owner_and_acl(path: &Path, file: &File) -
         )
     };
     if status != ERROR_SUCCESS {
-        return Err(std::io::Error::from_raw_os_error(status as i32))
-            .with_context(|| format!("failed to verify Windows security for {}", path.display()));
+        return Err(std::io::Error::from_raw_os_error(status as i32)).with_context(|| {
+            format!(
+                "GetSecurityInfo failed for private Windows ACL (win32_error={status}): {}",
+                path.display()
+            )
+        });
     }
     let _descriptor = WindowsLocalAllocation(descriptor.cast());
     let mut control = 0u16;
     let mut revision = 0u32;
     let mut acl_size = ACL_SIZE_INFORMATION::default();
-    // SAFETY: owner, descriptor and ACL all belong to the live security descriptor allocation.
-    let header_is_valid = !owner.is_null()
-        && !acl.is_null()
-        && !descriptor.is_null()
-        && unsafe { EqualSid(owner, current_user.sid) } != 0
-        && unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) } != 0
-        && control & SE_DACL_PROTECTED != 0
-        && unsafe {
+    let owner_present = !owner.is_null();
+    let dacl_present = !acl.is_null();
+    let descriptor_present = !descriptor.is_null();
+    // SAFETY: non-null owner and current-user SIDs belong to live Windows allocations.
+    let owner_matches = owner_present && unsafe { EqualSid(owner, current_user.sid) } != 0;
+    let mut control_error = None;
+    let mut acl_information_error = None;
+    // Inspect independent fields even when another check fails, without logging any SID.
+    // Capture GetLastError immediately; the next API call may overwrite it.
+    let control_read = descriptor_present && {
+        // SAFETY: descriptor belongs to the live GetSecurityInfo allocation.
+        let success =
+            unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) } != 0;
+        if !success {
+            control_error = std::io::Error::last_os_error().raw_os_error();
+        }
+        success
+    };
+    let acl_information_read = dacl_present && {
+        // SAFETY: ACL and output buffer remain live throughout this call.
+        let success = unsafe {
             GetAclInformation(
                 acl,
                 (&mut acl_size as *mut ACL_SIZE_INFORMATION).cast(),
                 std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
                 AclSizeInformation,
             )
-        } != 0
-        && acl_size.AceCount == 1;
-    if !header_is_valid {
+        } != 0;
+        if !success {
+            acl_information_error = std::io::Error::last_os_error().raw_os_error();
+        }
+        success
+    };
+    let dacl_protected = control_read && control & SE_DACL_PROTECTED != 0;
+    let ace_count = acl_information_read.then_some(acl_size.AceCount);
+    if !descriptor_present || !owner_matches || !dacl_protected || ace_count != Some(1) {
         return Err(anyhow!(
-            "private Windows ACL is not owner-bound: {}",
+            "private Windows ACL is not owner-bound: {} (descriptor_present={descriptor_present}, owner_present={owner_present}, dacl_present={dacl_present}, owner_matches={owner_matches}, dacl_protected={dacl_protected}, ace_count={ace_count:?}, GetSecurityDescriptorControl_error={control_error:?}, GetAclInformation_error={acl_information_error:?})",
             path.display()
         ));
     }
     let mut raw_ace = std::ptr::null_mut();
     // SAFETY: the ACL was validated to contain exactly one ACE.
-    if unsafe { GetAce(acl, 0, &mut raw_ace) } == 0 || raw_ace.is_null() {
-        return Err(std::io::Error::last_os_error())
-            .with_context(|| format!("failed to inspect Windows ACL for {}", path.display()));
+    if unsafe { GetAce(acl, 0, &mut raw_ace) } == 0 {
+        let error = std::io::Error::last_os_error();
+        return Err(error)
+            .with_context(|| format!("GetAce failed for private Windows ACL: {}", path.display()));
+    }
+    if raw_ace.is_null() {
+        return Err(anyhow!(
+            "GetAce returned a null entry for private Windows ACL: {}",
+            path.display()
+        ));
     }
     // SAFETY: GetAce returned the first ACE, whose fixed header is always readable.
     let ace = unsafe { &*(raw_ace.cast::<ACCESS_ALLOWED_ACE>()) };
     let ace_sid = (&ace.SidStart as *const u32).cast_mut().cast();
     // ACCESS_ALLOWED_ACE_TYPE is zero. Reject inherited, deny, or extra-principal entries.
-    if ace.Header.AceType != 0
-        || ace.Mask & FILE_ALL_ACCESS != FILE_ALL_ACCESS
-        // SAFETY: SidStart is the documented inline SID start for ACCESS_ALLOWED_ACE.
-        || unsafe { EqualSid(ace_sid, current_user.sid) } == 0
-    {
+    let allowed_ace = ace.Header.AceType == 0;
+    let full_access = ace.Mask & FILE_ALL_ACCESS == FILE_ALL_ACCESS;
+    // SAFETY: only an ACCESS_ALLOWED_ACE has the inline SID layout used here.
+    let trustee_matches = allowed_ace && unsafe { EqualSid(ace_sid, current_user.sid) } != 0;
+    if !allowed_ace || !full_access || !trustee_matches {
         return Err(anyhow!(
-            "private Windows ACL grants access beyond the current user: {}",
-            path.display()
+            "private Windows ACL grants access beyond the current user: {} (ace_type={}, full_access={full_access}, trustee_matches={trustee_matches})",
+            path.display(),
+            ace.Header.AceType
         ));
     }
     Ok(())
@@ -720,11 +850,24 @@ pub(crate) struct WindowsOwnerOnlySecurityDescriptor {
 
 impl WindowsOwnerOnlySecurityDescriptor {
     pub(crate) fn for_current_user() -> Result<Self> {
+        Self::from_sddl(format!(
+            "D:P(A;;GA;;;{})",
+            windows_current_user_sid_string()?
+        ))
+    }
+
+    pub(crate) fn for_current_user_directory() -> Result<Self> {
+        let owner = windows_current_user_sid_string()?;
+        // The owner and protected inheritable DACL exist before the directory is visible.
+        // No other process needs to repair an ACL inherited during a concurrent creation.
+        Self::from_sddl(format!("O:{owner}D:P(A;OICI;FA;;;{owner})"))
+    }
+
+    fn from_sddl(sddl: String) -> Result<Self> {
         use windows_sys::Win32::Security::Authorization::{
             ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
         };
 
-        let sddl = format!("D:P(A;;GA;;;{})", windows_current_user_sid_string()?);
         let wide: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
         let mut descriptor = std::ptr::null_mut();
         // SAFETY: `wide` is NUL-terminated; the descriptor is LocalAlloc'd and freed on drop.
@@ -755,3 +898,112 @@ impl WindowsOwnerOnlySecurityDescriptor {
 unsafe impl Send for WindowsOwnerOnlySecurityDescriptor {}
 // SAFETY: see `Send`; no interior mutation happens through `as_raw`.
 unsafe impl Sync for WindowsOwnerOnlySecurityDescriptor {}
+
+#[cfg(test)]
+mod shared_directory_tests {
+    use super::*;
+
+    #[test]
+    fn shared_os_parent_accepts_inherited_acl_while_private_root_still_rejects_it() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        struct OwnedDirectory(std::path::PathBuf);
+        impl Drop for OwnedDirectory {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let path = std::env::temp_dir().join(format!(
+            "akra-shared-directory-security-{:032x}",
+            rand::random::<u128>()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        let directory = OwnedDirectory(path);
+        let opened = std::fs::OpenOptions::new()
+            .read(true)
+            .access_mode(WINDOWS_GENERIC_READ | WINDOWS_READ_CONTROL)
+            .share_mode(WINDOWS_FILE_SHARE_ALL)
+            .custom_flags(WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT | WINDOWS_FILE_FLAG_BACKUP_SEMANTICS)
+            .open(&directory.0)
+            .unwrap();
+        let before = windows_file_identity_snapshot(&opened).unwrap();
+
+        validate_windows_shared_directory_path_identity(&directory.0, &opened).unwrap();
+        let error = validate_windows_shared_private_directory(&directory.0, &opened).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("dacl_protected=false"),
+            "an inherited OS-parent ACL must not satisfy the private-root policy"
+        );
+        assert_eq!(
+            before,
+            windows_file_identity_snapshot(&opened).unwrap(),
+            "both shared-parent policies must be validation-only"
+        );
+    }
+
+    fn directory_snapshot() -> WindowsFileIdentitySnapshot {
+        WindowsFileIdentitySnapshot {
+            attributes: WINDOWS_FILE_ATTRIBUTE_DIRECTORY,
+            volume_serial_number: 17,
+            file_index: 29,
+            number_of_links: 1,
+            creation_time: 31,
+            size: 0,
+            last_write_time: 37,
+            change_time: 41,
+        }
+    }
+
+    #[test]
+    fn shared_directory_allows_content_size_and_timestamps_but_keeps_identity_fields_strict() {
+        let expected = directory_snapshot();
+        for size in [0, 4096, 8192] {
+            let current = WindowsFileIdentitySnapshot {
+                size,
+                last_write_time: 43,
+                change_time: 47,
+                ..expected
+            };
+            assert!(validate_windows_shared_directory_snapshots(expected, current).is_ok());
+            assert_ne!(expected, current, "ordinary snapshots remain fully strict");
+
+            type IdentityMutation = fn(&mut WindowsFileIdentitySnapshot);
+            let mutations: [(&str, IdentityMutation); 5] = [
+                ("volume_changed", |value| value.volume_serial_number += 1),
+                ("file_id_changed", |value| value.file_index += 1),
+                ("creation_time_changed", |value| value.creation_time += 1),
+                ("link_count_changed", |value| value.number_of_links += 1),
+                ("attributes_changed", |value| value.attributes |= 0x2),
+            ];
+            for (field, mutate) in mutations {
+                let mut changed = current;
+                mutate(&mut changed);
+                let diagnostic = validate_windows_shared_directory_snapshots(expected, changed)
+                    .unwrap_err()
+                    .to_string();
+                assert!(
+                    diagnostic.contains(&format!("{field}=true")),
+                    "{diagnostic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn shared_directory_rejects_non_directories_and_reparse_points_in_either_snapshot() {
+        let valid = directory_snapshot();
+        for attributes in [
+            0,
+            WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT,
+            WINDOWS_FILE_ATTRIBUTE_DIRECTORY | WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT,
+        ] {
+            let invalid = WindowsFileIdentitySnapshot {
+                attributes,
+                ..valid
+            };
+            assert!(validate_windows_shared_directory_snapshots(valid, invalid).is_err());
+            assert!(validate_windows_shared_directory_snapshots(invalid, valid).is_err());
+            assert!(validate_windows_shared_directory_snapshots(invalid, invalid).is_err());
+        }
+    }
+}

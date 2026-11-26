@@ -141,7 +141,9 @@ impl Workspace {
                     | FILE_FLAG_OPEN_REPARSE_POINT,
             )
             .open(&temp)?;
-        crate::private_fs::validate_windows_path_identity(&temp, &parent, true)
+        // Other processes create children here; verify the shared parent identity and owner.
+        // The invocation-owned workspace below retains its own descriptor and strict locks.
+        crate::private_fs::validate_windows_shared_directory_path_identity(&temp, &parent)
             .map_err(io::Error::other)?;
         let path = temp.join(&identity.name);
         let descriptor = identity.workspace_descriptor()?;
