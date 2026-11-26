@@ -8,6 +8,10 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use crate::application::port::inbound::turn_activity_port::{
+    TurnActivityObserverPort, TurnActivityPort,
+};
+
 #[derive(Default)]
 struct ThreadActivity {
     folder: Option<String>,
@@ -109,6 +113,26 @@ impl Drop for TurnActivityObserver {
             .lock()
             .threads
             .retain(|(observer, _), _| *observer != self.id);
+    }
+}
+
+impl TurnActivityPort for TurnActivityRegistry {
+    fn observe_connection(self: Arc<Self>) -> Box<dyn TurnActivityObserverPort> {
+        Box::new(Self::observer(&self))
+    }
+}
+
+impl TurnActivityObserverPort for TurnActivityObserver {
+    fn thread_snapshot(&self, thread_id: &str, folder: &str, running: Option<bool>) {
+        Self::thread_snapshot(self, thread_id, folder, running);
+    }
+
+    fn turn_running(&self, thread_id: &str, running: bool) {
+        Self::turn_running(self, thread_id, running);
+    }
+
+    fn forget_thread(&self, thread_id: &str) {
+        Self::forget_thread(self, thread_id);
     }
 }
 
