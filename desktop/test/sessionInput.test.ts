@@ -194,6 +194,60 @@ const transcript = (status: "inProgress" | "completed"): Transcript => ({
   tokenUsage: null,
 });
 
+describe("queued session input", () => {
+  it("keeps an acknowledged manual turn ahead of paused reservations before the start notification", async () => {
+    const { session, sent, receive, replyTo, openWith, emitState } = harness();
+    emitState("connected");
+    openWith(transcript("inProgress"));
+    session.queueMessage("reserved");
+    session.nextTurnQueue.pause("t1", "paused for review");
+    receive({ method: "turn/completed", params: { threadId: "t1", turn: { id: "turn-1", status: "completed", items: [], error: null } } });
+    const manual = session.sendMessage("manual first");
+    replyTo("turn/start", { turn: { id: "acknowledged" } });
+    await manual;
+    const steer = session.sendMessage("more detail");
+    expect(sent.at(-1)).toMatchObject({ method: "turn/steer", params: { expectedTurnId: "acknowledged" } });
+    replyTo("turn/steer", { turnId: "acknowledged" });
+    await steer;
+    session.resumeQueuedMessages();
+    expect(sent.filter((message) => message.method === "turn/start")).toHaveLength(1);
+    expect(session.nextTurnQueue.snapshot("t1").waitingTurnId).toBe("acknowledged");
+    session.stop();
+  });
+
+  it("reserves the current thread and starts once only after its terminal notification", async () => {
+    const { session, sent, receive, replyTo, openWith, emitState } = harness();
+    emitState("connected");
+    openWith(transcript("inProgress"));
+    session.queueMessage("next task");
+    expect(sent.filter((message) => message.method?.startsWith("turn/"))).toHaveLength(0);
+    receive({ method: "turn/completed", params: { threadId: "t1", turn: { id: "turn-1", status: "completed", items: [], error: null } } });
+    const starts = () => sent.filter((message) => message.method === "turn/start");
+    expect(starts()).toHaveLength(1);
+    expect(starts()[0]?.params).toMatchObject({ threadId: "t1", input: [{ type: "text", text: "next task" }] });
+    receive({ method: "turn/completed", params: { threadId: "t1", turn: { id: "turn-1", status: "completed", items: [], error: null } } });
+    replyTo("turn/start", { turn: { id: "queued-turn" } });
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(starts()).toHaveLength(1);
+    expect(sent.some((message) => message.method === "turn/steer")).toBe(false);
+    session.stop();
+  });
+
+  it("pauses reservations before interrupt and does not dispatch on the cancelled turn", async () => {
+    const { session, sent, receive, replyTo, openWith, emitState } = harness();
+    emitState("connected");
+    openWith(transcript("inProgress"));
+    session.queueMessage("not after cancel");
+    const stopping = session.interrupt();
+    replyTo("turn/interrupt", {});
+    await stopping;
+    receive({ method: "turn/completed", params: { threadId: "t1", turn: { id: "turn-1", status: "completed", items: [], error: null } } });
+    expect(sent.filter((message) => message.method === "turn/start")).toHaveLength(0);
+    expect(session.nextTurnQueue.snapshot("t1").paused).not.toBeNull();
+    session.stop();
+  });
+});
+
 describe("sending input", () => {
   it("starts a new turn when nothing is running", async () => {
     const { session, sent, reply, openWith } = harness();

@@ -12,8 +12,13 @@ import { isSentComposerDraft, runComposerAction, useComposerRequests } from "./c
 import { PlanList } from "./ConversationView";
 import { loadPrompts, rememberPrompt } from "./promptHistory";
 import { contextPercent, isTurnInProgress } from "./transcript";
+import type { NextTurnQueue } from "../session/nextTurnQueue";
+import { QueuedInputs } from "./QueuedInputs";
 
 export interface ComposerActions {
+  queue?: NextTurnQueue;
+  queueMessage?(text: string): void;
+  resumeQueuedMessages?(): void;
   sendMessage(text: string): Promise<void>;
   interrupt(): Promise<void>;
   /** 새 스레드를 만들고 첫 메시지를 보낸다. 사용자가 폴더 고르기를 취소하면 false 이다. */
@@ -139,10 +144,19 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
   };
 
   const sendTitle = inProgress ? "추가 지시" : "보내기";
+  const reserve = () => {
+    if (disabled || !draft.trim() || !actions.queueMessage) return;
+    try {
+      actions.queueMessage(draft);
+      setDraft("");
+      setError(null);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  };
   return (
     <div className="composer-area">
       <div className="column">
         {above}
+        {!home && transcript && actions.queue && actions.resumeQueuedMessages && <QueuedInputs queue={actions.queue} threadId={transcript.threadId} resume={actions.resumeQueuedMessages} />}
         {livePlan && livePlan.length > 0 && <PlanStrip steps={livePlan} />}
         {!connected && <p className="muted">연결이 끊겨 입력할 수 없습니다.</p>}
         {error && <p className="error">{error}</p>}
@@ -158,6 +172,7 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
             data-testid="composer-input"
           />
           <div className="composer-bar">
+            {!home && actions.queueMessage && <button type="button" className="subtle-button" disabled={disabled || !draft.trim()} onClick={reserve} data-testid="composer-queue">다음 턴 예약</button>}
             <span className="bar-spacer" />
             {percent !== null && <ContextRing percent={percent} />}
             {inProgress && (

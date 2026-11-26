@@ -2314,3 +2314,9 @@ button.issues-title:hover {
 .issues-detail-toolbar .issues-back {
   margin-bottom: 0;
 }
+.queued-inputs { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 8px; font-size: 12px; }
+.queued-inputs ol { margin: 8px 0 0; padding-left: 22px; max-height: 180px; overflow: auto; }
+.queued-inputs li { margin: 6px 0; }
+.queued-inputs button { margin-left: 6px; }
+.queued-input-text { display: block; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 72px; overflow: auto; }
+.queued-inputs textarea { width: 100%; min-height: 48px; }
