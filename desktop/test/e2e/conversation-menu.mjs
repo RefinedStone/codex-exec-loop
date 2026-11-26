@@ -70,6 +70,17 @@ try {
   await page.keyboard.press("Escape");
   await page.getByTestId("e2e-link").evaluate((element) => element.remove());
 
+  // 본문이 150% 일 때도 메뉴는 누른 자리에 열린다.
+  await page.locator(".main-view").evaluate((view) => { view.style.zoom = "1.5"; });
+  const box = await message.locator("p").boundingBox();
+  const click = { x: box.x + 5, y: box.y + 5 };
+  await page.mouse.click(click.x, click.y, { button: "right" });
+  const zoomed = await page.getByTestId("conversation-menu").evaluate((element) => element.getBoundingClientRect().toJSON());
+  check("the menu opens at the click point in a zoomed body", Math.abs(zoomed.left - click.x) < 2 && Math.abs(zoomed.top - click.y) < 2,
+    JSON.stringify({ click, zoomed }));
+  await page.keyboard.press("Escape");
+  await page.locator(".main-view").evaluate((view) => { view.style.zoom = ""; });
+
   await message.locator("p").click({ button: "right" });
   await page.getByTestId("conversation-menu-find").click();
   await page.getByTestId("find-input").waitFor({ timeout: 5_000 });
