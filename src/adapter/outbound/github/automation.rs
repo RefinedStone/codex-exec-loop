@@ -1779,17 +1779,40 @@ pub(crate) fn trusted_temp_directory_base() -> Result<PathBuf> {
 #[cfg(windows)]
 fn ensure_trusted_temp_directory(path: &Path, repair_existing: bool) -> Result<()> {
     match crate::private_fs::create_windows_private_directory(path) {
-        Ok(()) => validate_private_directory(path),
+        Ok(()) => validate_shared_private_directory(path),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            if repair_existing && validate_private_directory(path).is_err() {
+            if repair_existing && validate_shared_private_directory(path).is_err() {
                 secure_private_directory(path)
             } else {
-                validate_private_directory(path)
+                validate_shared_private_directory(path)
             }
         }
         Err(error) => Err(error)
             .with_context(|| format!("failed to create trusted temp base `{}`", path.display())),
     }
+}
+
+/// Sibling contexts change the parent's write and change times, so only stable identity is
+/// compared. Owner and DACL are still checked through the same handle.
+#[cfg(windows)]
+fn validate_shared_private_directory(path: &Path) -> Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    use crate::private_fs::{
+        WINDOWS_FILE_FLAG_BACKUP_SEMANTICS, WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT,
+        WINDOWS_FILE_SHARE_ALL, WINDOWS_GENERIC_READ, WINDOWS_READ_CONTROL,
+        validate_windows_private_owner_and_acl, validate_windows_shared_directory_identity,
+    };
+    let directory = OpenOptions::new()
+        .read(true)
+        .access_mode(WINDOWS_GENERIC_READ | WINDOWS_READ_CONTROL)
+        .share_mode(WINDOWS_FILE_SHARE_ALL)
+        .custom_flags(WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT | WINDOWS_FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .with_context(|| format!("failed to validate private directory `{}`", path.display()))?;
+    validate_windows_shared_directory_identity(path, &directory)?;
+    validate_windows_private_owner_and_acl(path, &directory)
+        .context("private ACL check through a newly opened handle failed")
 }
 
 fn write_private_file(path: &Path, contents: &str) -> Result<()> {

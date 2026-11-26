@@ -309,6 +309,38 @@ fn validate_windows_identity_snapshot_with_link_policy(
     Ok(())
 }
 
+/// 여러 컨텍스트가 함께 쓰는 부모 디렉터리용이다. 형제 항목을 만들면 바뀌는 쓰기·변경 시각은
+/// 비교하지 않고, `windows_file_identity_key` 와 같은 볼륨·파일 번호·생성 시각만 비교한다 (#2745).
+pub(crate) fn validate_windows_shared_directory_identity(path: &Path, opened: &File) -> Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let path_handle = std::fs::OpenOptions::new()
+        .read(true)
+        .access_mode(WINDOWS_GENERIC_READ | WINDOWS_READ_CONTROL)
+        .share_mode(WINDOWS_FILE_SHARE_ALL)
+        .custom_flags(WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT | WINDOWS_FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .with_context(|| format!("failed to reopen Windows path {}", path.display()))?;
+    let expected = windows_file_identity_snapshot(opened)?;
+    let current = windows_file_identity_snapshot(&path_handle)?;
+    let is_plain_directory = |identity: &WindowsFileIdentitySnapshot| {
+        identity.attributes & WINDOWS_FILE_ATTRIBUTE_DIRECTORY != 0
+            && identity.attributes & WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT == 0
+    };
+    if !is_plain_directory(&expected)
+        || !is_plain_directory(&current)
+        || expected.volume_serial_number != current.volume_serial_number
+        || expected.file_index != current.file_index
+        || expected.creation_time != current.creation_time
+    {
+        return Err(anyhow!(
+            "shared private Windows directory must be the same stable non-reparse directory: {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
 struct WindowsHandle(windows_sys::Win32::Foundation::HANDLE);
 
 impl Drop for WindowsHandle {
