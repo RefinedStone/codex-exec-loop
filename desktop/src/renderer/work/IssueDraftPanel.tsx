@@ -9,6 +9,7 @@ import "./IssueDraftPanel.css";
 import { IssueReadinessPanel } from "./IssueReadinessPanel";
 import { IssueDraftRequirements as Requirements, IssueDraftPreviewView as Preview, IssueDraftTextFields } from "./IssueDraftFields";
 import {
+  cancelledByUser,
   intentStatus,
   expectedLabels,
   ISSUE_METHOD,
@@ -26,6 +27,7 @@ import {
   shiftSpans,
 } from "./issueDraft";
 import type { GatewayRequest } from "./notionHub";
+import { newValidationId, ValidationCancel } from "./ValidationCancel";
 
 /** 입력이 멈춘 뒤 미리보기를 다시 만들 때까지의 시간이다. */
 const PREVIEW_DELAY_MS = 300;
@@ -167,20 +169,25 @@ export function IssueDraftPanel({ request, target, onClose }: { request: Gateway
     }
   };
 
+  const [validationId, setValidationId] = useState<string | null>(null);
   const publish = (sharedCopyOnly: boolean) =>
     run(async () => {
       if (openState.phase !== "loaded" || !approval) return;
+      const id = newValidationId();
+      setValidationId(id);
       const published = await request<IssueDraftPublished>(ISSUE_METHOD.publish, {
         target,
         text: { title, body, spans },
         approval,
         editBasis: openState.opened.editBasis,
         sharedCopyOnly,
-      });
+        validationId: id,
+      }).finally(() => setValidationId(null));
       if (published.status === "blocked") {
         setPreview(published.preview);
         setApproval(null);
-        setNotice("검증을 통과하지 못해서 게시하지 않았습니다.");
+        const errors = published.preview.status === "ready" ? published.preview.errors : [];
+        setNotice(cancelledByUser(errors) ? "검증을 취소해서 게시하지 않았습니다." : "검증을 통과하지 못해서 게시하지 않았습니다.");
         return;
       }
       setStatus(publishStatus(published));
@@ -275,6 +282,7 @@ export function IssueDraftPanel({ request, target, onClose }: { request: Gateway
           <button type="button" onClick={() => void publish(false)} disabled={!approval || busy || waiting} data-testid="issue-draft-publish">
             {busy ? "처리 중…" : "게시"}
           </button>
+          <ValidationCancel validationId={validationId} request={request} testId="issue-draft-cancel-validation" />
           {notice && (
             <p className="muted" data-testid="issue-draft-notice">
               {notice}
