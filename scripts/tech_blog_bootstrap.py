@@ -13,7 +13,8 @@ def main():
             del os.environ[name]
     with tempfile.TemporaryDirectory(prefix="akra-blog-host-") as directory:
         root = Path(directory)
-        for name in ("tech_blog.py", "tech_blog_studio.py", "tech_blog_review.schema.json", "tech_blog_write.schema.json"):
+        for name in ("tech_blog.py", "tech_blog_studio.py", "tech_blog_review.schema.json", "tech_blog_write.schema.json",
+                     "akra-tech-blog.SKILL.md"):
             (root/name).write_text(message["scripts"][name], encoding="utf-8")
         sys.path.insert(0, directory)
         import tech_blog

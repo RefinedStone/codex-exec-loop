@@ -5,6 +5,10 @@ use serde_json::{Value, json};
 use std::{path::Path, process::Stdio, time::Duration};
 use tokio::io::AsyncWriteExt;
 
+/// 블로그 집필 규칙이다 (#2872). 워커가 이 글을 모델 입력의 앞에 붙인다.
+const TECH_BLOG_WRITE_SKILL: &str =
+    include_str!("../../../assets/app-server/skills/akra-tech-blog/SKILL.md");
+
 pub(crate) async fn invoke(
     workspace: &Path,
     owner: &str,
@@ -56,6 +60,7 @@ pub(crate) async fn invoke(
             "tech_blog_studio.py": include_str!("../../../scripts/tech_blog_studio.py"),
             "tech_blog_review.schema.json": include_str!("../../../scripts/tech_blog_review.schema.json"),
             "tech_blog_write.schema.json": include_str!("../../../scripts/tech_blog_write.schema.json"),
+            "akra-tech-blog.SKILL.md": TECH_BLOG_WRITE_SKILL,
         },
         "git": git, "model_command":model_command, "workspace": workspace, "runtime":runtime, "owner":owner, "action":action, "input":input
     });
@@ -79,4 +84,23 @@ pub(crate) async fn invoke(
         .get("value")
         .cloned()
         .context("블로그 워커 응답 형식 오류")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TECH_BLOG_WRITE_SKILL;
+
+    #[test]
+    fn the_worker_ships_the_writing_skill_that_the_bootstrap_unpacks() {
+        assert!(TECH_BLOG_WRITE_SKILL.contains("name: akra-tech-blog"));
+        assert!(TECH_BLOG_WRITE_SKILL.contains("한국어 기술 블로그의 필자다"));
+        assert!(
+            include_str!("../../../scripts/tech_blog_bootstrap.py")
+                .contains("\"akra-tech-blog.SKILL.md\"")
+        );
+        assert!(
+            include_str!("../../../scripts/tech_blog_studio.py")
+                .contains("WRITE_SKILL = \"akra-tech-blog.SKILL.md\"")
+        );
+    }
 }
