@@ -214,7 +214,7 @@ impl From<PlanningTaskUpdatePayload> for PlanningTaskUpdateInput {
             priority_reason: input.priority_reason,
             depends_on: input.depends_on,
             blocked_by: input.blocked_by,
-            expected_planning_revision: None,
+            expected_planning_revision: input.expected_planning_revision,
         }
     }
 }
@@ -780,6 +780,7 @@ mod tests {
                         priority_reason: None,
                         depends_on: None,
                         blocked_by: None,
+                        expected_planning_revision: None,
                     },
                 }),
             )
@@ -816,6 +817,7 @@ mod tests {
                         priority_reason: Some("waiting on blocker".to_string()),
                         depends_on: Some(vec!["dependency".to_string()]),
                         blocked_by: Some(vec!["blocker".to_string()]),
+                        expected_planning_revision: None,
                     },
                 }),
             )
@@ -887,6 +889,71 @@ mod tests {
                 assert!(error.to_string().contains(field), "{error}");
             }
         }
+    }
+
+    /// #2802: a worker that read `list_tasks` sends its revision; a later planning change refuses the stale patch.
+    #[test]
+    fn update_task_with_a_stale_listed_revision_changes_nothing() {
+        let repo = repo();
+        let workspace = workspace("stale-update");
+        let target = task(
+            "target",
+            "Target",
+            TaskStatus::Ready,
+            "2026-05-03T00:00:00Z",
+        );
+        seed(repo.as_ref(), &workspace, vec![target], None);
+        let tool = service(repo.clone());
+        let request = |value: serde_json::Value| {
+            serde_json::from_value::<PlanningTaskToolRequest>(value).expect("wire request")
+        };
+        let listed = tool
+            .handle_request(
+                &workspace,
+                request(serde_json::json!({"version": 1, "op": "list_tasks"})),
+            )
+            .unwrap()
+            .committed_planning_revision
+            .unwrap();
+        // Another writer changes planning after the worker read it.
+        tool.handle_request(
+            &workspace,
+            request(serde_json::json!({"version": 1, "op": "update_task", "apply": true, "task_id": "target", "priority_reason": "other writer"})),
+        )
+        .unwrap();
+        let before = repo
+            .load_task_authority_snapshot(&workspace)
+            .unwrap()
+            .unwrap();
+
+        let error = tool
+            .handle_request(
+                &workspace,
+                request(serde_json::json!({"version": 1, "op": "update_task", "apply": true, "task_id": "target",
+                    "status": "blocked", "expected_planning_revision": listed})),
+            )
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("planning changed after task `target`"),
+            "{error}"
+        );
+        let after = repo
+            .load_task_authority_snapshot(&workspace)
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.planning_revision, before.planning_revision);
+        assert_eq!(after.task_authority, before.task_authority);
+
+        let response = tool
+            .handle_request(
+                &workspace,
+                request(serde_json::json!({"version": 1, "op": "update_task", "apply": true, "task_id": "target",
+                    "status": "blocked", "expected_planning_revision": before.planning_revision})),
+            )
+            .unwrap();
+        assert!(response.task_authority_changed);
     }
 
     #[test]
