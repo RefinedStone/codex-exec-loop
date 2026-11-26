@@ -1768,22 +1768,28 @@ pub(crate) fn trusted_temp_directory_base() -> Result<PathBuf> {
     let local_app_data = crate::private_fs::windows_local_app_data_path()?;
     let akra = local_app_data.join("Akra");
     let base = akra.join("trusted-temp");
-    for directory in [&akra, &base] {
-        match fs::create_dir(directory) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!(
-                        "failed to create trusted temp base `{}`",
-                        directory.display()
-                    )
-                });
+    // Other stores may create the shared `Akra` directory with an inherited DACL.
+    ensure_trusted_temp_directory(&akra, true)?;
+    ensure_trusted_temp_directory(&base, false)?;
+    Ok(base)
+}
+
+/// A DACL write on an existing parent propagates to its children and can overwrite a sibling
+/// context's new protected DACL (#2745). Only a parent that fails validation gets a write.
+#[cfg(windows)]
+fn ensure_trusted_temp_directory(path: &Path, repair_existing: bool) -> Result<()> {
+    match crate::private_fs::create_windows_private_directory(path) {
+        Ok(()) => validate_private_directory(path),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            if repair_existing && validate_private_directory(path).is_err() {
+                secure_private_directory(path)
+            } else {
+                validate_private_directory(path)
             }
         }
-        secure_private_directory(directory)?;
+        Err(error) => Err(error)
+            .with_context(|| format!("failed to create trusted temp base `{}`", path.display())),
     }
-    Ok(base)
 }
 
 fn write_private_file(path: &Path, contents: &str) -> Result<()> {

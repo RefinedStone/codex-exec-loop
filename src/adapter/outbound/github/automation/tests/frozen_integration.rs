@@ -291,3 +291,35 @@ fn concurrent_isolated_contexts_keep_their_private_acl_under_one_trusted_temp_pa
         fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[cfg(windows)]
+#[test]
+fn trusted_temp_parent_rejects_unsafe_existing_directories_without_repair() {
+    use super::super::{create_private_temp_directory, ensure_trusted_temp_directory};
+
+    let root = create_private_temp_directory("akra-acl-existing").unwrap();
+    let created = root.join("created");
+    ensure_trusted_temp_directory(&created, false).unwrap();
+    ensure_trusted_temp_directory(&created, false).unwrap();
+
+    // A child that only inherits its DACL is not protected; validation must not repair it.
+    let inherited = root.join("inherited");
+    fs::create_dir(&inherited).unwrap();
+    let error = ensure_trusted_temp_directory(&inherited, false).unwrap_err();
+    assert!(format!("{error:#}").contains("dacl_protected=false"));
+
+    let target = root.join("target");
+    fs::create_dir(&target).unwrap();
+    let junction = root.join("junction");
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&junction)
+        .arg(&target)
+        .status()
+        .unwrap();
+    assert!(status.success(), "junction fixture should create");
+    // Even the shared-parent repair path must refuse a reparse point.
+    assert!(ensure_trusted_temp_directory(&junction, true).is_err());
+    fs::remove_dir(&junction).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}

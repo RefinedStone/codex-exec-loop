@@ -746,11 +746,25 @@ pub(crate) struct WindowsOwnerOnlySecurityDescriptor {
 
 impl WindowsOwnerOnlySecurityDescriptor {
     pub(crate) fn for_current_user() -> Result<Self> {
+        Self::from_sddl(&format!(
+            "D:P(A;;GA;;;{})",
+            windows_current_user_sid_string()?
+        ))
+    }
+
+    /// 디렉터리용이다. 하나뿐인 ACE 를 하위 디렉터리와 파일이 상속한다 (`D:P(A;OICI;FA;;;<SID>)`).
+    pub(crate) fn for_current_user_directory() -> Result<Self> {
+        Self::from_sddl(&format!(
+            "D:P(A;OICI;FA;;;{})",
+            windows_current_user_sid_string()?
+        ))
+    }
+
+    fn from_sddl(sddl: &str) -> Result<Self> {
         use windows_sys::Win32::Security::Authorization::{
             ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
         };
 
-        let sddl = format!("D:P(A;;GA;;;{})", windows_current_user_sid_string()?);
         let wide: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
         let mut descriptor = std::ptr::null_mut();
         // SAFETY: `wide` is NUL-terminated; the descriptor is LocalAlloc'd and freed on drop.
@@ -781,3 +795,31 @@ impl WindowsOwnerOnlySecurityDescriptor {
 unsafe impl Send for WindowsOwnerOnlySecurityDescriptor {}
 // SAFETY: see `Send`; no interior mutation happens through `as_raw`.
 unsafe impl Sync for WindowsOwnerOnlySecurityDescriptor {}
+
+/// 생성 순간부터 보호된 현재 사용자 전용 DACL 을 가진 디렉터리를 만든다. 생성 뒤 ACL 을 다시
+/// 쓰지 않으므로 이미 있는 하위 항목으로 상속 전파가 일어나지 않는다. 이미 있으면
+/// `AlreadyExists` 를 돌려준다.
+pub(crate) fn create_windows_private_directory(path: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::Storage::FileSystem::CreateDirectoryW;
+
+    let security = WindowsOwnerOnlySecurityDescriptor::for_current_user_directory()
+        .map_err(std::io::Error::other)?;
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: security.as_raw(),
+        bInheritHandle: 0,
+    };
+    let wide = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    // SAFETY: the NUL-terminated path and security descriptor remain live for this call.
+    if unsafe { CreateDirectoryW(wide.as_ptr(), &attributes) } != 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
