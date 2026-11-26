@@ -514,30 +514,56 @@ pub(crate) fn validate_windows_private_owner_and_acl(path: &Path, file: &File) -
             .with_context(|| format!("failed to verify Windows security for {}", path.display()));
     }
     let _descriptor = WindowsLocalAllocation(descriptor.cast());
+    // Each failure names one condition and never prints a SID (#2745).
+    let not_owner_bound = |condition: &str| {
+        format!(
+            "private Windows ACL is not owner-bound ({condition}): {}",
+            path.display()
+        )
+    };
+    if descriptor.is_null() || owner.is_null() || acl.is_null() {
+        return Err(anyhow!(not_owner_bound(&format!(
+            "descriptor_present={}, owner_present={}, dacl_present={}",
+            !descriptor.is_null(),
+            !owner.is_null(),
+            !acl.is_null()
+        ))));
+    }
+    // SAFETY: both SIDs come from validated Windows security API responses.
+    if unsafe { EqualSid(owner, current_user.sid) } == 0 {
+        return Err(anyhow!(not_owner_bound("owner_matches=false")));
+    }
     let mut control = 0u16;
     let mut revision = 0u32;
+    // SAFETY: the descriptor belongs to the live security descriptor allocation.
+    if unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) } == 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("GetSecurityDescriptorControl failed")
+            .with_context(|| not_owner_bound("descriptor_control_unreadable"));
+    }
+    if control & SE_DACL_PROTECTED == 0 {
+        return Err(anyhow!(not_owner_bound("dacl_protected=false")));
+    }
     let mut acl_size = ACL_SIZE_INFORMATION::default();
-    // SAFETY: owner, descriptor and ACL all belong to the live security descriptor allocation.
-    let header_is_valid = !owner.is_null()
-        && !acl.is_null()
-        && !descriptor.is_null()
-        && unsafe { EqualSid(owner, current_user.sid) } != 0
-        && unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) } != 0
-        && control & SE_DACL_PROTECTED != 0
-        && unsafe {
-            GetAclInformation(
-                acl,
-                (&mut acl_size as *mut ACL_SIZE_INFORMATION).cast(),
-                std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
-                AclSizeInformation,
-            )
-        } != 0
-        && acl_size.AceCount == 1;
-    if !header_is_valid {
-        return Err(anyhow!(
-            "private Windows ACL is not owner-bound: {}",
-            path.display()
-        ));
+    // SAFETY: the ACL belongs to the live security descriptor allocation.
+    if unsafe {
+        GetAclInformation(
+            acl,
+            (&mut acl_size as *mut ACL_SIZE_INFORMATION).cast(),
+            std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
+            AclSizeInformation,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error())
+            .context("GetAclInformation failed")
+            .with_context(|| not_owner_bound("acl_size_unreadable"));
+    }
+    if acl_size.AceCount != 1 {
+        return Err(anyhow!(not_owner_bound(&format!(
+            "ace_count={}",
+            acl_size.AceCount
+        ))));
     }
     let mut raw_ace = std::ptr::null_mut();
     // SAFETY: the ACL was validated to contain exactly one ACE.

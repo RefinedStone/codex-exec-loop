@@ -257,3 +257,37 @@ fn embedded_helper_rejects_missing_or_untrusted_dependencies_in_a_git_only_conte
     .unwrap_err();
     assert!(format!("{error:#}").contains("trusted bash interpreter is unavailable"));
 }
+
+#[cfg(windows)]
+#[test]
+fn concurrent_isolated_contexts_keep_their_private_acl_under_one_trusted_temp_parent() {
+    use super::super::create_private_temp_directory;
+    use std::sync::{Arc, Barrier};
+
+    // Before #2745, every context reset the shared parent DACL. That write propagates to
+    // existing children and could replace a sibling's new protected DACL.
+    const THREADS: usize = 8;
+    const ROUNDS: usize = 16;
+    let barrier = Arc::new(Barrier::new(THREADS));
+    let workers = (0..THREADS)
+        .map(|_| {
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                let mut roots = Vec::new();
+                for _ in 0..ROUNDS {
+                    roots.push(create_private_temp_directory("akra-acl-race").unwrap());
+                }
+                roots
+            })
+        })
+        .collect::<Vec<_>>();
+    let roots = workers
+        .into_iter()
+        .flat_map(|worker| worker.join().unwrap())
+        .collect::<Vec<_>>();
+    for root in roots {
+        super::super::validate_private_directory(&root).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+}

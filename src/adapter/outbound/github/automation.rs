@@ -1921,6 +1921,7 @@ fn validate_private_directory(path: &Path) -> Result<()> {
         .with_context(|| format!("failed to validate private directory `{}`", path.display()))?;
     validate_windows_path_identity(path, &directory, true)?;
     validate_windows_private_owner_and_acl(path, &directory)
+        .context("private ACL check through a newly opened handle failed")
 }
 
 #[cfg(windows)]
@@ -1964,7 +1965,8 @@ fn secure_private_windows_path(path: &Path, directory: bool) -> Result<()> {
         .with_context(|| format!("failed to secure private Windows path `{}`", path.display()))?;
     validate_windows_path_identity(path, &file, directory)?;
     set_windows_private_acl(&file, directory)?;
-    validate_windows_private_owner_and_acl(path, &file)?;
+    validate_windows_private_owner_and_acl(path, &file)
+        .context("private ACL check through the handle that applied it failed")?;
     validate_windows_path_identity(path, &file, directory)
 }
 
