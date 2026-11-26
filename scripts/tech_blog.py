@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from enum import Enum
 from pathlib import Path, PurePosixPath
@@ -238,14 +239,19 @@ def kill_process_tree(process):
     process.wait()
 
 
+def send_prompt(stdin, prompt):
+    try:
+        stdin.write(prompt)
+        stdin.close()
+    except OSError:
+        pass  # 모델이 먼저 끝났거나 끝내졌다. 종료 코드나 취소가 알려 준다.
+
+
 def wait_for_model(process, prompt):
     """입력을 보내고 끝나기를 기다린다. 취소되거나 제한 시간을 넘으면 프로세스 트리를 끝내고 알린다."""
-    try:
-        process.stdin.write(prompt)
-        process.stdin.close()
-    except OSError:
-        pass  # 모델이 먼저 끝났다. 종료 코드가 알려 준다.
     deadline = time.monotonic() + MODEL_TIMEOUT_SECONDS
+    # 입력이 파이프 버퍼보다 크고 모델이 읽지 않아도 취소와 제한 시간 확인이 돌도록 따로 보낸다.
+    threading.Thread(target=send_prompt, args=(process.stdin, prompt), daemon=True).start()
     while True:
         try:
             return process.wait(timeout=STOP_POLL_SECONDS)

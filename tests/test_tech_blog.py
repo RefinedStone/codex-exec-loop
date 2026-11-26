@@ -7,6 +7,8 @@ from io import BytesIO
 from pathlib import Path
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -190,9 +192,13 @@ class BlogWorkflowTest(unittest.TestCase):
             def __init__(self, command, **kwargs):
                 self.command, self.kwargs, self.pid, self.code = command, kwargs, 0, None
                 self.stdin = io.BytesIO()
-                self.stdin.close = lambda: None  # keep the prompt readable after the runner closes stdin
+                self.sent = threading.Event()
+                self.stdin.close = self.sent.set  # keep the prompt readable after the runner closes stdin
 
             def wait(self, timeout=None):
+                # The runner sends the prompt from another thread; answer only after stdin is closed.
+                if not self.sent.wait(timeout):
+                    raise subprocess.TimeoutExpired(self.command, timeout)
                 if self.code is None:
                     self.code = simulate(self.command, input=self.stdin.getvalue(), cwd=self.kwargs["cwd"])
                 return self.code
@@ -216,6 +222,38 @@ class BlogWorkflowTest(unittest.TestCase):
         self.review.write_text(json.dumps(result), "utf-16")
         check_code, checked = self.run_cli("check", "--review", str(self.review))
         self.assertEqual((0, "reviewed"), (check_code, checked["state"]))
+
+    def test_cancel_stops_a_model_that_never_reads_its_prompt(self):
+        class StalledModel:
+            """A model whose stdin pipe is full: writing blocks until the process is killed (#2873)."""
+
+            def __init__(self):
+                self.pid, self.killed = 0, threading.Event()
+                self.stdin = self
+
+            def write(self, _):
+                self.killed.wait(5)
+                raise BrokenPipeError
+
+            def close(self):
+                pass
+
+            def wait(self, timeout=None):
+                if self.killed.wait(timeout):
+                    return 1
+                raise subprocess.TimeoutExpired("fixture-codex", timeout)
+
+            def poll(self):
+                return 1 if self.killed.is_set() else None
+
+        model = StalledModel()
+        started = time.monotonic()
+        with patch.object(worker, "STOP_CHECK", lambda: True), \
+                patch.object(worker, "kill_process_tree", lambda process: process.killed.set()), \
+                self.assertRaises(worker.ReviewerError) as raised:
+            worker.wait_for_model(model, b"x" * 200_000)
+        self.assertEqual("cancelled", raised.exception.code)
+        self.assertLess(time.monotonic() - started, 2)
 
     def test_draft_change_during_review_invalidates_result(self):
         self.add_captures()
