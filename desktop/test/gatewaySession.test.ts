@@ -863,6 +863,20 @@ describe("account usage limits (#2821)", () => {
     expect(useAccountLimits.getState().snapshot?.primary?.usedPercent).toBe(91);
   });
 
+  it("applies only updates for the displayed bucket and merges sparse values", async () => {
+    const { applyAccountLimitsNotification, applyAccountLimitsRead, useAccountLimits } = await import("../src/renderer/session/accountLimits");
+    useAccountLimits.setState({ status: "unknown", snapshot: null });
+    applyAccountLimitsNotification("account/rateLimits/updated", { rateLimits: snapshot });
+    expect(useAccountLimits.getState()).toEqual({ status: "unknown", snapshot: null });
+    applyAccountLimitsRead({ rateLimits: { ...snapshot, planType: "plus" } });
+    const otherBucket = { ...snapshot, limitId: "codex_other", normalModelSlug: "gpt-other", primary: { ...snapshot.primary, usedPercent: 99 } };
+    expect(applyAccountLimitsNotification("account/rateLimits/updated", { rateLimits: otherBucket })).toBe(true);
+    expect(useAccountLimits.getState().snapshot?.primary?.usedPercent).toBe(42.4);
+    const secondary = { usedPercent: 10, windowDurationMins: 10_080, resetsAt: null };
+    applyAccountLimitsNotification("account/rateLimits/updated", { rateLimits: { ...snapshot, primary: null, secondary } });
+    expect(useAccountLimits.getState().snapshot).toMatchObject({ limitId: "codex", planType: "plus", primary: { usedPercent: 42.4 }, secondary });
+  });
+
   it("hides the line on a server without the method and never invents zero", async () => {
     const { useAccountLimits } = await connectWithLimits({ error: { code: -32601, message: "unknown" } });
     expect(useAccountLimits.getState()).toEqual({ status: "unsupported", snapshot: null });

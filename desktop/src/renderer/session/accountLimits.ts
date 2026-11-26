@@ -27,11 +27,19 @@ export function applyAccountLimitsRead(response: unknown): void {
   useAccountLimits.setState(isSnapshot(snapshot) ? { status: "ready", snapshot } : { status: "unavailable", snapshot: null });
 }
 
-/** 갱신 알림을 반영한다. 다루는 알림이면 true 이다. */
+/**
+ * 갱신 알림을 반영한다. 다루는 알림이면 true 이다.
+ * 읽기 응답의 버킷(`limitId`)과 같은 알림만 반영한다. 다른 버킷의 알림이 표시를 덮지 않게 한다.
+ * 알림은 성긴 갱신이므로 null 이 아닌 값만 마지막 스냅샷에 합친다.
+ */
 export function applyAccountLimitsNotification(method: string, params: unknown): boolean {
   if (method !== ACCOUNT_LIMITS_UPDATED) return false;
-  const snapshot = params !== null && typeof params === "object" ? (params as { rateLimits?: unknown }).rateLimits : undefined;
-  if (isSnapshot(snapshot)) useAccountLimits.setState({ status: "ready", snapshot });
+  const update = params !== null && typeof params === "object" ? (params as { rateLimits?: unknown }).rateLimits : undefined;
+  const current = useAccountLimits.getState().snapshot;
+  if (isSnapshot(update) && current !== null && update.limitId === current.limitId) {
+    const present = Object.fromEntries(Object.entries(update).filter(([, value]) => value !== null));
+    useAccountLimits.setState({ status: "ready", snapshot: { ...current, ...present } });
+  }
   return true;
 }
 
