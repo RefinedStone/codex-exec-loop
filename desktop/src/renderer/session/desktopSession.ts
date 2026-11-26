@@ -8,6 +8,7 @@ import type { AkraBridge, RemoteHostBridge } from "../../shared/bridge";
 import { BROWSER_TOOL_NAMES, type BrowserAgentBridge } from "../../shared/browserAgent";
 import type { ListMcpServerStatusResponse } from "../../shared/protocol/generated/v2/ListMcpServerStatusResponse";
 import type { ListMcpServerStatusParams } from "../../shared/protocol/generated/v2/ListMcpServerStatusParams";
+import type { FuzzyFileSearchResponse } from "../../shared/protocol/generated/FuzzyFileSearchResponse";
 import type { InitializeParams } from "../../shared/protocol/generated/InitializeParams";
 import type { SkillsListParams } from "../../shared/protocol/generated/v2/SkillsListParams";
 import type { SkillsListResponse } from "../../shared/protocol/generated/v2/SkillsListResponse";
@@ -771,6 +772,12 @@ export class DesktopSession {
     this.store.mergeFolders(groupThreadsByCwd([response.thread]));
   }
 
+  /** 대화 폴더의 파일을 찾는다 (#2837). 상위 20개의 폴더 기준 경로이다. */
+  async searchFiles(cwd: string, query: string): Promise<string[]> {
+    const response = await this.client.request<FuzzyFileSearchResponse>("fuzzyFileSearch", { query, roots: [cwd], cancellationToken: null });
+    return response.files.slice(0, FILE_SEARCH_LIMIT).map((file) => file.path);
+  }
+
   /** 승인 요청에 답한다. 다른 창이 먼저 답했으면 이미 닫혀 있으므로 아무것도 하지 않는다. */
   answerApproval(requestId: JsonRpcId, decision: ApprovalDecision): void {
     const pending = this.approvalAnswers.get(approvalKey(requestId));
@@ -1227,6 +1234,8 @@ export class DesktopSession {
 }
 
 /** 메시지 버스와 세션을 잇는다. 반환한 함수로 연결을 끊는다. */
+const FILE_SEARCH_LIMIT = 20;
+
 export function startDesktopSession(bridge: AkraBridge, store: SessionStore, clientVersion: string): () => void {
   const session = new DesktopSession(bridge, store, clientVersion);
   session.start();
