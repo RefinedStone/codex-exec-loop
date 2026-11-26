@@ -1220,17 +1220,14 @@ impl CoreController {
                 };
                 let mut events = Vec::new();
                 if let Err(error) = result
-                    && settlement.completion_matches_current_turn
-                    && self.conversation_turn.matches_conversation(
-                        &correlation.workspace_directory,
-                        &correlation.thread_id,
-                    )
+                    && let Some(snapshot) = self
+                        .conversation_turn
+                        .apply_approval_review_persistence_failure(
+                            &correlation,
+                            format!("review-center persistence failed: {error}"),
+                        )
                 {
-                    events.push(AppEvent::turn_stream_snapshot_changed(
-                        self.conversation_turn.apply_runtime_notice(format!(
-                            "review-center persistence failed: {error}"
-                        )),
-                    ));
+                    events.push(AppEvent::turn_stream_snapshot_changed(snapshot));
                 }
                 let effects = settlement
                     .next

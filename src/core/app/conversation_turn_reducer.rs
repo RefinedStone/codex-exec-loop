@@ -130,6 +130,8 @@ struct ThreadSession {
     turn_options: crate::domain::conversation::ConversationTurnOptions,
     // 지금 턴을 낸 명령의 연산 id 이다 (plan 18 K4-4). 턴을 받을 때마다 다시 정한다. 명령이 낸 턴이 아니면 비어 있다.
     op_id: Option<i64>,
+    // 승인 검토 저장 실패를 이 thread 에 알릴 턴이다 (#2796). 턴이 끝나도 남는다. 다른 thread 의 턴은 바꾸지 않는다.
+    approval_review_turn: Option<TurnSubmissionCorrelation>,
 }
 
 impl ThreadSession {
@@ -144,6 +146,7 @@ impl ThreadSession {
             post_turn_messages: PostTurnMessages::default(),
             turn_options: Default::default(),
             op_id: None,
+            approval_review_turn: None,
         }
     }
 
@@ -309,7 +312,6 @@ impl ThreadSession {
         request: &TurnSubmissionRequest,
         other: OtherSessionBlocks,
         next_generation: &mut u64,
-        approval_review_persistence: &mut ApprovalReviewPersistenceCoordinator,
     ) -> TurnSubmissionAdmission {
         // thread 하나의 턴은 하나이다 (plan 18 K2-3). 다른 thread 의 턴은 정책의 수까지 함께 돈다 (plan 18 Q5-1).
         if let Some(active_correlation) = self
@@ -368,13 +370,13 @@ impl ThreadSession {
         }
         self.turn_options = request.turn_options.clone();
         self.conversation_runtime.begin_turn(correlation, request);
-        approval_review_persistence.begin_conversation_turn(correlation);
+        self.approval_review_turn = Some(correlation);
         self.turn_stream_state.begin_submission();
         self.prune_post_turn_evaluation_for_lifecycle();
         TurnSubmissionAdmission::Accepted { correlation }
     }
 
-    /// 이 thread 의 턴 스트림 이벤트를 처리한다. 승인 검토 저장은 모든 thread 가 한 줄을 쓰므로 reducer 가 준다.
+    /// 이 thread 의 턴 스트림 이벤트를 처리한다. 승인 검토 저장의 쓰기는 모든 thread 가 한 줄을 쓰므로 reducer 가 준다.
     fn apply_turn_stream_event(
         &mut self,
         correlation: TurnSubmissionCorrelation,
@@ -977,7 +979,7 @@ pub(super) struct ConversationTurnFeatureReducer {
     sessions: ThreadSessions,
     // 함께 도는 턴의 수의 정책이다 (plan 18 Q5-1). 커널을 조립할 때 정한다.
     turn_concurrency: super::TurnConcurrencyPolicy,
-    // 승인 검토 저장은 모든 thread 를 통틀어 한 줄로 차례대로 한다. 그래서 session 밖에 둔다.
+    // 승인 검토 저장은 모든 thread 를 통틀어 한 줄로 차례대로 한다. 그래서 session 밖에 둔다. 실패를 알릴 턴은 session 에 있다.
     approval_review_persistence: ApprovalReviewPersistenceCoordinator,
     // 클라이언트에 마지막으로 알린 뒤의 thread 요약이다 (plan 18 K2-4).
     published_thread_activity: Vec<ThreadActivitySummary>,
@@ -1324,7 +1326,7 @@ impl ConversationTurnFeatureReducer {
         viewed.active_stop_request = None;
         viewed.active_turn_steer = None;
         viewed.conversation_runtime.invalidate_conversation();
-        self.approval_review_persistence.invalidate_conversation();
+        viewed.approval_review_turn = None;
         viewed.guarded_session_rename_stream = None;
         let correlation = ConversationLoadCorrelation::new(
             take_generation(
@@ -1369,7 +1371,7 @@ impl ConversationTurnFeatureReducer {
         self.in_flight_conversation_load = None;
         // 정지 요청이나 steer 가 있던 session 은 일이 남은 session 이라 위에서 뒤로 갔다. 보는 자리에는 둘 다 없다.
         viewed.conversation_runtime.invalidate_conversation();
-        self.approval_review_persistence.invalidate_conversation();
+        viewed.approval_review_turn = None;
         viewed.guarded_session_rename_stream = None;
         viewed.turn_stream_state = TurnStreamState::new();
         ConversationLifecycleReduction { stop_effects }
@@ -1390,7 +1392,7 @@ impl ConversationTurnFeatureReducer {
         viewed.invalidate_stop_request_for_lifecycle(&mut stop_effects);
         viewed.active_turn_steer = None;
         viewed.conversation_runtime.invalidate_conversation();
-        self.approval_review_persistence.invalidate_conversation();
+        viewed.approval_review_turn = None;
         viewed.guarded_session_rename_stream = None;
         viewed.turn_stream_state = TurnStreamState::new();
         // 다른 대화를 열면 이전 대화의 메시지와 평가 대기 턴은 버린다.
@@ -1403,18 +1405,8 @@ impl ConversationTurnFeatureReducer {
                 .map(|(key, _)| key)
         });
         if let Some(key) = resumed_key {
-            // 뒤에서 돌던 thread 를 다시 열었다. 진행 상태를 그대로 보는 자리로 가져온다.
+            // 뒤에서 돌던 thread 를 다시 열었다. 진행 상태와 승인 검토 저장의 턴을 그대로 보는 자리로 가져온다.
             self.sessions.view_background(key);
-            if let Some(turn) = self
-                .sessions
-                .viewed()
-                .conversation_runtime
-                .active_turn_correlation()
-            {
-                // 승인 검토 저장 실패를 다시 이 대화에 알릴 수 있게 한다.
-                self.approval_review_persistence
-                    .begin_conversation_turn(turn);
-            }
         } else if let Some(identity) = loaded_identity {
             self.sessions
                 .viewed_mut()
@@ -1526,7 +1518,6 @@ impl ConversationTurnFeatureReducer {
             request,
             other,
             &mut self.next_turn_submission_generation,
-            &mut self.approval_review_persistence,
         )
     }
 
@@ -1575,6 +1566,29 @@ impl ConversationTurnFeatureReducer {
         self.approval_review_persistence.complete(correlation)
     }
 
+    /*
+     * 승인 검토 저장의 실패를 그 저장을 낸 thread 에 알린다 (#2796). 그 thread 의 자리에 남은 턴이 저장의 턴과 같아야
+     * 한다. 다른 thread 의 턴은 그 자리를 바꾸지 않는다. 보지 않는 thread 이면 화면용 투영은 내지 않는다.
+     */
+    pub(super) fn apply_approval_review_persistence_failure(
+        &mut self,
+        correlation: &ApprovalReviewPersistenceCorrelation,
+        notice: String,
+    ) -> Option<TurnStreamSnapshot> {
+        let slot = self.sessions.find(|session| {
+            session.approval_review_turn == Some(correlation.turn_submission)
+                && session
+                    .turn_stream_state
+                    .matches_conversation(&correlation.workspace_directory, &correlation.thread_id)
+        })?;
+        let snapshot = self
+            .sessions
+            .get_mut(slot)
+            .turn_stream_state
+            .apply_runtime_notice(notice);
+        self.sessions.is_viewed(slot).then_some(snapshot)
+    }
+
     pub(super) fn apply_runtime_notice(&mut self, notice: String) -> TurnStreamSnapshot {
         self.sessions
             .viewed_mut()
@@ -1619,7 +1633,14 @@ impl ConversationTurnFeatureReducer {
 
     pub(super) fn admit_stop_request(&mut self) -> StopRequestAdmission {
         let viewed = self.sessions.viewed_mut();
-        if let Some(active) = viewed.active_stop_request {
+        /*
+         * 뒤에서 받은 정지 기록(targeted)이 시도 없이 남아 있으면 새 정지로 바꾼다 (#2796). 그 기록은 다른 thread 를
+         * 볼 때 낸 정지가 이 턴을 대상으로 적은 것이다. 그 정지가 실패했어도 이 thread 를 다시 멈출 수 있어야 한다.
+         */
+        if let Some(active) = viewed
+            .active_stop_request
+            .filter(|active| !active.targeted || active.pending_attempt.is_some())
+        {
             return StopRequestAdmission::RejectedActive {
                 active_correlation: active.correlation,
             };
@@ -1639,24 +1660,25 @@ impl ConversationTurnFeatureReducer {
             invalidated: false,
             targeted: false,
         });
-        self.hold_stop_for_unstarted_background_turns();
+        self.record_stop_for_background_turns();
         StopRequestAdmission::Accepted { correlation }
     }
 
     /*
-     * 정지는 app-server 의 모든 턴에 닿지만, 그 뒤에 시작한 스트림은 막지 못한다. 뒤의 session 에서 받았지만 아직
-     * 시작하지 않은 턴도 정지해야 한다 (#2304). 그 턴마다 정지 의도를 두고, 턴이 시작하면 그 턴만 멈춘다. 그 사이에
+     * 정지는 app-server 의 모든 턴에 닿는다. 뒤의 session 의 턴도 정지의 대상으로 적는다 (#2796). 그 기록은 그 턴만
+     * 가리키므로 새 턴을 막지 않는다. 턴이 끝나면 지운다.
+     * 정지는 그 뒤에 시작한 스트림은 막지 못한다. 그래서 아직 시작하지 않은 턴은 시작하면 그 턴만 멈춘다 (#2304). 그 사이에
      * 사람이 낸 새 턴은 멈추지 않는다. 턴이 시작 전에 끝나면 의도는 그대로 지운다.
      */
-    fn hold_stop_for_unstarted_background_turns(&mut self) {
+    fn record_stop_for_background_turns(&mut self) {
         for session in self.sessions.background_mut() {
             let Some(turn) = session.conversation_runtime.active_turn_correlation() else {
                 continue;
             };
-            if session.active_stop_request.is_some() || session.turn_stream_state.has_active_turn()
-            {
+            if session.active_stop_request.is_some() {
                 continue;
             }
+            let started = session.turn_stream_state.has_active_turn();
             session.active_stop_request = Some(ActiveStopRequest {
                 correlation: StopRequestCorrelation::new(
                     take_generation(
@@ -1666,7 +1688,7 @@ impl ConversationTurnFeatureReducer {
                     Some(turn),
                 ),
                 pending_attempt: None,
-                synchronize_after_turn_started: true,
+                synchronize_after_turn_started: !started,
                 invalidated: false,
                 targeted: true,
             });
@@ -1881,13 +1903,6 @@ impl ConversationTurnFeatureReducer {
         self.sessions
             .viewed()
             .active_post_turn_evaluation_correlation()
-    }
-
-    pub(super) fn matches_conversation(&self, workspace_directory: &str, thread_id: &str) -> bool {
-        self.sessions
-            .viewed()
-            .turn_stream_state
-            .matches_conversation(workspace_directory, thread_id)
     }
 
     #[cfg(test)]
@@ -2223,6 +2238,170 @@ mod tests {
             1,
             "the refused session has no work and is removed"
         );
+    }
+
+    fn accepted_turn(admission: TurnSubmissionAdmission) -> TurnSubmissionCorrelation {
+        match admission {
+            TurnSubmissionAdmission::Accepted { correlation } => correlation,
+            other => panic!("the turn must be accepted: {other:?}"),
+        }
+    }
+
+    /// 값 2 에서 보는 thread-a 의 턴과 뒤의 thread-b 의 턴을 함께 돌린다. thread-b 의 턴만 시작했다.
+    fn two_running_threads() -> (
+        ConversationTurnFeatureReducer,
+        TurnSubmissionCorrelation,
+        TurnSubmissionCorrelation,
+    ) {
+        let mut reducer = ConversationTurnFeatureReducer::new();
+        reducer.set_turn_concurrency(super::super::TurnConcurrencyPolicy::new(2));
+        let first = accepted_turn(reducer.admit_turn_submission(&turn_request()));
+        reducer
+            .apply_correlated_turn_stream_event(
+                first,
+                TurnStreamEvent::ThreadPrepared {
+                    thread_id: "thread-a".to_string(),
+                    title: String::new(),
+                    cwd: "/workspace".to_string(),
+                    runtime_envelope: Box::default(),
+                },
+            )
+            .expect("the first turn owns thread-a");
+        let second =
+            accepted_turn(reducer.admit_thread_turn_submission("thread-b", &turn_request(), None));
+        reducer
+            .apply_correlated_turn_stream_event(
+                second,
+                TurnStreamEvent::TurnStarted {
+                    turn_id: "turn-b".to_string(),
+                    runtime_request: Box::default(),
+                },
+            )
+            .expect("the second turn starts in the background");
+        (reducer, first, second)
+    }
+
+    #[test]
+    fn a_second_turn_keeps_the_approval_review_turn_of_the_first_thread() {
+        // #2796: each thread keeps the turn whose approval review persistence failure it reports.
+        let (mut reducer, first, second) = two_running_threads();
+        assert_eq!(reducer.sessions.viewed().approval_review_turn, Some(first));
+        let review = crate::domain::conversation::ConversationApprovalReview {
+            target_item_id: "tool-1".to_string(),
+            status: crate::domain::conversation::ConversationApprovalReviewStatus::Unknown(
+                "waiting".to_string(),
+            ),
+            risk_level: None,
+            rationale: None,
+        };
+        let failure = |turn, thread_id: &str| {
+            ApprovalReviewPersistenceCorrelation::new(
+                1,
+                turn,
+                "/workspace",
+                thread_id,
+                review.clone(),
+            )
+        };
+
+        let snapshot = reducer
+            .apply_approval_review_persistence_failure(
+                &failure(first, "thread-a"),
+                "failed".to_string(),
+            )
+            .expect("the failure of the first turn reaches the viewed thread-a");
+        assert!(matches!(
+            snapshot.update,
+            TurnStreamUpdate::RuntimeNotice { ref notice } if notice == "failed"
+        ));
+        let thread_b = reducer
+            .sessions
+            .find(|session| session.streams_thread("thread-b"))
+            .expect("thread-b is in the background");
+        assert_eq!(
+            reducer.sessions.get_mut(thread_b).approval_review_turn,
+            Some(second)
+        );
+        let probe_revision = |reducer: &mut ConversationTurnFeatureReducer| {
+            reducer
+                .sessions
+                .get_mut(thread_b)
+                .turn_stream_state
+                .apply_runtime_notice("probe".to_string())
+                .revision
+        };
+        let before = probe_revision(&mut reducer);
+        assert!(
+            reducer
+                .apply_approval_review_persistence_failure(
+                    &failure(second, "thread-b"),
+                    "failed".to_string(),
+                )
+                .is_none(),
+            "the background thread-b gets no screen projection"
+        );
+        assert_eq!(
+            probe_revision(&mut reducer),
+            before + 2,
+            "the failure still reaches the session of thread-b"
+        );
+        assert!(
+            reducer
+                .apply_approval_review_persistence_failure(
+                    &failure(first, "thread-b"),
+                    "failed".to_string(),
+                )
+                .is_none(),
+            "the turn and the thread must belong to the same session"
+        );
+    }
+
+    #[test]
+    fn a_stop_records_the_turn_of_a_thread_that_is_not_viewed() {
+        // #2796: the stop reaches every app-server turn, so the background turn is a target too.
+        let (mut reducer, first, second) = two_running_threads();
+        let StopRequestAdmission::Accepted { correlation: stop } = reducer.admit_stop_request()
+        else {
+            panic!("the stop should start");
+        };
+        assert_eq!(stop.turn_submission, Some(first));
+        let thread_b = reducer
+            .sessions
+            .find(|session| session.streams_thread("thread-b"))
+            .expect("thread-b is in the background");
+        let recorded = reducer
+            .sessions
+            .get_mut(thread_b)
+            .active_stop_request
+            .expect("the stop names the background turn");
+        assert_eq!(recorded.correlation.turn_submission, Some(second));
+        assert!(recorded.targeted);
+        assert!(
+            !recorded.synchronize_after_turn_started,
+            "a started turn was reached by the stop itself"
+        );
+
+        // A viewed thread-b can be stopped again: the record has no attempt of its own.
+        reducer
+            .complete_stop_request(stop, StopRequestAttempt::Initial, false)
+            .expect("the stop completes");
+        let load = started_load(&mut reducer, "thread-b");
+        reducer
+            .complete_conversation_load(
+                &load,
+                Some(LoadedConversationStreamIdentity {
+                    thread_id: "thread-b".to_string(),
+                    title: String::new(),
+                    workspace_directory: "/workspace".to_string(),
+                    item_lifecycle: ConversationItemLifecycleProjection::default(),
+                }),
+            )
+            .expect("thread-b opens");
+        let StopRequestAdmission::Accepted { correlation: again } = reducer.admit_stop_request()
+        else {
+            panic!("the viewed thread-b should accept a new stop");
+        };
+        assert_eq!(again.turn_submission, Some(second));
     }
 
     fn busy_session(thread_id: &str) -> ThreadSession {

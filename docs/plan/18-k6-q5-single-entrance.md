@@ -2,7 +2,7 @@
 
 ## 문서 상태
 
-- 상태: **구현 중**. Q5-1, Q5-2a (2026-11-17), Q5-2b (2026-11-18), Q5-2c (2026-11-26)를 구현했다 (§7). 나머지 조각은 제안이다. 현재 제품 동작의 기준은
+- 상태: **구현 중**. Q5-1, Q5-2a (2026-11-17), Q5-2b (2026-11-18), Q5-2c (2026-11-26), Q5-2d (2026-11-27, #2796)를 구현했다 (§7). 나머지 조각은 제안이다. 현재 제품 동작의 기준은
   `docs/reference/` 이다.
 - 상위 문서: [18 Akra 커널 아키텍처](18-akra-kernel-architecture.md) §5.4, §5.8, §5.9, §6 의 K6. 결정 KP-03, KP-04,
   KP-06. [19 Akra 커널 성질 목표](19-akra-kernel-quality-goals.md) §3.2, §5.3, §6 의 Q5, 성질 P4.
@@ -35,7 +35,7 @@
 | 턴 뒤 경로 | 경로를 기다리는 평가가 둘 이상이면 모두 이어 가지 않고 끝낸다 | `conversation_turn_reducer.rs` `next_post_turn_host_step`, `PostTurnHostStep::SettleWithoutContinuation` |
 | 자동 후속 설정 | 최대 턴 수와 멈춤이 커널에 하나이다 | 프로토콜의 `auto_follow` 조회, `auto_follow_configured` 기록 |
 | 정지 | `stop_all` 은 app-server 의 모든 턴에 닿는다. 끝나지 않은 정지가 있으면 새 턴을 받지 않는다. 정지 요청은 보는 session 의 턴만 적는다 | `admit_turn_submission_in_session` 의 `RejectedStopPending`, `admit_stop_request` |
-| 승인 검토 저장 | 모든 thread 가 "지금 턴" 자리 하나를 함께 쓴다. 새 턴이 그 자리를 바꾼다 | `ApprovalReviewPersistenceCoordinator::begin_conversation_turn` (2026-11-17 리뷰) |
+| 승인 검토 저장 | 모든 thread 가 "지금 턴" 자리 하나를 함께 쓴다. 새 턴이 그 자리를 바꾼다 | `ApprovalReviewPersistenceCoordinator::begin_conversation_turn` (2026-11-17 리뷰). Q5-2d 에서 session 마다 두고 이 함수를 지웠다 |
 
 값이 2 이상이면 이 자리들에서 동작이 틀린다. 예: 둘째 턴이 승인 검토 저장의 자리를 바꾸면, 첫 턴의 저장 실패를
 보는 대화에 알리지 않는다. 그래서 Q5-3 전에는 값을 2 이상으로 열지 않는다.
@@ -192,6 +192,7 @@ struct ThreadSessions {
 | Q5-2a (구현 2026-11-17, §7) | session 의 자리(`SessionSlot`)와 찾기. steer, 승인 결정, runtime 알림, 작업 공간 변경의 규칙을 옮긴다 | 유지 | 기존 시험, 커널 시뮬레이션 |
 | Q5-2b (구현 2026-11-18, §7) | 남은 규칙을 옮긴다 (제출, 스트림, 정지, 평가, 경로, 모든 session 의 정책 변경). `mem::swap` 을 지운다 | 유지 | 기존 시험, 커널 시뮬레이션 |
 | Q5-2c (구현 2026-11-26, §7) | session 을 맵으로 둔다. 키는 커널이 주는 session 번호이다 (처음 제안은 thread id). 보는 자리는 맵의 키이다 | 유지 | 기존 시험, 커널 시뮬레이션 |
+| Q5-2d (구현 2026-11-27, §7) | 승인 검토 저장 실패를 알릴 턴을 session 마다 둔다. 정지가 뒤의 session 의 턴도 대상으로 적는다 | 유지 (기본값 1). 정지의 기록만 값 1 에서도 다르다 (§7) | core 시험 둘, 커널 시뮬레이션 |
 | Q5-3 | 자동 후속 차선. 큐 프롬프트를 자리가 날 때 낸다. 시뮬레이션에 값 2 를 넣는다 | 확장 (값 2 이상에서만 다르다) | 시뮬레이션의 새 불변식: 자동 후속을 이어 가는 thread 는 하나이다 |
 | K6-1 | TUI 의 대화를 app-server 중계로 읽는 client. 화면은 바꾸지 않는다 | 유지 | 가짜 Gateway 시험. 모델 턴은 없다 |
 | K6-2 | TUI 가 `akra/kernel/*` 로 붙는다. 잠금을 잡지 않는다. 하네스 화면은 Q-M5-1 의 답대로 한다 | 전환 | 터미널 검증 계약 (`docs/validation/terminal-ui-testing-methodology.md`) |
@@ -337,5 +338,27 @@ struct ThreadSessions {
 남긴 것:
 
 - 정지는 아직 보는 session 만 받는다 (`admit_stop_request`). 승인 검토 저장의 줄은 모든 thread 가 하나를 쓴다. Q5-3 과
-  #2481 A05 의 둘째 항목이다.
+  #2481 A05 의 둘째 항목이다. (Q5-2d 에서 고쳤다.)
 - 턴을 넣을 때마다 다른 session 을 미리 읽는 것(Q5-2b 의 리뷰)은 그대로 두었다. session 수가 적다.
+
+### Q5-2d (2026-11-27, #2796)
+
+- 승인 검토 저장: 실패를 알릴 턴(`approval_review_turn`)을 `ThreadSession` 에 둔다. 턴을 받을 때 그 session 의 값만
+  바꾼다. 쓰기의 줄(`ApprovalReviewPersistenceCoordinator`)은 그대로 모든 thread 가 하나를 쓴다. 실패는 그 턴과
+  thread 가 같은 session 에 알린다 (`apply_approval_review_persistence_failure`). 보지 않는 session 이면 화면용 투영은
+  내지 않는다 (다른 runtime 알림과 같다). 뒤에서 돌던 thread 를 다시 열 때 턴을 다시 적던 자리는 지웠다. 값이 session
+  과 함께 온다.
+- 정지: 정지 요청이 뒤의 session 의 도는 턴을 모두 대상으로 적는다 (`record_stop_for_background_turns`). 이미 시작한 턴은
+  정지 자체가 닿으므로 시작 뒤 동기화를 하지 않는다. 시작하지 않은 턴은 #2304 처럼 시작하면 그 턴만 멈춘다. 이 기록은
+  시도가 없으므로 새 턴을 막지 않는다. 그 thread 를 다시 열면 새 정지가 이 기록을 바꾼다 (정지가 실패했어도 다시 멈출 수
+  있다).
+- 기본값 1 의 동작: 승인 검토 저장 실패의 알림은 같다. 정지는 보지 않는 thread 의 시작한 턴에도 기록을 남긴다. 그 기록은
+  새 턴을 막지 않는다. 바뀐 것 하나: 다시 연 thread 에 시도 없는 기록(#2304 의 시작 전 정지 의도 포함)이 있으면, 전에는
+  새 정지를 거절했고 이제는 받아서 그 기록을 바꾼다. 새 정지도 시작 전이면 시작 뒤 동기화를 하므로 멈추는 턴은 같다.
+
+남긴 것:
+
+- 정지가 실패해도 뒤의 session 의 시작 전 정지 의도는 남는다 (#2304 부터의 동작). 같은 thread 의 다음 턴은 이전 턴의 저장
+  실패를 알리지 않는다 (이전의 자리 하나와 같다).
+- 뒤의 session 이 일을 마치고 지워진 뒤에 온 저장 실패는 알릴 곳이 없다. 화면이 보지 않는 thread 의 알림을 보여 주는 길은
+  주의함(A02)에서 다룬다.
