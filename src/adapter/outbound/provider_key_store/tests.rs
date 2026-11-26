@@ -252,3 +252,9 @@ fn dropping_an_adapter_does_not_join_an_uninterruptible_backend_call() {
     assert!(before.elapsed() < Duration::from_secs(1));
     release.send(()).unwrap();
 }
+
+/// #2588: existing provider credentials live under this OS key store service. A product rename must not change it.
+#[test]
+fn key_store_service_stays_the_same_across_the_product_rename() {
+    assert_eq!(SERVICE, "akra-provider-credentials-v1");
+}

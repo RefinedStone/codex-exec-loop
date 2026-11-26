@@ -327,3 +327,10 @@ fn another_account_does_not_bypass_or_inherit_pending() {
     assert_eq!(credential.key.lock().unwrap().as_ref(), Some(&key));
     assert_ne!(scope_hash("ab", "c"), scope_hash("a", "bc"));
 }
+
+/// #2588: existing Vault keys live under these OS key store names. A product rename must not change them.
+#[test]
+fn key_store_names_stay_the_same_across_the_product_rename() {
+    assert_eq!(KEY_STORE_SERVICE, "akra-evidence-vault");
+    assert_eq!(KEY_STORE_ACCOUNT, "device-key-v1");
+}
