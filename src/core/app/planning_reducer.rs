@@ -87,6 +87,11 @@ impl PlanningFeatureReducer {
         self.queued_thread_prompts.push_back(prompt);
     }
 
+    /// 다음에 낼 큐의 머리이다. 큐는 남긴 차례대로 낸다.
+    pub(super) fn next_queued_thread_prompt(&self) -> Option<&QueuedThreadPrompt> {
+        self.queued_thread_prompts.front()
+    }
+
     pub(super) fn take_queued_thread_prompt(&mut self) -> Option<QueuedThreadPrompt> {
         self.queued_thread_prompts.pop_front()
     }

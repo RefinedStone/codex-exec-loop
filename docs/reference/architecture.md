@@ -140,7 +140,10 @@ the shown thread: a session with a running turn, auto-follow, post-turn evaluati
 moves to a background list, and the shown slot gets a fresh session that keeps the auto-follow
 settings and turn options. Inputs find their owning session by correlation. A background session
 finishes its turn, evaluation, and follow-up turn; reopening its thread brings it back. Only one
-conversation turn runs at a time across all threads. Auto-follow policy changes reach every session,
+conversation turn runs at a time across all threads. (Core also has rules for a turn concurrency of
+two or more, which only tests and the kernel simulation use: one thread holds the auto-follow lane,
+the turns of other threads settle without continuation, and a queued thread prompt goes out when its
+thread has room; plan 18 Q5-3.) Auto-follow policy changes reach every session,
 and a stop request stops every provider session. The client receives no stream projection,
 evaluation start or settlement, auto-follow result, steer result, approval decision result, or
 worker-panel history from a thread it does not show; the shared planning-runtime projection still

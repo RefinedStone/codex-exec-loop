@@ -39,6 +39,11 @@ impl TurnConcurrencyPolicy {
     pub const fn has_room(self, running_turns: usize) -> bool {
         running_turns < self.max_concurrent_turns
     }
+
+    /// 턴이 둘 이상 함께 돌 수 있다. 그때 자동 후속은 차선 하나로만 이어 간다 (plan 18 Q5-3).
+    pub const fn allows_several(self) -> bool {
+        self.max_concurrent_turns > 1
+    }
 }
 
 impl Default for TurnConcurrencyPolicy {

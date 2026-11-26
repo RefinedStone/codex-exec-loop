@@ -42,6 +42,20 @@ where
         Self::from_parts(CoreController::new(), effect_executor, input_receiver)
     }
 
+    /// 동시 턴 수를 정한 core 이다. 제품은 값 1 만 쓰고, 시뮬레이션이 값 2 를 쓴다 (plan 18 Q5-3).
+    #[cfg(test)]
+    pub(crate) fn new_with_turn_concurrency(
+        effect_executor: E,
+        input_receiver: CoreInputReceiver,
+        policy: crate::core::app::TurnConcurrencyPolicy,
+    ) -> Self {
+        Self::from_parts(
+            CoreController::with_turn_concurrency(policy),
+            effect_executor,
+            input_receiver,
+        )
+    }
+
     fn from_parts(
         controller: CoreController,
         effect_executor: E,

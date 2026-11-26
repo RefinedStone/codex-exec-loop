@@ -20,6 +20,9 @@
 //! 가 알린 결정, 결정 없이 끝난 턴, 재시작), 멱등 키가 있는 thread 지정 프롬프트의 재전송, 클라이언트의 승인 결정
 //! 명령과 steer(#2805: 효과의 완료는 늦게 올 수 있고, 지난 턴이나 끝난 승인을 가리킬 수 있다), 시계. 병렬 모드는 아직
 //! 모델하지 않는다. 강제 종료 뒤의 기대값은 `docs/reference/kernel-crash-recovery.md` 의 계약 C1~C5 를 따른다.
+//!
+//! 동시 턴 수: 기본 seed 는 제품 값 1 로 돈다. 값 2 의 seed 는 다른 thread 의 턴 둘을 함께 돌린다 (plan 18 Q5-3).
+//! 그때 자동 후속을 이어 가는 thread 는 하나여야 한다 (I12).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -43,8 +46,8 @@ use crate::core::app::{
     CorePromptOrigin, PlanningWorkspaceOperationCorrelation, PlanningWorkspaceResetIntent,
     PlanningWorkspaceResetSnapshot, PlanningWorkspaceResetTarget, PostTurnEvaluationCorrelation,
     SessionCatalogLoadCorrelation, SessionCatalogLoadIntent, SessionCatalogReadySnapshot,
-    StopRequestAttempt, StopRequestCorrelation, ThreadPromptSubmission, TurnSteerCorrelation,
-    TurnStreamEvent, TurnSubmissionCorrelation, TurnSubmissionRequest,
+    StopRequestAttempt, StopRequestCorrelation, ThreadPromptSubmission, TurnConcurrencyPolicy,
+    TurnSteerCorrelation, TurnStreamEvent, TurnSubmissionCorrelation, TurnSubmissionRequest,
 };
 use crate::core::runtime::{CoreEffectExecutor, CoreInputSender};
 use crate::domain::conversation::{
@@ -87,6 +90,8 @@ const SETTLE_STEPS: usize = 400;
 const DEFAULT_SEED_COUNT: u64 = 24;
 /// 커널이 thread 지정 프롬프트를 바로 거절했을 때의 기록 줄 머리이다. I10 이 거절을 실제로 보았는지 세는 데 쓴다.
 const REJECTED_AT_ONCE: &str = "kernel: rejected at once";
+/// 가짜 app-server 가 다른 턴이 도는 동안 턴을 받았을 때의 기록 줄 끝이다. 값 2 의 seed 가 실제로 턴 둘을 돌렸는지 센다.
+const ALONGSIDE_ANOTHER_TURN: &str = "alongside another turn";
 /// 실패 보고에 넣는 마지막 기록 줄 수이다.
 const TRACE_TAIL: usize = 40;
 /*
@@ -176,6 +181,8 @@ struct ScenarioSettings {
     decision_budget: usize,
     /// 클라이언트가 보내는 steer 명령 수이다 (#2805). 끝난 턴을 가리키는 늦은 steer 도 섞는다.
     steer_budget: usize,
+    /// 커널의 동시 턴 수이다 (plan 18 Q5-3). 제품 값은 1 이다. 값 2 의 seed 는 따로 돈다.
+    turn_concurrency: usize,
 }
 
 impl ScenarioSettings {
@@ -189,6 +196,8 @@ impl ScenarioSettings {
             approval_budget: rng.index(4),
             decision_budget: rng.index(4),
             steer_budget: rng.index(4),
+            // 난수를 쓰지 않는다. 값 1 의 seed 가 이전과 같은 시나리오를 만든다.
+            turn_concurrency: 1,
         }
     }
 }
@@ -201,11 +210,12 @@ enum TurnStage {
     Started,
 }
 
-/// 가짜 app-server 에서 도는 턴이다. 한 번에 하나만 있을 수 있다 (불변식 I1).
+/// 가짜 app-server 에서 도는 턴이다. 동시 턴 수만큼, thread 마다 하나씩 있을 수 있다 (불변식 I1).
 #[derive(Debug, Clone)]
 struct FakeTurn {
     correlation: TurnSubmissionCorrelation,
     thread_id: String,
+    origin: CorePromptOrigin,
     turn_id: String,
     stage: TurnStage,
     interrupt_requested: bool,
@@ -353,6 +363,8 @@ struct InvariantLedger {
     approvals: Vec<SimApproval>,
     /// 가짜 planner 가 준비한 프롬프트이다 (I9). 프롬프트 하나는 한 번만 준비된다.
     prepared_prompts: BTreeSet<String>,
+    /// 자동 후속으로 받은 턴이다 (I12).
+    auto_follow_turns: BTreeSet<(String, String)>,
 }
 
 impl InvariantLedger {
@@ -712,6 +724,11 @@ struct SimKernel {
 }
 
 fn build_sim_kernel() -> SimKernel {
+    build_sim_kernel_with(1)
+}
+
+/// 동시 턴 수를 정한 커널이다 (plan 18 Q5-3). 제품 값은 1 이다.
+fn build_sim_kernel_with(turn_concurrency: usize) -> SimKernel {
     let effects = RecordedEffects::default();
     let planning = test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
     let parallel = test_parallel_mode_control_plane_composition(planning);
@@ -720,8 +737,11 @@ fn build_sim_kernel() -> SimKernel {
      * 클라이언트가 붙을 때마다 병렬 제어부가 감독 점검을 실제 작업 스레드에서 돌리고, 그 완료 시점이 seed 를
      * 따르지 않는다. 병렬 제어부의 효과를 가짜로 바꾸는 일은 병렬 모드를 모델할 때 한다.
      */
-    let (runtime, core_inputs) =
-        NativeClientRuntime::new_with_effect_executor_for_test(parallel, Box::new(effects.clone()));
+    let (runtime, core_inputs) = NativeClientRuntime::new_with_turn_concurrency_for_test(
+        parallel,
+        Box::new(effects.clone()),
+        TurnConcurrencyPolicy::new(turn_concurrency),
+    );
     let (inbox, inputs) = mpsc::channel();
     SimKernel {
         host: KernelHostLoop::new(runtime, inputs, KernelIdleClock::default()),
@@ -914,8 +934,8 @@ struct Simulation {
     elapsed: Duration,
     step: usize,
     trace: Vec<String>,
-    // 가짜 app-server 와 가짜 평가기의 상태이다.
-    turn: Option<FakeTurn>,
+    // 가짜 app-server 와 가짜 평가기의 상태이다. 도는 턴은 받은 차례이다.
+    turns: Vec<FakeTurn>,
     pending: Vec<PendingCompletion>,
     invalidated_stop_requests: BTreeSet<u64>,
     /// 가짜 클라이언트(화면)가 보는 대화이다. 수동 턴은 TUI 처럼 이 대화에만 낸다. 새 대화를 열면 `None` 이다.
@@ -960,9 +980,10 @@ struct Simulation {
 }
 
 impl Simulation {
-    fn new(seed: u64) -> Self {
+    fn new(seed: u64, turn_concurrency: usize) -> Self {
         let mut rng = SimRng::new(seed);
-        let settings = ScenarioSettings::from_rng(&mut rng);
+        let mut settings = ScenarioSettings::from_rng(&mut rng);
+        settings.turn_concurrency = turn_concurrency;
         let mut simulation = Self::with_settings(rng, settings);
         simulation.record(format!("seed {seed}, {settings:?}"));
         simulation
@@ -975,7 +996,7 @@ impl Simulation {
             inbox,
             effects,
             core_inputs,
-        } = build_sim_kernel();
+        } = build_sim_kernel_with(settings.turn_concurrency);
         let kernel_log = Arc::new(SimKernelLog::default());
         host.runtime
             .attach_kernel_event_log(kernel_log.clone(), "/sim");
@@ -993,7 +1014,7 @@ impl Simulation {
             elapsed: Duration::ZERO,
             step: 0,
             trace: Vec::new(),
-            turn: None,
+            turns: Vec::new(),
             pending: Vec::new(),
             invalidated_stop_requests: BTreeSet::new(),
             viewed_thread: None,
@@ -1086,7 +1107,7 @@ impl Simulation {
                 .pending
                 .iter()
                 .any(|pending| matches!(pending, PendingCompletion::PromptPreparation { .. }));
-            let weight = if preparing && self.turn.is_none() {
+            let weight = if preparing && self.turns.is_empty() {
                 24
             } else {
                 4
@@ -1101,27 +1122,24 @@ impl Simulation {
         }
         if self.settings.restarts && self.restarts < MAX_RESTARTS {
             // 큐에 프롬프트가 남았을 때 다시 켜는 경우가 이 시험의 목적이다. 그때 더 자주 고른다.
-            let queued = self.prompt_probably_queued && self.turn.is_some();
+            let queued = self.prompt_probably_queued && !self.turns.is_empty();
             let weight = if queued { 48 } else { 1 };
             choices.push((SimAction::RestartKernel, weight));
         }
-        if self.turn.is_some() {
+        if !self.turns.is_empty() {
             choices.push((SimAction::AdvanceTurn, 12));
         }
-        if self.turn.is_some() && self.settings.stop_requests {
+        if !self.turns.is_empty() && self.settings.stop_requests {
             choices.push((SimAction::RequestStop, 4));
         }
         if self.decisions_sent() < self.settings.decision_budget
             && !self.ledger.approvals.is_empty()
         {
-            let waiting = self
-                .turn
-                .as_ref()
-                .is_some_and(|turn| turn.approval.is_some());
+            let waiting = self.turns.iter().any(|turn| turn.approval.is_some());
             choices.push((SimAction::DecideApproval, if waiting { 12 } else { 2 }));
         }
         if self.steers_sent() < self.settings.steer_budget
-            && (self.turn.is_some() || !self.ended_turns.is_empty())
+            && (!self.turns.is_empty() || !self.ended_turns.is_empty())
         {
             choices.push((SimAction::SteerTurn, 4));
         }
@@ -1181,7 +1199,7 @@ impl Simulation {
         self.record("settle: no more client actions".to_string());
         for _ in 0..SETTLE_STEPS {
             self.step += 1;
-            if self.turn.is_some() {
+            if !self.turns.is_empty() {
                 self.advance_turn();
             } else if !self.pending.is_empty() {
                 self.deliver_completion();
@@ -1192,9 +1210,9 @@ impl Simulation {
             }
         }
         Err(self.violation(format!(
-            "I4: the kernel did not settle: remaining work {}, fake turn {:?}, pending completions {}, busy threads {:?}, viewed runtime {:?}",
+            "I4: the kernel did not settle: remaining work {}, fake turns {:?}, pending completions {}, busy threads {:?}, viewed runtime {:?}",
             self.host.runtime.has_remaining_work(),
-            self.turn,
+            self.turns,
             self.pending.len(),
             self.host.thread_activity,
             self.host.runtime.snapshot().conversation_runtime
@@ -1202,7 +1220,7 @@ impl Simulation {
     }
 
     fn is_quiet(&self) -> bool {
-        self.turn.is_none() && self.pending.is_empty() && !self.host.runtime.has_remaining_work()
+        self.turns.is_empty() && self.pending.is_empty() && !self.host.runtime.has_remaining_work()
     }
 
     /// 클라이언트가 커널에 붙어 하는 처음 일이다: 자동 후속 한도를 정하고 세션 목록을 읽는다.
@@ -1268,7 +1286,7 @@ impl Simulation {
             inbox,
             effects,
             core_inputs,
-        } = build_sim_kernel();
+        } = build_sim_kernel_with(self.settings.turn_concurrency);
         // 이전 커널을 버려야 기록기가 남은 사건을 다 쓴다. 새 커널은 그 뒤에 기록을 읽는다.
         drop(std::mem::replace(&mut self.host, host));
         let crashed = crash.is_some();
@@ -1283,7 +1301,7 @@ impl Simulation {
         self.core_inputs = core_inputs;
         self.client = None;
         self.viewed_thread = None;
-        self.turn = None;
+        self.turns.clear();
         self.pending.clear();
         self.invalidated_stop_requests.clear();
         self.queued_core_inputs = 0;
@@ -1480,9 +1498,9 @@ impl Simulation {
     /// 승인 결정을 보낸다. 지금 턴이 기다리는 승인을 주로 고르고, 가끔 이미 끝난 승인을 고른다 (늦은 결정).
     fn decide_approval(&mut self) {
         let waiting = self
-            .turn
-            .as_ref()
-            .and_then(|turn| turn.approval.clone().map(|id| (turn.thread_id.clone(), id)));
+            .turns
+            .iter()
+            .find_map(|turn| turn.approval.clone().map(|id| (turn.thread_id.clone(), id)));
         let (thread_id, approval_id) = match waiting {
             Some(waiting) if self.rng.percent(80) => waiting,
             _ => {
@@ -1528,8 +1546,8 @@ impl Simulation {
     /// steer 를 보낸다. 지금 도는 턴을 주로 고르고, 가끔 이미 끝난 턴을 고른다 (늦은 steer).
     fn steer_turn(&mut self) {
         let running = self
-            .turn
-            .as_ref()
+            .turns
+            .first()
             .map(|turn| (turn.thread_id.clone(), turn.turn_id.clone()));
         let (thread_id, turn_id) = match running {
             Some(running) if self.ended_turns.is_empty() || self.rng.percent(70) => running,
@@ -1608,9 +1626,9 @@ impl Simulation {
         let approval_id = correlation.request_identity.approval_id.clone();
         if delivered
             && let Some(turn) = self
-                .turn
-                .as_mut()
-                .filter(|turn| turn.approval.as_deref() == Some(approval_id.as_str()))
+                .turns
+                .iter_mut()
+                .find(|turn| turn.approval.as_deref() == Some(approval_id.as_str()))
         {
             if turn.decision.is_some() {
                 self.world_violation = Some(format!(
@@ -1642,7 +1660,7 @@ impl Simulation {
         request: ConversationTurnSteerRequest,
         op: usize,
     ) {
-        let applies = self.turn.as_ref().is_some_and(|turn| {
+        let applies = self.turns.iter().any(|turn| {
             turn.stage == TurnStage::Started
                 && turn.thread_id == request.thread_id
                 && turn.turn_id == request.expected_turn_id
@@ -1929,7 +1947,7 @@ impl Simulation {
             return Err(self.violation(message));
         }
         // 커널이 준비 완료를 처리한 뒤에야 프롬프트가 큐에 있다. 턴이 없으면 커널은 큐를 바로 비운다.
-        self.prompt_probably_queued = self.turn.is_some()
+        self.prompt_probably_queued = !self.turns.is_empty()
             && (self.prompt_probably_queued || self.prompt_prepared_behind_turn);
         self.prompt_prepared_behind_turn = false;
         self.drain_client_events();
@@ -1951,12 +1969,12 @@ impl Simulation {
             .pending
             .iter()
             .any(|pending| matches!(pending, PendingCompletion::PromptPreparation { .. }));
-        if (self.turn.is_some() || evaluating || preparing)
+        if (!self.turns.is_empty() || evaluating || preparing)
             && !self.host.runtime.has_remaining_work()
         {
             return Err(self.violation(format!(
-                "I5: the kernel reports no remaining work while turn {:?} runs, an evaluation is pending ({evaluating}), or a prompt is being prepared ({preparing})",
-                self.turn.as_ref().map(|turn| &turn.turn_id)
+                "I5: the kernel reports no remaining work while turns {:?} run, an evaluation is pending ({evaluating}), or a prompt is being prepared ({preparing})",
+                self.turns.iter().map(|turn| &turn.turn_id).collect::<Vec<_>>()
             )));
         }
         Ok(())
@@ -2101,18 +2119,33 @@ impl Simulation {
         }
     }
 
-    /// 불변식 I1(턴은 하나만)과 I3 을 본다.
+    /// 불변식 I1(턴은 동시 턴 수까지, thread 마다 하나), I3, I12 를 본다.
     fn start_fake_turn(
         &mut self,
         correlation: TurnSubmissionCorrelation,
         request: TurnSubmissionRequest,
     ) -> Result<(), Violation> {
-        if let Some(running) = &self.turn {
+        if self.turns.len() >= self.settings.turn_concurrency {
             return Err(self.violation(format!(
                 "I1: a second turn was submitted while {} runs",
-                running.turn_id
+                self.turns
+                    .iter()
+                    .map(|turn| turn.turn_id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )));
         }
+        if let Some(running) = request
+            .thread_id
+            .as_ref()
+            .and_then(|thread_id| self.turns.iter().find(|turn| &turn.thread_id == thread_id))
+        {
+            return Err(self.violation(format!(
+                "I1: a second turn on {} was submitted while {} runs",
+                running.thread_id, running.turn_id
+            )));
+        }
+        self.check_one_auto_follow_thread(&request)?;
         self.ledger
             .record_turn_submission(&request, self.settings.max_auto_turns)
             .and_then(|()| self.ledger.record_planned_prompt_submission(&request))
@@ -2133,13 +2166,24 @@ impl Simulation {
         }
         let turn_id = format!("turn-{}", self.next_turn);
         self.next_turn += 1;
+        let alongside = if self.turns.is_empty() {
+            String::new()
+        } else {
+            format!(", {ALONGSIDE_ANOTHER_TURN}")
+        };
         self.record(format!(
-            "app-server: accept {turn_id} on {thread_id} ({:?}, submission {})",
+            "app-server: accept {turn_id} on {thread_id} ({:?}, submission {}{alongside})",
             request.prompt_origin, correlation.generation
         ));
-        self.turn = Some(FakeTurn {
+        if request.prompt_origin == CorePromptOrigin::AutoFollow {
+            self.ledger
+                .auto_follow_turns
+                .insert(turn_key(&thread_id, &turn_id));
+        }
+        self.turns.push(FakeTurn {
             correlation,
             thread_id,
+            origin: request.prompt_origin,
             turn_id,
             stage: TurnStage::Submitted,
             interrupt_requested: false,
@@ -2170,9 +2214,13 @@ impl Simulation {
 
     /// 진행 중 턴을 한 단계 보낸다: 시작 알림, 또는 종료 알림. 시작 전후에 가끔 스트림이 실패한다.
     fn advance_turn(&mut self) {
-        let Some(turn) = self.turn.clone() else {
-            return;
+        // 턴이 하나이면 난수를 쓰지 않는다. 값 1 의 seed 가 이전과 같은 시나리오를 만든다.
+        let index = match self.turns.len() {
+            0 => return,
+            1 => 0,
+            running => self.rng.index(running),
         };
+        let turn = self.turns[index].clone();
         let stream_fails = self.rng.percent(10);
         match turn.stage {
             _ if stream_fails => self.fail_turn(&turn),
@@ -2225,7 +2273,7 @@ impl Simulation {
         });
         turn.approval = Some(approval_id);
         turn.decision = None;
-        self.turn = Some(turn);
+        self.store_turn(turn);
     }
 
     /// app-server 가 승인의 끝을 알린다. 다른 클라이언트의 결정이거나 시간 초과이다.
@@ -2266,7 +2314,7 @@ impl Simulation {
                 resolution: sent,
             },
         });
-        self.turn = Some(turn);
+        self.store_turn(turn);
     }
 
     /// 실제 worker 는 시작 전이든 뒤든 스트림 오류를 `Failed` 하나로 알린다 (`publish_turn_submission_failure`).
@@ -2279,7 +2327,7 @@ impl Simulation {
             self.ledger
                 .end_approval(approval_id, self.restarts, ApprovalResolution::Withdrawn);
         }
-        self.turn = None;
+        self.drop_turn(turn.correlation);
         self.ended_turns
             .push((turn.thread_id.clone(), turn.turn_id.clone()));
         self.send_core_input(CoreInput::ConversationStreamUpdated {
@@ -2313,7 +2361,7 @@ impl Simulation {
             },
         });
         turn.stage = TurnStage::Started;
-        self.turn = Some(turn);
+        self.store_turn(turn);
     }
 
     fn finish_turn(&mut self, turn: &FakeTurn) {
@@ -2327,7 +2375,7 @@ impl Simulation {
             self.ledger
                 .end_approval(approval_id, self.restarts, ApprovalResolution::Withdrawn);
         }
-        self.turn = None;
+        self.drop_turn(turn.correlation);
         self.ended_turns
             .push((turn.thread_id.clone(), turn.turn_id.clone()));
         let receipt = ConversationTurnTerminalReceipt::new(
@@ -2420,7 +2468,7 @@ impl Simulation {
     ) {
         let task_id = format!("task-{}", self.next_task);
         let planned_prompt = format!("planned {raw_prompt} for {task_id}");
-        self.prompt_prepared_behind_turn |= self.turn.is_some();
+        self.prompt_prepared_behind_turn |= !self.turns.is_empty();
         let thread_id = self
             .thread_prompt_targets
             .get(&raw_prompt)
@@ -2532,16 +2580,82 @@ impl Simulation {
         ));
     }
 
-    /// 실제 app-server adapter 처럼 지금 도는 턴을 중단한다 (모든 스트림). 그 턴은 보지 않는 thread 의 것일 수 있다.
+    /// 실제 app-server adapter 처럼 지금 도는 턴을 모두 중단한다 (모든 스트림). 보지 않는 thread 의 턴일 수 있다.
     /// `target` 이 있으면 그 (thread, 턴) 만 중단한다 (#2304).
     fn interrupt_running_turn(&mut self, target: Option<&(String, String)>) {
-        if let Some(turn) = self.turn.as_mut().filter(|turn| {
+        for turn in self.turns.iter_mut().filter(|turn| {
             turn.stage == TurnStage::Started
                 && target.is_none_or(|(thread_id, turn_id)| {
                     &turn.thread_id == thread_id && &turn.turn_id == turn_id
                 })
         }) {
             turn.interrupt_requested = true;
+        }
+    }
+
+    /// 단계를 바꾼 턴을 그 자리에 다시 둔다.
+    fn store_turn(&mut self, turn: FakeTurn) {
+        match self
+            .turns
+            .iter_mut()
+            .find(|running| running.correlation == turn.correlation)
+        {
+            Some(running) => *running = turn,
+            None => self.turns.push(turn),
+        }
+    }
+
+    fn drop_turn(&mut self, correlation: TurnSubmissionCorrelation) {
+        self.turns.retain(|turn| turn.correlation != correlation);
+    }
+
+    /*
+     * I12: 자동 후속을 이어 가는 thread 는 하나이다 (plan 18 Q5-3). 자동 후속 턴을 받을 때, 다른 thread 의 자동 후속
+     * 턴이 돌거나 그 턴의 평가가 진행 중이면 안 된다. 둘이 함께 이어 가면 planning 큐의 같은 작업을 둘이 집는다.
+     */
+    fn check_one_auto_follow_thread(
+        &self,
+        request: &TurnSubmissionRequest,
+    ) -> Result<(), Violation> {
+        /*
+         * 값 1 은 차선이 없다 (plan 18 Q5-3 은 값 1 의 동작을 바꾸지 않는다). 그때는 한 thread 의 자동 후속 평가가 도는
+         * 동안 다른 thread 의 턴 뒤 자동 후속이 나갈 수 있다. 턴은 하나씩 돌고, 늦은 쪽의 제출은 거절된다.
+         */
+        if self.settings.turn_concurrency < 2
+            || request.prompt_origin != CorePromptOrigin::AutoFollow
+        {
+            return Ok(());
+        }
+        let Some(thread_id) = request
+            .auto_follow_source
+            .as_ref()
+            .map(|source| &source.thread_id)
+        else {
+            return Ok(());
+        };
+        let running = self.turns.iter().find(|turn| {
+            turn.origin == CorePromptOrigin::AutoFollow && &turn.thread_id != thread_id
+        });
+        let evaluating = self.pending.iter().find_map(|pending| match pending {
+            PendingCompletion::PostTurnEvaluation {
+                correlation,
+                permit,
+            } if permit.is_current()
+                && &correlation.thread_id != thread_id
+                && self.ledger.auto_follow_turns.contains(&turn_key(
+                    &correlation.thread_id,
+                    &correlation.completed_turn_id,
+                )) =>
+            {
+                Some(&correlation.thread_id)
+            }
+            _ => None,
+        });
+        match running.map(|turn| &turn.thread_id).or(evaluating) {
+            Some(other) => Err(self.violation(format!(
+                "I12: {thread_id} continues auto-follow while {other} also continues it"
+            ))),
+            None => Ok(()),
         }
     }
 
@@ -2607,21 +2721,28 @@ fn variant_name(debug: &str) -> &str {
 
 /// seed 하나를 돌린다. 불변식이 깨지거나 커널이 panic 하면 seed 와 마지막 기록을 담은 문장을 돌려준다.
 fn run_seed(seed: u64) -> Result<Vec<String>, String> {
-    Simulation::new(seed).run().map_err(|(violation, trace)| {
-        failure_report(
-            seed,
-            &format!("step {}: {}", violation.step, violation.message),
-            &trace,
-        )
-    })
+    run_seed_with(seed, 1)
 }
 
-fn failure_report(seed: u64, message: &str, trace: &[String]) -> String {
+fn run_seed_with(seed: u64, turn_concurrency: usize) -> Result<Vec<String>, String> {
+    Simulation::new(seed, turn_concurrency)
+        .run()
+        .map_err(|(violation, trace)| {
+            failure_report(
+                seed,
+                turn_concurrency,
+                &format!("step {}: {}", violation.step, violation.message),
+                &trace,
+            )
+        })
+}
+
+fn failure_report(seed: u64, turn_concurrency: usize, message: &str, trace: &[String]) -> String {
     // `AKRA_SIM_TRACE_TAIL` 로 보고에 넣는 기록 줄 수를 늘린다 (실패를 조사할 때).
     let tail = env_number("AKRA_SIM_TRACE_TAIL").map_or(TRACE_TAIL, |lines| lines as usize);
     let tail_start = trace.len().saturating_sub(tail);
     format!(
-        "kernel simulation failed: {message}\nreproduce: AKRA_SIM_SEED={seed} cargo test --locked kernel_simulation\nlast trace lines:\n{}",
+        "kernel simulation failed (turn concurrency {turn_concurrency}): {message}\nreproduce: AKRA_SIM_SEED={seed} cargo test --locked kernel_simulation\nlast trace lines:\n{}",
         trace[tail_start..].join("\n")
     )
 }
@@ -2697,6 +2818,43 @@ fn kernel_simulation_keeps_the_invariants_for_every_seed() {
     }
 }
 
+/*
+ * 동시 턴 수 2 의 커널이다 (plan 18 Q5-3). 제품 값은 1 이므로 시험에서만 돈다. 같은 불변식에 I12 (자동 후속을 이어 가는
+ * thread 는 하나)를 더해 본다. 기본 seed 는 턴 둘이 실제로 함께 돌고 자동 후속이 나와야 한다. 아니면 I12 가 아무것도
+ * 보지 않는다.
+ */
+#[test]
+fn kernel_simulation_keeps_the_invariants_with_two_concurrent_turns() {
+    let seeds = seeds_to_run();
+    let seed_count = seeds.len() as u64;
+    let (traces, failures): (Vec<_>, Vec<_>) = seeds
+        .into_iter()
+        .map(|seed| run_seed_with(seed, 2))
+        .partition(Result::is_ok);
+    let failures = failures
+        .into_iter()
+        .filter_map(Result::err)
+        .collect::<Vec<_>>();
+    assert!(
+        failures.is_empty(),
+        "{} seed(s) failed\n\n{}",
+        failures.len(),
+        failures.join("\n\n")
+    );
+    if seed_count >= DEFAULT_SEED_COUNT {
+        let lines = || traces.iter().flatten().flatten();
+        assert!(
+            lines().any(|line| line.contains(ALONGSIDE_ANOTHER_TURN)),
+            "no seed ran two turns at once"
+        );
+        assert!(
+            lines()
+                .any(|line| line.contains(ALONGSIDE_ANOTHER_TURN) && line.contains("AutoFollow")),
+            "no seed continued auto-follow while another turn ran"
+        );
+    }
+}
+
 #[test]
 fn kernel_simulation_restores_a_queued_prompt_after_a_restart() {
     /*
@@ -2704,7 +2862,7 @@ fn kernel_simulation_restores_a_queued_prompt_after_a_restart() {
      * 순서: 세션 목록을 읽는다 → thread 지정 프롬프트를 보낸다 → 다른 대화에서 턴이 돈다 → 준비가 끝나 프롬프트가
      * 큐에 남는다 → 커널을 다시 켠다 → 새 커널이 그 프롬프트를 한 번 낸다.
      */
-    let mut simulation = Simulation::new(0);
+    let mut simulation = Simulation::new(0, 1);
     let script = |simulation: &mut Simulation| -> Result<(), Violation> {
         let cycle = Duration::from_millis(10);
         simulation.open_client_session();
@@ -2717,8 +2875,9 @@ fn kernel_simulation_restores_a_queued_prompt_after_a_restart() {
         simulation.submit_manual_turn();
         simulation.run_host_cycle(cycle)?;
         let turn = simulation
-            .turn
-            .clone()
+            .turns
+            .first()
+            .cloned()
             .expect("the manual turn should reach the app-server");
         simulation.start_turn(turn);
         simulation.run_host_cycle(cycle)?;
@@ -2756,22 +2915,31 @@ fn kernel_simulation_closes_an_open_approval_as_lost_after_a_restart() {
      * plan 19 Q3-5 의 중심 경로를 정해진 순서로 지난다. 순서: 턴이 돈다 → 승인을 요청한다 → 커널을 다시 켠다 → 새
      * 커널이 그 승인을 잃은 것으로 닫는다. 결정 없이 턴이 끝난 승인은 결정 없이 사라진 것으로 남는다.
      */
-    let mut simulation = Simulation::new(0);
+    let mut simulation = Simulation::new(0, 1);
     let script = |simulation: &mut Simulation| -> Result<(), Violation> {
         let cycle = Duration::from_millis(10);
         let run_turn_to_approval = |simulation: &mut Simulation| -> Result<FakeTurn, Violation> {
             simulation.submit_manual_turn();
             simulation.run_host_cycle(cycle)?;
             let turn = simulation
-                .turn
-                .clone()
+                .turns
+                .first()
+                .cloned()
                 .expect("the manual turn should reach the app-server");
             simulation.start_turn(turn);
             simulation.run_host_cycle(cycle)?;
-            let turn = simulation.turn.clone().expect("the turn should run");
+            let turn = simulation
+                .turns
+                .first()
+                .cloned()
+                .expect("the turn should run");
             simulation.request_approval(turn);
             simulation.run_host_cycle(cycle)?;
-            Ok(simulation.turn.clone().expect("the turn should wait"))
+            Ok(simulation
+                .turns
+                .first()
+                .cloned()
+                .expect("the turn should wait"))
         };
         simulation.open_client_session();
         simulation.run_host_cycle(cycle)?;
@@ -2825,7 +2993,7 @@ fn kernel_simulation_closes_an_open_approval_as_lost_after_a_restart() {
 fn kernel_simulation_answers_a_resend_with_the_first_receipt_after_a_restart() {
     // plan 19 Q3-6 의 중심 경로를 정해진 순서로 지난다: 키가 있는 프롬프트를 보낸다 → 커널을 다시 켠다 → 같은 키로 다시
     // 보낸다. 새 커널은 기록에서 키를 되돌렸으므로 실행하지 않고 처음의 영수증을 답한다.
-    let mut simulation = Simulation::new(0);
+    let mut simulation = Simulation::new(0, 1);
     let script = |simulation: &mut Simulation| -> Result<(), Violation> {
         let cycle = Duration::from_millis(10);
         simulation.open_client_session();
@@ -2866,7 +3034,7 @@ fn kernel_simulation_answers_a_resend_with_the_first_receipt_after_a_restart() {
 fn run_script(
     script: impl FnOnce(&mut Simulation) -> Result<(), Violation>,
 ) -> (Vec<String>, Vec<RecordedKernelEvent>) {
-    let mut simulation = Simulation::new(0);
+    let mut simulation = Simulation::new(0, 1);
     let result = script(&mut simulation);
     let log = simulation.kernel_log.clone();
     match simulation.finish(result) {
@@ -2908,8 +3076,9 @@ fn kernel_simulation_submits_a_queued_prompt_again_when_a_crash_lost_its_settlem
         simulation.submit_manual_turn();
         simulation.run_host_cycle(cycle)?;
         let turn = simulation
-            .turn
-            .clone()
+            .turns
+            .first()
+            .cloned()
             .expect("the manual turn should reach the app-server");
         simulation.start_turn(turn);
         simulation.run_host_cycle(cycle)?;
@@ -3017,6 +3186,7 @@ fn scripted_simulation() -> Simulation {
             approval_budget: 0,
             decision_budget: 0,
             steer_budget: 0,
+            turn_concurrency: 1,
         },
     )
 }
@@ -3068,12 +3238,17 @@ fn start_scripted_turn(
     simulation.submit_manual_turn_with(prompt.to_string(), continues_viewed);
     simulation.run_host_cycle(cycle)?;
     let turn = simulation
-        .turn
-        .clone()
+        .turns
+        .first()
+        .cloned()
         .expect("the manual turn should reach the app-server");
     simulation.start_turn(turn);
     simulation.run_host_cycle(cycle)?;
-    Ok(simulation.turn.clone().expect("the turn should run"))
+    Ok(simulation
+        .turns
+        .first()
+        .cloned()
+        .expect("the turn should run"))
 }
 
 fn operation_state_of(records: &[RecordedKernelEvent], op_id: i64) -> OperationState {
@@ -3115,10 +3290,18 @@ fn kernel_simulation_ends_an_approval_decision_and_a_planning_reset_with_their_c
         simulation.run_host_cycle(cycle)?;
         deliver_everything(simulation, cycle)?;
 
-        let waiting = simulation.turn.clone().expect("the turn should still wait");
+        let waiting = simulation
+            .turns
+            .first()
+            .cloned()
+            .expect("the turn should still wait");
         simulation.resolve_approval(waiting);
         simulation.run_host_cycle(cycle)?;
-        let turn = simulation.turn.clone().expect("the turn should run");
+        let turn = simulation
+            .turns
+            .first()
+            .cloned()
+            .expect("the turn should run");
         simulation.finish_turn(&turn);
         simulation.run_host_cycle(cycle)?;
         deliver_everything(simulation, cycle)?;

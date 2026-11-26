@@ -103,14 +103,25 @@ impl CoreController {
 
     /*
      * 큐에 남긴 thread 지정 프롬프트를 낼 차례이다 (plan 19 Q2-3). 모든 session 이 쉬어야 한다 (턴, 승인, 평가,
-     * 자동 후속, 정지, steer 없음). 병렬 모드가 켜졌으면 바로 차례이다. 그때는 내지 않고 병렬 slot 에 맡긴다.
-     * 값을 모르면 기다린다.
+     * 자동 후속, 정지, steer 없음). 동시 턴 수가 2 이상이면 큐 머리의 프롬프트가 들어갈 자리가 나면 낸다 (plan 18
+     * Q5-3). 병렬 모드가 켜졌으면 바로 차례이다. 그때는 내지 않고 병렬 slot 에 맡긴다. 값을 모르면 기다린다.
      */
     fn queued_thread_prompt_is_due(&self) -> bool {
         self.planning.has_resubmittable_thread_prompt()
             && match self.planning.host_parallel_mode() {
                 Some(true) => true,
-                Some(false) => !self.conversation_turn.has_busy_session(),
+                Some(false) => {
+                    !self.conversation_turn.has_busy_session()
+                        || self
+                            .planning
+                            .next_queued_thread_prompt()
+                            .is_some_and(|prompt| {
+                                self.conversation_turn.queued_thread_prompt_has_room(
+                                    &prompt.thread_id,
+                                    &prompt.task_id,
+                                )
+                            })
+                }
                 None => false,
             }
     }
@@ -8378,6 +8389,165 @@ mod tests {
             again.effects.is_empty(),
             "a completed turn is evaluated once"
         );
+    }
+
+    #[test]
+    fn with_two_turns_only_the_auto_follow_lane_continues() {
+        // plan 18 Q5-3: the thread that took a turn first holds the one auto-follow lane. The turn of
+        // another thread ends like a plain conversation turn: its evaluation does not continue, and
+        // its route settles without continuation even when the evaluator answered a prompt.
+        let mut controller =
+            CoreController::with_turn_concurrency(super::super::TurnConcurrencyPolicy::new(2));
+        let evaluate = |controller: &mut CoreController| {
+            let outcome =
+                controller.handle_input(CoreInput::Command(AppCommand::EvaluateCompletedTurn {
+                    parallel_mode_enabled: false,
+                    parallel_automation_epoch_id: None,
+                }));
+            let [CoreEffect::EvaluatePostTurn { request, .. }] = outcome.effects.as_slice() else {
+                panic!("the evaluation should start: {:?}", outcome.effects);
+            };
+            (
+                post_turn_effect_correlation(&outcome),
+                request.context.continuation_paused,
+                request.context.can_queue_next,
+            )
+        };
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        let (lane, _, _) = evaluate(&mut controller);
+        controller.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
+        apply_completed_turn(&mut controller, "thread-2", "turn-2");
+        let (plain, plain_paused, plain_can_queue_next) = evaluate(&mut controller);
+        assert!(plain_paused && !plain_can_queue_next);
+        for correlation in [&lane, &plain] {
+            controller.handle_input(CoreInput::EffectCompleted(
+                CoreEffectCompletion::PostTurnEvaluationCompleted {
+                    correlation: correlation.clone(),
+                    execution: Box::new(sample_post_turn_execution_for(
+                        &correlation.thread_id,
+                        &correlation.completed_turn_id,
+                        &correlation.planning_workspace_directory,
+                    )),
+                },
+            ));
+        }
+
+        assert_eq!(
+            controller.next_post_turn_host_step(),
+            Some(super::super::PostTurnHostStep::SettleWithoutContinuation {
+                correlations: vec![plain.clone()],
+            })
+        );
+        controller.handle_input(CoreInput::Command(
+            AppCommand::ResolvePostTurnContinuation {
+                correlation: plain,
+                resolution: super::super::PostTurnRouteResolution::NoContinuation,
+            },
+        ));
+        assert!(matches!(
+            controller.next_post_turn_host_step(),
+            Some(super::super::PostTurnHostStep::RouteContinuation(work))
+                if work.correlation == lane
+        ));
+    }
+
+    #[test]
+    fn with_two_turns_a_queued_prompt_goes_out_when_its_thread_has_room() {
+        // plan 18 Q5-3: a queued thread prompt waits for room, not for the whole kernel to rest.
+        let mut controller =
+            CoreController::with_turn_concurrency(super::super::TurnConcurrencyPolicy::new(2));
+        controller.handle_input(CoreInput::Command(AppCommand::SetParallelModeEnabled(
+            false,
+        )));
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        controller.handle_input(CoreInput::Command(AppCommand::EvaluateCompletedTurn {
+            parallel_mode_enabled: false,
+            parallel_automation_epoch_id: None,
+        }));
+        let queued =
+            |thread_id: &str, task_id: &str| crate::domain::kernel_event::QueuedThreadPrompt {
+                thread_id: thread_id.to_string(),
+                workspace_directory: "/tmp/workspace".to_string(),
+                handoff: crate::domain::planning::ManualPromptMainSessionHandoff {
+                    prompt: format!("planned prompt for {thread_id}"),
+                    transcript_text: "fix the test".to_string(),
+                    task: None,
+                },
+                task_id: task_id.to_string(),
+                op_id: None,
+            };
+        controller.handle_input(CoreInput::Command(AppCommand::RestoreQueuedThreadPrompts(
+            vec![
+                queued("thread-1", "task-1"),
+                queued("thread-beta", "task-2"),
+            ],
+        )));
+        assert_eq!(
+            controller.next_post_turn_host_step(),
+            None,
+            "the head of the queue waits while its thread evaluates"
+        );
+
+        let mut controller =
+            CoreController::with_turn_concurrency(super::super::TurnConcurrencyPolicy::new(2));
+        controller.handle_input(CoreInput::Command(AppCommand::SetParallelModeEnabled(
+            false,
+        )));
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        controller.handle_input(CoreInput::Command(AppCommand::EvaluateCompletedTurn {
+            parallel_mode_enabled: false,
+            parallel_automation_epoch_id: None,
+        }));
+        controller.handle_input(CoreInput::Command(AppCommand::RestoreQueuedThreadPrompts(
+            vec![queued("thread-beta", "task-2")],
+        )));
+        assert_eq!(
+            controller.next_post_turn_host_step(),
+            Some(super::super::PostTurnHostStep::ResubmitQueuedThreadPrompt)
+        );
+        let resubmitted =
+            controller.handle_input(CoreInput::Command(AppCommand::ResubmitQueuedThreadPrompt));
+        assert!(matches!(
+            resubmitted.effects.as_slice(),
+            [CoreEffect::SubmitTurn { request, .. }]
+                if request.thread_id.as_deref() == Some("thread-beta")
+        ));
+    }
+
+    #[test]
+    fn with_two_turns_a_manual_turn_for_a_background_thread_is_rejected() {
+        // plan 18 Q5-3: with room for two turns, a late prompt for a thread that a background session
+        // still owns must not open a second session of that thread in the viewed slot. With one turn
+        // the kernel keeps accepting it (next_submission_recovers_pre_start_failure_...).
+        let mut controller =
+            CoreController::with_turn_concurrency(super::super::TurnConcurrencyPolicy::new(2));
+        apply_completed_turn(&mut controller, "thread-1", "turn-1");
+        controller.handle_input(CoreInput::Command(AppCommand::EvaluateCompletedTurn {
+            parallel_mode_enabled: false,
+            parallel_automation_epoch_id: None,
+        }));
+        controller.handle_input(CoreInput::Command(AppCommand::InvalidateConversationLoad));
+        let outcome = controller.handle_input(CoreInput::Command(AppCommand::SubmitTurn(
+            Box::new(TurnSubmissionRequest {
+                transcript_text: "late".to_string(),
+                workspace_directory: "/tmp/workspace".to_string(),
+                thread_id: Some("thread-1".to_string()),
+                image_paths: Vec::new(),
+                prompt: "late".to_string(),
+                prompt_origin: super::super::CorePromptOrigin::Manual,
+                auto_follow_source: None,
+                planning_handoff: None,
+                turn_options: Default::default(),
+                slot_lease_handoff: None,
+            }),
+        )));
+        assert!(outcome.effects.is_empty());
+        assert!(matches!(
+            outcome.events.as_slice(),
+            [AppEvent::TurnSubmissionAdmissionResolved(
+                TurnSubmissionAdmission::RejectedUnavailable
+            )]
+        ));
     }
 
     #[test]

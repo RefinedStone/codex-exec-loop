@@ -789,9 +789,27 @@ impl NativeClientRuntime {
         parallel_control_plane: ParallelModeControlPlaneComposition,
         effect_executor: Box<dyn CoreEffectExecutor + Send>,
     ) -> (Self, CoreInputSender) {
+        Self::new_with_turn_concurrency_for_test(
+            parallel_control_plane,
+            effect_executor,
+            crate::core::app::TurnConcurrencyPolicy::default(),
+        )
+    }
+
+    /// 동시 턴 수를 정한 시험용 커널이다. 커널 시뮬레이션이 값 2 를 돌린다 (plan 18 Q5-3).
+    #[cfg(test)]
+    pub(crate) fn new_with_turn_concurrency_for_test(
+        parallel_control_plane: ParallelModeControlPlaneComposition,
+        effect_executor: Box<dyn CoreEffectExecutor + Send>,
+        policy: crate::core::app::TurnConcurrencyPolicy,
+    ) -> (Self, CoreInputSender) {
         let (input_sender, input_receiver) = core_input_channel();
         let core = NativeCoreRuntime {
-            runtime: CoreRuntime::new(effect_executor, input_receiver),
+            runtime: CoreRuntime::new_with_turn_concurrency(
+                effect_executor,
+                input_receiver,
+                policy,
+            ),
         };
         (Self::from_parts(core, parallel_control_plane), input_sender)
     }
