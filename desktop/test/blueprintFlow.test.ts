@@ -82,3 +82,19 @@ describe("attention", () => {
     expect(nextInTurn([thread({ status: "running" })], null)).toBeNull();
   });
 });
+
+describe("unresolved PR attention", () => {
+  it.each(["idle", "unread", "running"] as const)("keeps failed CI actionable while the turn is %s", (status) => {
+    const item = thread({ status, pullRequest: pullRequest("fail") });
+    expect(attentionOf(item, undefined, deliveryOf(item, 0, 3))).toEqual({ group: "mine", reason: "PR #7 의 CI 실패" });
+    expect(nextInTurn([item], null)).toBe("t");
+  });
+
+  it("keeps approval first and does not revive a merged PR failure", () => {
+    const item = thread({ status: "approval", pullRequest: pullRequest("fail") });
+    expect(attentionOf(item, { command: "git push", cwd: "/w", reason: "" }, null).reason).toBe("승인 필요: git push");
+    const merged = thread({ pullRequest: pullRequest("fail", true) });
+    expect(attentionOf(merged, undefined, deliveryOf(merged, 0, 3)).group).toBe("rest");
+    expect(nextInTurn([merged], null)).toBeNull();
+  });
+});
