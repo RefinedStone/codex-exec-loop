@@ -1233,9 +1233,9 @@ export class DesktopSession {
   }
 }
 
-/** 메시지 버스와 세션을 잇는다. 반환한 함수로 연결을 끊는다. */
 const FILE_SEARCH_LIMIT = 20;
 
+/** 메시지 버스와 세션을 잇는다. 반환한 함수로 연결을 끊는다. */
 export function startDesktopSession(bridge: AkraBridge, store: SessionStore, clientVersion: string): () => void {
   const session = new DesktopSession(bridge, store, clientVersion);
   session.start();

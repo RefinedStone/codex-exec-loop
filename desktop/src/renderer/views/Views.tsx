@@ -35,7 +35,8 @@ export function Home({ actions, onChooseFolder, onOpenThread }: { actions: Compo
         <div className="home-pickers">
           <Picker icon={<Icon name="folder" size={12} />} value={homeCwd ?? CHOOSE_FOLDER} options={options} onChange={choose} />
         </div>
-        <Composer actions={actions} home />
+        {/* 폴더를 바꾸면 입력창을 새로 만든다. 이전 폴더의 `@` 후보와 진행 중인 찾기를 버린다 (#2837). 초안은 저장소에 남는다. */}
+        <Composer key={homeCwd ?? ""} actions={actions} home />
         {recent.length > 0 && <h3>최근 스레드</h3>}
         <ul className="recent">
           {recent.map((thread) => (
