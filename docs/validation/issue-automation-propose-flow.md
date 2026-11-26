@@ -28,12 +28,12 @@
 
 ### 승인 자동화와 실제 모델 확인의 구분
 
-위 7개 application 결합 시험과 별도로 [사람 확인 경로의 회귀](issue-human-confirmation.md#자동-회귀의-경계)가 있다.
+위 9개 application 결합 시험과 별도로 [사람 확인 경로의 회귀](issue-human-confirmation.md#자동-회귀의-경계)가 있다.
 Desktop E2E는 실제 Electron IPC·utility process에 dialog·helper·Gateway 대역을 연결한다.
 Rust 회귀는 실제 helper 구현·private IPC·Gateway 검증·SQLite를 한 OS 프로세스에서 조립한다.
 추가로 `native_helper_process_confirms_replays_and_revokes_on_eof`는 빌드된 Rust helper를 별도 OS 프로세스로
 실행하여 Gateway 등록·intent·proof 소비·명령 재전송·EOF 폐기를 검사한다.
-이 시험은 명시적으로 준비한 실행 파일과 임시 `AKRA_HOME`을 요구하며 기존 7개의 통과 수에 합산하지 않는다.
+이 시험은 명시적으로 준비한 실행 파일과 임시 `AKRA_HOME`을 요구하며 기존 9개의 통과 수에 합산하지 않는다.
 
 제품은 OS가 물리적인 사람의 클릭을 인증한다고 보장하지 않는다. 따라서 시험 harness가 승인 응답을
 제공하는 자동화 검증은 가능하며, 사용자의 직접 조작을 모든 개발·검증의 선행 조건으로 두지 않는다.
@@ -77,6 +77,8 @@ Rust 회귀는 실제 helper 구현·private IPC·Gateway 검증·SQLite를 한 
 | [registration_recovery.rs](../../src/application/service/parallel_mode/tests/issue_automation_flow/registration_recovery.rs) · `issue_automation_flow_registration_before_commit_recovers_one_task_after_event_retention` | 등록 호출 직전 실패 → 서비스 재조립 → 실제 task 하나 생성 → 이벤트 보관 정리·재전달 후에도 같은 task |
 | 같은 파일 · `issue_automation_flow_registration_ack_loss_keeps_one_task_after_event_retention` | 실제 등록 commit 뒤 ACK 유실 → 서비스 재조립 → 이미 저장된 task 하나 복구 → 이벤트 보관 정리 후 중복 없음 |
 | [feedback_recovery.rs](../../src/application/service/parallel_mode/tests/issue_automation_flow/feedback_recovery.rs) · `issue_automation_flow_feedback_reconciles_lost_comment_ack_after_sqlite_restart_without_resending` | 댓글 생성 효과 뒤 ACK 유실·첫 readback 실패 → 같은 SQLite 경로에서 서비스 재조립 → readback만으로 같은 intent/comment 확정 |
+| registration_recovery.rs · `issue_automation_flow_process_death_after_registration_commit_keeps_one_task_and_one_comment` | 등록 commit 직후 프로세스 종료(오류 처리 없음) → 서비스 재조립 → task 1개, 댓글 1개 |
+| feedback_recovery.rs · `issue_automation_flow_process_death_after_comment_create_keeps_one_comment` | 원격 댓글 생성 직후 프로세스 종료, 기록은 `sent`에서 멈춤 → 서비스 재조립 → readback만으로 확정, 댓글 1개 |
 
 정상 흐름은 PR 생성과 승인 후 통합을 다음 순서로 분리해 검사한다.
 
@@ -146,6 +148,19 @@ fake provider는 매 `CreateComment`마다 새 comment ID를 만든다. fake의 
 
 댓글 intent와 receipt는 **실제 SQLite feedback journal**에 저장한다. 실제 파일 기반 `IssuePublishIntentJournalAdapter`는 collection·feedback이 공유하는 publication lease에 사용한다. 별도의 이슈 제목·본문 publication 기록은 이 댓글 시험에서 비어 있고 변경되지 않는지 확인한다. 댓글 receipt가 그 파일 journal에 저장된다고 주장하지 않는다.
 
+### 성공 직후 응답만 잃는 프로세스 종료
+
+#2555 리뷰는 "외부 효과는 성공했지만 그 사실을 기록하기 전에 프로세스가 죽는 경우"를 가장 중요한 연결 검증으로 지목했다. 위 ACK 유실 시험은 오류를 반환하므로 호출자의 오류 처리가 실행된다. 등록에서는 `SubmissionUnavailable`을 저장하고, 댓글에서는 `NeedsConfirmation`을 저장한다. 실제 프로세스 종료에서는 이 저장이 일어나지 않는다. 그래서 두 시험을 추가했다.
+
+- 외부 효과 바로 뒤에서 `panic!`을 일으킨다. 테스트는 `catch_unwind`로 잡고 모든 서비스를 drop한다. 효과 뒤의 어떤 기록 코드도 실행되지 않는다.
+- 같은 workspace, 같은 SQLite 파일, 같은 원격 대역 위에 새 서비스를 조립하고 tick을 두 번 실행한다.
+
+| 경계 | 종료 시점의 영속 상태 | 복구가 중복을 막는 방법 | 결과 |
+| --- | --- | --- | --- |
+| task 등록 | planning task 1개 commit. issue checkpoint는 `task_ids` 비어 있음, `SubmissionUnavailable` 없음 | work-order ID가 이슈에서 결정된다 (`issue_work_order_id`). 복구는 새 등록 전에 `task_ids(work_order_id)`로 실행기의 영속 연결을 먼저 읽는다 | task 1개, 등록 ID 같음, 댓글 1개 |
+| 댓글 생성 | 원격 댓글 1개. intent는 원격 쓰기 전의 durable CAS 상태 `sent` | `sent`·`needs_confirmation` intent는 새 쓰기를 막는다. 복구는 다시 쓰지 않고 intent ID marker로 읽기만 한다 | `CreateComment` 1회, 같은 intent가 `confirmed`, receipt의 comment ID 같음 |
+
+두 경계 모두 현재 설계가 중복을 막았다. 제품 코드는 바꾸지 않았다. `panic` unwind는 Rust `Drop`을 실행하므로 OS kill과 같지 않다. 효과 뒤의 응용 기록이 없다는 점만 같다. SQLite commit 도중 종료, WAL 손상, 실제 GitHub 응답 유실은 이 시험의 범위가 아니다.
 
 ## 이슈 완료 기준과 증거 대응
 
@@ -153,11 +168,11 @@ fake provider는 매 `CreateComment`마다 새 comment ID를 만든다. fake의 
 | --- | --- | --- |
 | process opt-in만으로 통합하지 않음 | 정상 흐름의 `REVIEW_REQUIRED` 차단과 `propose_flow_process_opt_in_never_replaces_start_or_pull_request_human_approval` | 실제 native 승인·GitHub 리뷰는 live에서 별도 확인 |
 | 대기 중 hold·stale, push 직전 takeover로 해당 작업 차단; 다른 작업은 계속 | 새 control 경계 2개와 기존 `work_order_permit_wait_does_not_starve_an_unrelated_task`, `work_order_revoked_after_cherry_pick_preserves_its_result_and_allows_unrelated_integration` | 새 control 시험의 unrelated-ID 단언만으로 실제 다른 task 전달까지 판정하지 않음 |
-| 등록 전후 오류·ACK 유실·10,000개 초과 이벤트에서 task 하나 | 새 registration 결합 회귀 2개, 실제 DB 회귀 3개, 10,001개 합성 이벤트와 production retention | 호출 경계 오류·서비스 재생성 범위. OS process kill은 미실시 |
+| 등록 전후 오류·ACK 유실·10,000개 초과 이벤트에서 task 하나 | 새 registration 결합 회귀 2개, 실제 DB 회귀 3개, 10,001개 합성 이벤트와 production retention, 등록 commit 직후 종료 회귀 1개 | 호출 경계 오류·`panic` 종료·서비스 재생성 범위. OS process kill은 미실시 |
 | 이슈 closed·라벨 제거·원격 읽기 실패 뒤 낡은 자격으로 실행하지 않음 | 대기 상태 5개 변형의 실제 permit 및 slot admission 차단 | 실제 GitHub 장애·네트워크 지연은 미검증 |
 | 통합 후 검증 계약 부재로 구현을 다시 실행하지 않음 | 기존 `post_merge_contract_opens_human_recovery_and_never_reimplements`, `integrated_queue_recovery_is_blocked_even_with_zero_execution_cap`, `integrated_observation_recovery_requires_zero_execution_cap_and_preserves_attestation`, `trusted_integration_is_recorded_once_and_later_contract_recovery_stays_done` | live는 통합하지 않는 범위로 계획 |
 | 통합 상태와 외부 닫힘 분리 | 정상 흐름의 Done + 외부 Open, 기존 `external_closure` DB 회귀 4개; Desktop 표현은 [#2554 검증](desktop-issue-execution-tracking.md) | 실제 GitHub 닫힘 쓰기는 수행하지 않음 |
-| 댓글 생성 ACK 유실·readback 실패에서 중복 댓글 없음 | 새 feedback 회귀의 실제 SQLite intent·receipt·owner와 provider CreateComment 전체 1회 | 실제 GitHub 응답 유실은 미검증 |
+| 댓글 생성 ACK 유실·readback 실패에서 중복 댓글 없음 | 새 feedback 회귀의 실제 SQLite intent·receipt·owner와 provider CreateComment 전체 1회, `sent` 상태 종료 회귀 1개 | 실제 GitHub 응답 유실은 미검증 |
 | 실제 확인 SHA·OS·명령·결과·skip 기록 | 아래 자동 회귀 기록과 명시적인 미실행 항목 | **사용자 허가는 확보했으며 실제 실행 준비 중** |
 
 ## 실제 실행 준비에서 확인한 Gateway 제어 공백
@@ -351,6 +366,20 @@ cargo test --locked --all-features --lib -- \
 Linux의 첫 실행에는 Windows PATH 54개가 상속돼 파일 검증이 오래 걸렸다. 138개 통과·1개 미완료 상태에서 시험 프로세스만 정상 종료하고 환경 중단으로 보관했다. 소스는 바꾸지 않고 Linux 전용 PATH로 재실행해 139개가 모두 통과했다. 최종 빌드도 같은 Linux 전용 PATH를 사용했다.
 
 최종 로그는 `C:/dev/akra-queue/analysis/issue-2555-gate-serialization-rust.log`, `issue-2555-gate-serialization-full.log`, `issue-2555-gate-serialization-linux-r2.log`에 있다. [재현·복구 메타데이터](issue-2555-live-gate-starvation.json)에 두 실행 파일 SHA-256과 수정 전후의 관측을 기록했다. 임시 진단 Gateway는 종료했고 실제 창에는 정식 동결 실행본을 연결했다. 이 query 확인을 실제 사람 승인이나 모델 → PR → 댓글 성공으로 확대하지 않는다.
+
+### 성공 직후 프로세스 종료 회귀 — 2026-11-26
+
+| 항목 | 기록 |
+| --- | --- |
+| 기준 SHA | `d960d7d62e810f8cd94c7aa78918b0ba0104b6d6` (`prerelease`). 변경은 시험 코드 4개 파일과 이 문서뿐이다 |
+| OS | macOS 26.5 (Darwin 25.5.0), arm64, rustc 1.95.0 |
+| 실제 구성요소 | 임시 Git 저장소, 파일 기반 SQLite issue store·planning authority, `AkraIssueWorkExecutionAdapter`, `ParallelModeService`, collection·triage·decision·coordinator·feedback 서비스, 파일 기반 publication journal |
+| 가짜 구성요소 | 이슈 출처, 댓글 provider (`CreateComment`마다 새 댓글을 만든다), GitHub PR adapter, 사람 확인 capability, 고정 tick 시각. 종료는 외부 효과 뒤의 `panic`으로 흉내 낸다 |
+| 명령 | `cargo test --locked --all-features --lib issue_automation_flow` |
+| 결과 | **9 passed, 0 failed, 0 ignored**, 117.71초. 새 시험 2개 포함 |
+| 제품 코드 변경 | 없음. 두 경계 모두 중복이 생기지 않았다 |
+| 실제 모델 실행·실제 PR·실제 댓글 | **0회**. 실제 한 사이클은 사용자의 진행 결정을 기다린다 |
+| 미검증 | OS process kill, SQLite commit 도중 종료, 실제 GitHub 응답 유실, Windows (이 suite는 `#[cfg(unix)]`) |
 
 ## 후속 작업 시 실제 준비 상태 재확인
 

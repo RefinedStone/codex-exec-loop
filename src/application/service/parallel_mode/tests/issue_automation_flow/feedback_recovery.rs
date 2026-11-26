@@ -7,6 +7,7 @@ use crate::domain::issue_automation::feedback::{
     IssueFeedbackIntentState, IssueFeedbackOperation,
 };
 use rusqlite::{Connection, OpenFlags};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -196,4 +197,57 @@ fn issue_automation_flow_feedback_reconciles_lost_comment_ack_after_sqlite_resta
         restarted.publication.load(&restarted.workspace).unwrap(),
         publication_before
     );
+}
+
+#[test]
+fn issue_automation_flow_process_death_after_comment_create_keeps_one_comment() {
+    let fixture = FlowFixture::new("issue-flow-comment-death");
+    let services = fixture.services();
+    services.collect_and_triage().unwrap();
+    services.tick(1).unwrap();
+    services.approve_start().unwrap();
+
+    fixture.provider.die_after_next_comment_create();
+    let died = catch_unwind(AssertUnwindSafe(|| services.tick(2)));
+    assert!(died.is_err(), "the process dies inside the remote write");
+    assert_eq!(fixture.provider.create_count(), 1);
+    let comments = fixture.provider.comments();
+    assert_eq!(comments.len(), 1, "the remote create succeeded");
+    let rows = persisted_feedback_intents(&services);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].0, "sent",
+        "the record stops at the durable Sent CAS"
+    );
+    let original = rows[0].1.clone();
+    assert!(original.receipt.is_none());
+    assert!(original.acknowledged_comment_id.is_none());
+    let task_ids = services.task_ids().unwrap();
+    assert_eq!(task_ids.len(), 1);
+    drop(services);
+
+    // Same workspace, SQLite files and remote doubles; every service is new.
+    let restarted = fixture.services();
+    restarted.tick(3).unwrap();
+    restarted.tick(4).unwrap();
+    assert_eq!(fixture.provider.create_count(), 1, "recovery never resends");
+    assert_eq!(fixture.provider.comments().len(), 1);
+    assert_eq!(
+        fixture.provider.comments()[0].comment_id,
+        comments[0].comment_id
+    );
+    let rows = persisted_feedback_intents(&restarted);
+    let (status, confirmed) = rows
+        .iter()
+        .find(|(_, record)| record.intent.intent_id == original.intent.intent_id)
+        .expect("the same durable intent is recovered");
+    assert_eq!(status, "confirmed");
+    assert_eq!(
+        confirmed.receipt.as_ref().map(|receipt| &receipt.evidence),
+        Some(&IssueFeedbackEvidence::Comment {
+            comment_id: comments[0].comment_id.clone(),
+            body_sha256: comments[0].body_sha256.clone(),
+        })
+    );
+    assert_eq!(restarted.task_ids().unwrap(), task_ids);
 }

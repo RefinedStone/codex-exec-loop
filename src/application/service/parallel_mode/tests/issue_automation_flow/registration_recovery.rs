@@ -6,6 +6,7 @@ use crate::application::port::outbound::planning_work_order_repository_port::Pla
 use crate::application::service::issue_coordinator::IssueCoordinatorFact;
 use crate::domain::issue_automation::coordinator::{IssueWorkBlockReason, IssueWorkCheckpoint};
 use crate::domain::kernel_event::{KernelEvent, RETAINED_KERNEL_EVENTS, RecordedKernelEvent};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -130,6 +131,7 @@ fn registration_recovers_after_reassembly_and_retention(fault: SubmissionFault) 
     let prefix = match fault {
         SubmissionFault::BeforeCommit => "issue-flow-before-registration",
         SubmissionFault::AfterCommit => "issue-flow-registration-ack-loss",
+        SubmissionFault::ProcessDeath => unreachable!("process death has its own test"),
     };
     let fixture = FlowFixture::new(prefix);
     let probe = Arc::new(SubmissionProbe::default());
@@ -170,7 +172,7 @@ fn registration_recovers_after_reassembly_and_retention(fault: SubmissionFault) 
                     .is_none()
             );
         }
-        SubmissionFault::AfterCommit => {
+        SubmissionFault::AfterCommit | SubmissionFault::ProcessDeath => {
             assert_eq!(probe.committed.load(Ordering::SeqCst), 1);
             assert_eq!(committed_before_restart.len(), 1);
             assert_eq!(
@@ -276,4 +278,48 @@ fn issue_automation_flow_registration_before_commit_recovers_one_task_after_even
 #[test]
 fn issue_automation_flow_registration_ack_loss_keeps_one_task_after_event_retention() {
     registration_recovers_after_reassembly_and_retention(SubmissionFault::AfterCommit);
+}
+
+#[test]
+fn issue_automation_flow_process_death_after_registration_commit_keeps_one_task_and_one_comment() {
+    let fixture = FlowFixture::new("issue-flow-registration-death");
+    let probe = Arc::new(SubmissionProbe::default());
+    let services = fixture.services_with_execution(|inner| {
+        Arc::new(InterruptedSubmission::new(
+            inner,
+            SubmissionFault::ProcessDeath,
+            probe.clone(),
+        ))
+    });
+    services.collect_and_triage().unwrap();
+    services.tick(1).unwrap();
+    services.approve_start().unwrap();
+    let died = catch_unwind(AssertUnwindSafe(|| services.tick(2)));
+    assert!(died.is_err(), "the process dies inside submit");
+    assert_eq!(probe.committed.load(Ordering::SeqCst), 1);
+    let committed = authority_task_ids(&services);
+    assert_eq!(committed.len(), 1, "the task registration committed");
+    let orphan = services
+        .work()
+        .unwrap()
+        .expect("intent is saved before submit");
+    assert!(
+        orphan.task_ids.is_empty(),
+        "the checkpoint never saw the task"
+    );
+    assert_ne!(
+        orphan.blocked_reason,
+        Some(IssueWorkBlockReason::SubmissionUnavailable),
+        "no caller error path ran"
+    );
+    assert_eq!(fixture.provider.create_count(), 0);
+    drop(services);
+
+    // Same workspace, SQLite files and remote doubles; every service is new.
+    let recovered = fixture.services();
+    recovered.tick(3).unwrap();
+    recovered.tick(4).unwrap();
+    assert_one_durable_task(&recovered, &committed);
+    assert_eq!(fixture.provider.create_count(), 1);
+    assert_eq!(fixture.provider.comment_count(), 1);
 }

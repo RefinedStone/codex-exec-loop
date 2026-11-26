@@ -13,6 +13,8 @@ use crate::domain::issue_automation::work_control::{
 pub(super) enum SubmissionFault {
     BeforeCommit,
     AfterCommit,
+    /// Panics after the commit, so no caller error path can save anything.
+    ProcessDeath,
 }
 
 #[derive(Default)]
@@ -67,6 +69,9 @@ impl IssueWorkExecutionPort for InterruptedSubmission {
         self.probe.committed.fetch_add(1, Ordering::SeqCst);
         if inject && matches!(self.fault, SubmissionFault::AfterCommit) {
             bail!("injected acknowledgement loss after the planning registration committed");
+        }
+        if inject && matches!(self.fault, SubmissionFault::ProcessDeath) {
+            panic!("injected process death after the planning registration committed");
         }
         Ok(task_ids)
     }

@@ -32,6 +32,7 @@ pub(crate) struct FlowFeedbackProvider {
     comments: Mutex<BTreeMap<String, FlowRemoteComment>>,
     next_lost_acks: AtomicUsize,
     next_failed_reads: AtomicUsize,
+    next_deaths: AtomicUsize,
     reconciles: AtomicUsize,
 }
 impl FlowFeedbackProvider {
@@ -43,6 +44,7 @@ impl FlowFeedbackProvider {
             comments: Mutex::new(BTreeMap::new()),
             next_lost_acks: AtomicUsize::new(0),
             next_failed_reads: AtomicUsize::new(0),
+            next_deaths: AtomicUsize::new(0),
             reconciles: AtomicUsize::new(0),
         }
     }
@@ -51,6 +53,10 @@ impl FlowFeedbackProvider {
     }
     pub fn fail_next_comment_readback(&self) {
         self.next_failed_reads.fetch_add(1, Ordering::SeqCst);
+    }
+    /// The remote comment exists, then the caller panics before it can record anything.
+    pub fn die_after_next_comment_create(&self) {
+        self.next_deaths.fetch_add(1, Ordering::SeqCst);
     }
     pub fn writes(&self) -> Vec<IssueFeedbackIntent> {
         self.writes.lock().unwrap().clone()
@@ -172,7 +178,11 @@ impl IssueFeedbackPort for FlowFeedbackProvider {
                 body_sha256: body_sha256.clone(),
             },
         );
+        drop(comments);
         self.writes.lock().unwrap().push(intent.clone());
+        if consume_once(&self.next_deaths) {
+            panic!("injected process death after the remote comment create");
+        }
         if consume_once(&self.next_lost_acks) {
             Ok(IssueFeedbackWriteResult::Unconfirmed)
         } else {
