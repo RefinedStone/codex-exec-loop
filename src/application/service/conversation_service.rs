@@ -10,7 +10,9 @@ use anyhow::{Context, Result};
 // 실제 구현은 Codex app-server adapter이지만, TUI와 service는 trait object만 보므로 테스트 fake나 다른 runtime으로
 // 교체해도 호출 코드는 바뀌지 않는다.
 use crate::application::port::outbound::conversation_thread_turn_options_port::ConversationThreadTurnOptionsPort;
-use crate::application::port::outbound::interactive_turn_runtime_port::InteractiveTurnRuntimePort;
+use crate::application::port::outbound::interactive_turn_runtime_port::{
+    ConversationRuntimeCapabilities, InteractiveTurnRuntimePort,
+};
 use crate::application::port::outbound::review_center_repository_port::{
     ReviewCenterHistoryEntry, ReviewCenterInboxItem, ReviewCenterThreadProjection,
 };
@@ -232,6 +234,10 @@ impl ConversationService {
     // 실제로 담당하는지"를 알려 주는 값이다. AppRuntime 초기화 시 이 값을 읽어 TUI 제어 모델을 맞춘다.
     pub fn runtime_control_truth(&self) -> ConversationRuntimeControlTruth {
         self.interactive_turn_runtime_port.runtime_control_truth()
+    }
+
+    pub fn runtime_capabilities(&self) -> ConversationRuntimeCapabilities {
+        self.interactive_turn_runtime_port.runtime_capabilities()
     }
 
     // 전체 정지 뒤에 시작한 턴 하나만 멈춘다 (#2304). 다른 턴은 멈추지 않는다.
