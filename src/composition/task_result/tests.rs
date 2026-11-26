@@ -83,6 +83,7 @@ fn verified_legacy_source_is_distinct_from_wrong_work_order() {
         link_reference: None,
         task_ids: vec!["task-a".into(), "supplemental-task".into()],
         permits: vec![],
+        acceptance_receipt: None,
     };
     assert!(source_matches_order(&source, Some(&order)));
     order.work_order_id = "work-b".into();
