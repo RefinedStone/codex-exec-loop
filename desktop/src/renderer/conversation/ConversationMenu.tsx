@@ -2,6 +2,7 @@
 // 되감기는 넣지 않는다. 메뉴를 그리면 운영체제의 편집 메뉴는 이 영역에서 뜨지 않는다.
 import { useEffect, useRef } from "react";
 
+import { useFittedMenuPosition } from "../views/menuPosition";
 import { copyText } from "./copyText";
 
 export interface ConversationMenuTarget {
@@ -13,6 +14,8 @@ export interface ConversationMenuTarget {
   messageCopy: HTMLButtonElement | null;
   /** 누른 자리의 코드 블록 글이다. */
   code: string | null;
+  /** 누른 자리의 링크 주소이다. 운영체제 메뉴의 링크 복사를 대신한다. */
+  link: string | null;
 }
 
 /** 메뉴를 열 자리의 정보를 모은다. 대화 밖이면 null 이다. */
@@ -28,6 +31,7 @@ export function conversationMenuTarget(event: { clientX: number; clientY: number
     selection,
     messageCopy: message?.querySelector<HTMLButtonElement>(".message-copy") ?? null,
     code: target.closest("pre")?.textContent ?? null,
+    link: target.closest<HTMLAnchorElement>("a[href]")?.href || null,
   };
 }
 
@@ -39,6 +43,7 @@ export function ConversationMenu({ target, onQuote, onFind, onFork, onClose }: {
   onClose(): void;
 }) {
   const menu = useRef<HTMLUListElement>(null);
+  const position = useFittedMenuPosition(menu, target);
   useEffect(() => {
     menu.current?.querySelector<HTMLButtonElement>("button")?.focus();
     const close = (event: Event) => {
@@ -58,11 +63,12 @@ export function ConversationMenu({ target, onQuote, onFind, onFork, onClose }: {
       <button type="button" role="menuitem" data-testid={testId} onClick={() => { onClose(); action(); }}>{label}</button>
     </li>
   );
-  const { selection, messageCopy, code } = target;
+  const { selection, messageCopy, code, link } = target;
   return (
-    <ul ref={menu} className="conversation-menu" role="menu" aria-label="대화 메뉴" style={{ left: target.x, top: target.y }} data-testid="conversation-menu">
+    <ul ref={menu} className="conversation-menu" role="menu" aria-label="대화 메뉴" style={{ left: position.x, top: position.y }} data-testid="conversation-menu">
       {selection && onQuote && item("선택한 글 인용", "conversation-menu-quote", () => onQuote(selection))}
       {selection && item("선택한 글 복사", "conversation-menu-copy-selection", () => copyText(selection, "선택한 글을 복사했습니다"))}
+      {link && item("링크 주소 복사", "conversation-menu-copy-link", () => copyText(link, "링크 주소를 복사했습니다"))}
       {messageCopy && item("메시지 복사", "conversation-menu-copy-message", () => messageCopy.click())}
       {code !== null && item("코드 복사", "conversation-menu-copy-code", () => copyText(code, "코드를 복사했습니다"))}
       {item("대화 안 찾기", "conversation-menu-find", onFind)}
