@@ -2314,6 +2314,15 @@ fn repository_incarnation_is_stable_across_restart_and_move_but_not_clone() {
     let fixture_root = std::path::PathBuf::from(temp_workspace("repository-incarnation-move"));
     let original = fixture_root.join("original");
     seed_git_checkout(&original);
+    run_git_command(
+        &original,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://example.invalid/old-name.git",
+        ],
+    );
 
     let first = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
         original.to_string_lossy().as_ref(),
@@ -2326,8 +2335,18 @@ fn repository_incarnation_is_stable_across_restart_and_move_but_not_clone() {
     assert_eq!(first.repository_identity, restarted.repository_identity);
     assert_eq!(first.authority_store_path, restarted.authority_store_path);
 
+    // #2588/#2591: a hosted repository rename changes only the remote URL and keeps the identity.
     let moved = fixture_root.join("moved-and-renamed");
     std::fs::rename(&original, &moved).expect("repository including common dir should move");
+    run_git_command(
+        &moved,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://example.invalid/new-name.git",
+        ],
+    );
     let moved_location = SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(
         moved.to_string_lossy().as_ref(),
     )

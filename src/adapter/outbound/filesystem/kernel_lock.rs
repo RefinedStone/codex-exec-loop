@@ -381,6 +381,48 @@ mod tests {
         assert_ne!(first_lock.repository_key(), second_lock.repository_key());
     }
 
+    /// #2588: only the lock owner moves `.codex-exec-loop/`, and only in its own worktree. A second
+    /// process for the same repository moves nothing, and an alias path does not move a folder twice.
+    #[test]
+    fn workspace_layout_moves_once_per_worktree_under_the_repository_lock() {
+        let (root, checkout, worktree) = repository_with_linked_worktree("layout");
+        let legacy_file = ".codex-exec-loop/planning/result-output.md";
+        let moved_file = ".akra/planning/result-output.md";
+        for folder in [&checkout, &worktree] {
+            let path = Path::new(folder).join(legacy_file);
+            std::fs::create_dir_all(path.parent().unwrap()).expect("legacy layout");
+            std::fs::write(&path, folder.as_str()).expect("legacy planning file");
+        }
+        let read = |folder: &str, file: &str| std::fs::read_to_string(Path::new(folder).join(file));
+
+        let lock = acquire(&worktree).expect("worktree lock");
+        assert_eq!(read(&worktree, moved_file).unwrap(), worktree);
+        assert!(!Path::new(&worktree).join(".codex-exec-loop").exists());
+        assert_eq!(read(&checkout, legacy_file).unwrap(), checkout);
+
+        held_error(acquire(&checkout));
+        assert_eq!(
+            read(&checkout, legacy_file).unwrap(),
+            checkout,
+            "a process that waits for the lock moves nothing"
+        );
+        assert!(!Path::new(&checkout).join(".akra").exists());
+        drop(lock);
+
+        #[cfg(unix)]
+        {
+            let alias = root.0.join("worktree-alias");
+            std::os::unix::fs::symlink(&worktree, &alias).expect("alias link");
+            let alias_lock = acquire(alias.to_str().unwrap()).expect("alias lock");
+            assert_eq!(read(&worktree, moved_file).unwrap(), worktree);
+            drop(alias_lock);
+        }
+
+        let _checkout_lock = acquire(&checkout).expect("checkout lock");
+        assert_eq!(read(&checkout, moved_file).unwrap(), checkout);
+        assert_eq!(read(&worktree, moved_file).unwrap(), worktree);
+    }
+
     #[test]
     fn dropping_the_lock_releases_it_for_the_next_process() {
         let (_root, checkout, worktree) = repository_with_linked_worktree("release");
