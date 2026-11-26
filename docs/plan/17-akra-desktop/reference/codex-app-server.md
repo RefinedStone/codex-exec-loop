@@ -121,12 +121,16 @@
 | --- | --- |
 | 설정 `compact_prompt` | compact 할 때 쓰는 요약 지시문 |
 | 설정 `model_auto_compact_token_limit` | 자동 compact 를 시작하는 문맥 크기 |
-| `thread/compact/start` | compact 를 원하는 시점에 시작한다. 끝나면 `thread/compacted` 알림이 온다 |
+| `thread/compact/start` | compact 를 원하는 시점에 시작한다. 빈 응답은 접수이며 `contextCompaction` 항목과 해당 턴의 최종 상태로 결과를 확인한다. `thread/compacted`는 폐기 예정 알림이다 |
 | `thread/items/list`, `thread/turns/list`, `thread/read` | 기록을 읽는다 |
 | `thread/fork` | 스레드를 갈라서 새 스레드를 만든다 |
 | `thread/start` 의 `developerInstructions` | 새 스레드에 지시문을 넣는다. 직접 만든 요약을 넣을 수 있다 |
 
 모델에 들어가는 문맥 자체는 엔진(L2)이 구성한다. 클라이언트는 위 지점으로만 개입할 수 있다.
+
+2026-11-26 A08 구현은 현재 생성된 [빈 compact 응답](../../../../desktop/src/shared/protocol/generated/v2/ThreadCompactStartResponse.ts),
+[contextCompaction 항목](../../../../desktop/src/shared/protocol/generated/v2/ThreadItem.ts),
+[구형 알림의 폐기 예정 표시](../../../../desktop/src/shared/protocol/generated/v2/ContextCompactedNotification.ts)를 기준으로 연결한다.
 
 ## 7. 버전 사이의 차이 (P0 실측)
 

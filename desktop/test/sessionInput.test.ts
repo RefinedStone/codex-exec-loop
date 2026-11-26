@@ -969,3 +969,109 @@ describe("forking a conversation (#2625)", () => {
     expect(forkBlockReason(blocked, browserTurn)).toContain("브라우저");
   });
 });
+
+describe("manual compaction and session input exclusion", () => {
+  const compactItem = { type: "contextCompaction", id: "recovered-item" };
+  const compactTurn = { id: "compact-turn", status: "completed", items: [compactItem], error: null };
+  const resumed = (id = "t1", turns: object[] = [compactTurn]) => ({ thread: {
+    id, name: "recovered", preview: "", cwd: "/work/example-app", status: { type: "idle" }, turns,
+  } });
+  it("blocks start, steer and queued dispatch until the matching compact turn succeeds", async () => {
+    const h = harness(); h.emitState("connected"); h.openWith(transcript("completed"));
+    h.session.compaction.start("t1");
+    h.replyTo("thread/compact/start", {});
+    await expect(h.session.sendMessage("blocked start")).rejects.toThrow("문맥 압축");
+    expect(() => h.session.queueMessage("blocked reservation")).toThrow("문맥 압축");
+    h.session.nextTurnQueue.enqueue("t1", "held reservation", null);
+    expect(() => h.session.resumeQueuedMessages()).toThrow();
+    const item = { type: "contextCompaction", id: "compact-item" };
+    h.receive({ method: "turn/started", params: { threadId: "t1", turn: { id: "compact-turn", status: "inProgress", items: [], error: null } } });
+    await expect(h.session.sendMessage("blocked steer")).rejects.toThrow("문맥 압축");
+    expect(h.sent.some(message => message.method === "turn/start" || message.method === "turn/steer")).toBe(false);
+    h.receive({ method: "item/completed", params: { threadId: "t1", turnId: "compact-turn", item } });
+    h.receive({ method: "turn/completed", params: { threadId: "t1", turn: { id: "compact-turn", status: "completed", items: [item], error: null } } });
+    expect(h.session.compaction.snapshot("t1").phase).toBe("completed");
+    h.session.resumeQueuedMessages();
+    expect(h.sent.filter(message => message.method === "turn/start")).toHaveLength(1);
+    h.replyTo("turn/start", { turn: { id: "reserved-turn" } });
+    await flush(); h.session.stop();
+  });
+
+  it("rejects compaction while a normal start response or its acknowledged turn is outstanding", async () => {
+    const h = harness(); h.emitState("connected"); h.openWith(transcript("completed"));
+    const sending = h.session.sendMessage("first");
+    expect(() => h.session.compaction.start("t1")).toThrow("전송 중");
+    h.replyTo("turn/start", { turn: { id: "new-turn" } }); await sending;
+    // 아직 transcript 프레임에 시작 알림이 없더라도 A06의 waitingTurnId가 차단한다.
+    expect(() => h.session.compaction.start("t1")).toThrow("전송 중");
+    h.receive({ method: "turn/completed", params: { threadId: "t1", turn: { id: "new-turn", status: "completed", items: [], error: null } } });
+    h.session.compaction.start("t1");
+    expect(h.sent.filter(message => message.method === "thread/compact/start")).toHaveLength(1);
+    h.session.stop();
+  });
+
+  it("keeps an uncertain compaction blocking after transport loss without another model request", async () => {
+    const h = harness(); h.emitState("connected"); h.openWith(transcript("completed"));
+    h.session.compaction.start("t1"); h.emitState("disconnected");
+    await flush();
+    expect(h.session.compaction.snapshot("t1").phase).toBe("unknown");
+    expect(h.session.compaction.isBlocking("t1")).toBe(true);
+    expect(h.sent.filter(message => message.method === "thread/compact/start")).toHaveLength(1);
+    h.session.stop();
+  });
+
+  it("does not treat a previous connection's paused waiting ID as a current pending turn", async () => {
+    const h = harness(); h.emitState("connected"); h.openWith(transcript("completed"));
+    const sending = h.session.sendMessage("old connection");
+    h.replyTo("turn/start", { turn: { id: "unobserved-finish" } }); await sending;
+    h.emitState("disconnected"); h.emitState("connected");
+    const reopening = h.session.reopenThread();
+    h.replyTo("thread/resume", resumed("t1", [{ id: "unobserved-finish", status: "completed", items: [], error: null }]));
+    await reopening;
+    expect(h.session.nextTurnQueue.snapshot("t1").waitingTurnId).toBe("unobserved-finish");
+    h.session.compaction.start("t1");
+    expect(h.sent.filter(message => message.method === "thread/compact/start")).toHaveLength(1);
+    h.session.stop();
+  });
+
+  it("reloads the actual transcript before a recovered compaction permits a new start", async () => {
+    const h = harness(); h.emitState("connected"); h.openWith(transcript("completed"));
+    h.session.compaction.start("t1");
+    h.receive({ method: "turn/started", params: { threadId: "t1", turn: { ...compactTurn, status: "inProgress", items: [] } } });
+    h.emitState("disconnected"); h.emitState("connected");
+    const checking = h.session.compaction.refresh("t1");
+    h.replyTo("thread/turns/list", { data: [compactTurn], nextCursor: null, backwardsCursor: null });
+    await flush();
+    expect(h.session.compaction.isBlocking("t1")).toBe(true);
+    h.replyTo("thread/resume", resumed()); await checking;
+    expect(h.state.transcript?.turns.at(-1)?.status).toBe("completed");
+    expect(h.session.compaction.isBlocking("t1")).toBe(false);
+    const sending = h.session.sendMessage("fresh start");
+    expect(h.sent.at(-1)?.method).toBe("turn/start");
+    h.replyTo("turn/start", { turn: { id: "fresh-turn" } }); await sending;
+    expect(h.sent.filter(message => message.method === "thread/compact/start")).toHaveLength(1);
+    h.session.stop();
+  });
+
+  it("keeps unknown if reopening swallowed an error or the user selected another conversation", async () => {
+    for (const moveAway of [false, true]) {
+      const h = harness(); h.emitState("connected"); h.openWith(transcript("completed"));
+      h.session.compaction.start("t1");
+      const checking = h.session.compaction.refresh("t1");
+      h.replyTo("thread/turns/list", { data: [compactTurn, { id: "turn-1", status: "completed", items: [] }], nextCursor: null, backwardsCursor: null });
+      await flush();
+      const reloadId = [...h.sent].reverse().find(message => message.method === "thread/resume")?.id;
+      if (moveAway) {
+        const moved = h.session.openThread("other"); await flush();
+        h.receive({ id: reloadId, result: resumed() });
+        h.replyTo("thread/resume", resumed("other")); await moved;
+      } else h.receive({ id: reloadId, error: { code: -32603, message: "synthetic reload failure" } });
+      await checking;
+      expect(h.session.compaction.snapshot("t1").phase).toBe("unknown");
+      expect(h.session.compaction.isBlocking("t1")).toBe(true);
+      if (moveAway) expect(h.state.openThreadId).toBe("other");
+      else expect(h.state.transcript).toBeNull();
+      h.session.stop();
+    }
+  });
+});
