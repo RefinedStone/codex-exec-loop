@@ -1202,7 +1202,9 @@ The Gateway records the external documents that a thread mentions, without a mod
   "원본 열기" button. Remote, temporary, sub-agent, dot, and browser conversations (browser tool calls in the loaded
   turns) are refused with a reason. Limits: the sidebar "분기" badge and the warning come from `forkedFromId` in
   the fork response; codex 0.172.0 `thread/list` returns `forkedFromId: null`, so they do not come back after a
-  reconnect. Model, approval, sandbox, and MCP settings are those that app-server gives a normal fork; Desktop
+  reconnect. The Gateway treats a successful `thread/fork` like `thread/start` for the storage-share conversation
+  (`src/adapter/inbound/gateway/storage_context.rs`), so an opened fork can share storage evidence. After a fork
+  that was only listed, the source must be opened again before it can share. Model, approval, sandbox, and MCP settings are those that app-server gives a normal fork; Desktop
   sends no overrides.
   Proposed, not implemented: fork from a selected older turn, fork into a separate Git worktree (#2481 A07),
   lineage after restart, remote/dot/browser forks, and a UI wait timeout with candidate lookup.

@@ -73,7 +73,8 @@ impl StorageConversationContext {
             Self::lose_tracking(&mut state);
             return;
         }
-        let verifies = matches!(method, "thread/start" | "thread/resume");
+        // A successful fork opens a new thread on this connection, like thread/start (#2625).
+        let verifies = matches!(method, "thread/start" | "thread/fork" | "thread/resume");
         let expected_thread = if method == "thread/resume" {
             value["params"]["threadId"]
                 .as_str()
@@ -82,7 +83,7 @@ impl StorageConversationContext {
         } else {
             None
         };
-        let verifies = verifies && (method == "thread/start" || expected_thread.is_some());
+        let verifies = verifies && (method != "thread/resume" || expected_thread.is_some());
         let epoch = if verifies {
             self.advance(&mut state)
         } else {
@@ -313,6 +314,25 @@ mod correlation_regressions {
             response(&c, 2, "a");
             assert!(c.current().is_none());
         }
+    }
+    #[test]
+    fn a_successful_fork_authorizes_the_new_thread_and_its_unsubscribe_clears_it() {
+        let c = StorageConversationContext::default();
+        request(&c, 1, "thread/resume", "source");
+        response(&c, 1, "source");
+        request(&c, 2, "thread/fork", "source");
+        response(&c, 2, "child");
+        assert_eq!(c.current().unwrap().thread_id, "child");
+        // Leaving the source does not clear the fork.
+        c.client_message(
+            r#"{"id":3,"method":"thread/unsubscribe","params":{"threadId":"source"}}"#,
+        );
+        assert_eq!(c.current().unwrap().thread_id, "child");
+        c.client_message(r#"{"id":4,"method":"thread/unsubscribe","params":{"threadId":"child"}}"#);
+        assert!(c.current().is_none());
+        request(&c, 5, "thread/fork", "source");
+        c.upstream_message(r#"{"id":5,"error":{"code":-32600,"message":"turn not found"}}"#);
+        assert!(c.current().is_none());
     }
     #[test]
     fn overflowing_outstanding_correlation_fails_closed_until_reconnect() {
