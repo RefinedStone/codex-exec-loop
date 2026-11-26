@@ -144,7 +144,9 @@ conversation turn runs at a time across all threads. Auto-follow policy changes 
 and a stop request stops every provider session. The client receives no stream projection,
 evaluation start or settlement, auto-follow result, steer result, approval decision result, or
 worker-panel history from a thread it does not show; the shared planning-runtime projection still
-updates. Approval review persistence stays one shared serial queue. A load deferred by a session
+updates. Approval review persistence stays one shared serial queue, but each session keeps the turn
+whose persistence failure it reports, so a turn on another thread does not take that slot; a failure
+for a thread that is not shown gets no stream projection. A load deferred by a session
 rename also keeps the left session; only a session waiting for stop settlement stays in the shown
 slot and is cancelled as before. The TUI lets the user open another session or a new draft while a
 turn runs. Core publishes `ThreadActivityChanged` with a summary of every busy thread, the shown one
@@ -375,6 +377,9 @@ exactly once after the first correlated start; a provider-call error reopens adm
 fail-closed interrupt stream notice does not reopen it before an exact retry, terminal, or
 conversation transition. The outbound signal remains intentionally global, so Core correlation
 governs admission and lifecycle but does not narrow which runtime sessions receive `:stop`.
+A stop also records each running background turn as a target. That record names one turn, has no
+attempt of its own, and does not block new turns; a turn that has not started yet is interrupted
+alone once it starts. When its thread is shown again, a new `:stop` replaces the record.
 Provider execution runs outside command dispatch. If a turn or conversation transition invalidates
 an in-flight attempt, Core invalidates the worker permit and keeps the stop lease until its exact
 completion; new turn admission and a newly requested conversation load wait for that settlement.

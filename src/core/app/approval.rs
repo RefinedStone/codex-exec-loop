@@ -46,7 +46,6 @@ impl ApprovalReviewPersistenceCorrelation {
 
 #[derive(Debug, Clone)]
 pub(super) struct ApprovalReviewPersistenceCoordinator {
-    current_conversation_turn_submission: Option<TurnSubmissionCorrelation>,
     next_generation: u64,
     active: Option<ApprovalReviewPersistenceCorrelation>,
     queued: VecDeque<ApprovalReviewPersistenceCorrelation>,
@@ -54,26 +53,16 @@ pub(super) struct ApprovalReviewPersistenceCoordinator {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ApprovalReviewPersistenceSettlement {
-    pub(super) completion_matches_current_turn: bool,
     pub(super) next: Option<ApprovalReviewPersistenceCorrelation>,
 }
 
 impl ApprovalReviewPersistenceCoordinator {
     pub(super) fn new() -> Self {
         Self {
-            current_conversation_turn_submission: None,
             next_generation: 1,
             active: None,
             queued: VecDeque::new(),
         }
-    }
-
-    pub(super) fn begin_conversation_turn(&mut self, turn_submission: TurnSubmissionCorrelation) {
-        self.current_conversation_turn_submission = Some(turn_submission);
-    }
-
-    pub(super) fn invalidate_conversation(&mut self) {
-        self.current_conversation_turn_submission = None;
     }
 
     pub(super) fn enqueue(
@@ -122,11 +111,7 @@ impl ApprovalReviewPersistenceCoordinator {
         self.active = None;
         let next = self.queued.pop_front();
         self.active = next.clone();
-        Some(ApprovalReviewPersistenceSettlement {
-            completion_matches_current_turn: self.current_conversation_turn_submission
-                == Some(correlation.turn_submission),
-            next,
-        })
+        Some(ApprovalReviewPersistenceSettlement { next })
     }
 }
 
@@ -239,7 +224,6 @@ mod tests {
     fn coordinator_requires_full_correlation_and_rejects_aba_completion() {
         let mut coordinator = ApprovalReviewPersistenceCoordinator::new();
         let turn = TurnSubmissionCorrelation::new(1);
-        coordinator.begin_conversation_turn(turn);
         let first = coordinator
             .enqueue(
                 turn,
