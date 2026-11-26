@@ -391,6 +391,7 @@ export type SessionStore = Pick<
   | "setChatConversation"
 > & {
   getOpenThreadId(): string | null;
+  getActiveThreadIds(): readonly string[];
   getTranscript(): Transcript | null;
   getKernel(): KernelView;
   /** 사용자에게 짧게 알린다. 시험용 저장소는 생략할 수 있다. */
@@ -425,6 +426,7 @@ export function desktopSessionStore(store: DesktopStore = useDesktopStore): Sess
     setChatConversation: state.setChatConversation,
     getKernel: () => store.getState().kernel,
     getOpenThreadId: () => store.getState().openThreadId,
+    getActiveThreadIds: () => store.getState().activeThreadIds,
     getTranscript: () => store.getState().transcript,
   };
 }

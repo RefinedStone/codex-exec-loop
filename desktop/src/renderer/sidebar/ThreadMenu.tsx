@@ -2,6 +2,7 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
 
 import type { WorkspaceThread } from "../session/desktopStore";
+import { useFittedMenuPosition } from "../views/menuPosition";
 
 /** 스레드에 대한 요청이다. App 이 열린 세션으로 보낸다. */
 export interface ThreadActions {
@@ -28,6 +29,7 @@ function copy(text: string): void {
 
 export function ThreadMenu({ thread, folder, running, position, onRename, onArchive, onOpenFolder, onClose }: ThreadMenuProps) {
   const menu = useRef<HTMLUListElement>(null);
+  const fitted = useFittedMenuPosition(menu, position);
   useEffect(() => {
     menu.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
     const close = (event: Event) => {
@@ -49,7 +51,7 @@ export function ThreadMenu({ thread, folder, running, position, onRename, onArch
     </li>
   );
   return (
-    <ul ref={menu} className="thread-menu" role="menu" aria-label="스레드 메뉴" style={{ left: position.x, top: position.y }} data-testid="thread-menu">
+    <ul ref={menu} className="thread-menu" role="menu" aria-label="스레드 메뉴" style={{ left: fitted.x, top: fitted.y }} data-testid="thread-menu">
       {item("이름 바꾸기", onRename, { testId: "thread-menu-rename" })}
       {item("보관", onArchive, running
         ? { disabled: true, title: "진행 중인 턴이 있어 보관할 수 없습니다. 턴이 끝난 뒤에 하십시오.", testId: "thread-menu-archive" }

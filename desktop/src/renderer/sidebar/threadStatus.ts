@@ -14,6 +14,11 @@ export function threadMark(thread: WorkspaceThread, source: ThreadMarkSource): T
   return "idle";
 }
 
+/** 보관은 표시 상태가 아니라 진행 중인 턴으로 막는다. 승인을 기다리는 턴도 진행 중이다. */
+export function archiveBlocked(threadId: string, source: Pick<ThreadMarkSource, "activeThreadIds">): boolean {
+  return source.activeThreadIds.includes(threadId);
+}
+
 export function needsAttention(mark: ThreadMark): boolean {
   return mark === "approval" || mark === "failed";
 }

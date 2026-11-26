@@ -150,6 +150,7 @@ function harness(readOnly = false, scheduler: (callback: () => void) => void = (
       state.folders = removeWorkspaceThread(state.folders ?? [], threadId);
     },
     getOpenThreadId: () => state.openThreadId ?? null,
+    getActiveThreadIds: () => state.activeThreadIds ?? [],
     getTranscript: () => state.transcript ?? null,
     setKernel: (kernel) => Object.assign(state, { kernel }),
     setDots: (dots) => Object.assign(state, { dots }),

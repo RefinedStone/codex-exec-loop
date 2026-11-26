@@ -754,6 +754,7 @@ export class DesktopSession {
   /** 스레드를 보관한다. 목록에서 빠지고 다른 창에는 `thread/archived` 로 알려진다. */
   async archiveThread(threadId: string): Promise<void> {
     this.assertWritable();
+    if (this.store.getActiveThreadIds().includes(threadId)) throw new Error("진행 중인 턴이 있어 보관할 수 없습니다.");
     await this.client.request("thread/archive", { threadId });
     this.nextTurnQueue.pause(threadId, "대화가 보관되거나 삭제되어 예약을 멈췄습니다.");
     this.removedThreadIds.add(threadId);
