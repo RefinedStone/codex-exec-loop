@@ -29,6 +29,8 @@ export interface ComposerActions {
 }
 
 const MAX_INPUT_HEIGHT_PX = 220;
+/** 이 안에서 누른 글자 키는 그 칸의 것이다. 입력창으로 옮기지 않는다. */
+const TYPING_TARGETS = "input, textarea, select, button, a[href], [contenteditable], .terminal-body, .right-panel, .overlay, dialog";
 
 function PlanStrip({ steps }: { steps: readonly TurnPlanStep[] }) {
   const [open, setOpen] = useState(false);
@@ -84,6 +86,20 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
   useEffect(() => {
     if (!disabled) input.current?.focus();
   }, [transcript?.threadId, home, disabled]);
+
+  // 대화 영역에서 글자를 치면 입력창으로 옮긴다 (#2839). 입력 칸, 단추, 터미널, 패널, 대화 상자의 키는 그대로 둔다.
+  useEffect(() => {
+    if (disabled) return;
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
+      if (event.key.length !== 1 || event.key.trim().length === 0) return;
+      const target = event.target;
+      if (target instanceof Element && target.closest(TYPING_TARGETS)) return;
+      input.current?.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [disabled]);
 
   // 내용에 맞춰 입력창 높이를 늘린다.
   useEffect(() => {

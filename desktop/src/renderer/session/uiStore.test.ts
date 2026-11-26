@@ -103,3 +103,46 @@ describe("navigation epochs for asynchronous storage evidence", () => {
     expect(ui.useUiStore.getState().view).toBe("thread");
   });
 });
+
+describe("drafts that survive a restart (#2839)", () => {
+  const memory = () => {
+    const values = new Map<string, string>();
+    return { values, getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => void values.set(key, value) };
+  };
+
+  it("saves only the changed draft, keeps another window's drafts and drops sent ones", () => {
+    const storage = memory();
+    const original = window.localStorage;
+    Object.assign(window, { localStorage: storage });
+    try {
+      // A dot window saved its own draft.
+      storage.setItem("akra.drafts", JSON.stringify({ "dot:d1": "dot text", broken: 3 }));
+      ui.setDraft("thread-1", "half written");
+      expect(ui.storedDrafts()).toEqual({ "dot:d1": "dot text", "thread-1": "half written" });
+      ui.setDraft("thread-1", "");
+      expect(ui.storedDrafts()).toEqual({ "dot:d1": "dot text" });
+      ui.handOffToNewThread("moved text");
+      expect(ui.storedDrafts()[ui.HOME_DRAFT]).toBe("moved text");
+    } finally {
+      Object.assign(window, { localStorage: original });
+    }
+  });
+
+  it("keeps the newest 50 drafts and skips a huge one", () => {
+    const storage = memory();
+    const original = window.localStorage;
+    Object.assign(window, { localStorage: storage });
+    try {
+      for (let index = 0; index < 55; index += 1) ui.setDraft(`thread-${index}`, `draft ${index}`);
+      const kept = Object.keys(ui.storedDrafts());
+      expect(kept).toHaveLength(50);
+      expect(kept).not.toContain("thread-0");
+      expect(kept).toContain("thread-54");
+      ui.setDraft("thread-big", "x".repeat(20_001));
+      expect(ui.storedDrafts()["thread-big"]).toBeUndefined();
+      expect(ui.useUiStore.getState().drafts["thread-big"]).toHaveLength(20_001);
+    } finally {
+      Object.assign(window, { localStorage: original });
+    }
+  });
+});
