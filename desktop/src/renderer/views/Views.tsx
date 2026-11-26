@@ -1,6 +1,8 @@
 // 대화 밖의 화면이다 (R10): 새 스레드(홈), 현황판, 검색과 명령, 단축키 목록, 알림.
 import { useEffect, useMemo, useState } from "react";
 
+import { command, type CommandId, COMMANDS, commandForKey, PALETTE_ORDER } from "../../shared/commands";
+
 import { Composer, type ComposerActions } from "../conversation/Composer";
 import { Icon, type IconName } from "../design/icons";
 import { Picker } from "../design/Picker";
@@ -124,21 +126,51 @@ interface PaletteEntry {
 
 const PALETTE_LIMIT = 50;
 
+/**
+ * 명령 표의 id 마다 renderer 가 하는 일이다 (#2840). 표에 없는 동작은 여기에 없다. 메뉴가 맡는 명령(확대, 새 창)은 main 이
+ * 처리한다. `onNavigate` 는 단축키에서만 준다.
+ */
+export function commandHandlers(onNavigate?: (delta: -1 | 1) => void): Partial<Record<CommandId, () => void>> {
+  return {
+    palette: () => useUiStore.setState((state) => ({ overlay: state.overlay === "palette" ? null : "palette" })),
+    "new-thread": () => showHome(),
+    sidebar: () => useUiStore.setState((state) => ({ sidebarOpen: !state.sidebarOpen })),
+    "right-panel": () => (useUiStore.getState().panel ? useUiStore.setState({ panel: null }) : openPanel("review")),
+    terminal: toggleTerminal,
+    // 대화가 화면에 있을 때만 찾기 막대를 연다. 이미 열려 있으면 입력란으로 포커스를 옮긴다.
+    find: () => {
+      const view = useUiStore.getState().view;
+      if (view !== "thread" && view !== "remote") return;
+      useUiStore.setState({ findOpen: true, overlay: null });
+      document.querySelector<HTMLInputElement>("[data-find-input]")?.select();
+    },
+    back: () => onNavigate?.(-1),
+    forward: () => onNavigate?.(1),
+    fleet: () => showView("fleet"),
+    review: () => togglePanel("review"),
+    graph: () => togglePanel("graph"),
+    kernel: () => togglePanel("kernel"),
+    browser: () => togglePanel("browser"),
+    work: () => togglePanel("work"),
+    docs: () => togglePanel("docs"),
+    skills: () => togglePanel("skills"),
+    theme: toggleTheme,
+    settings: () => useUiStore.setState({ overlay: "settings" }),
+  };
+}
+
 function paletteCommands(): PaletteEntry[] {
-  return [
-    { id: "new", icon: "pencil", label: "새 스레드", hint: `${MOD_KEY}N`, run: () => showHome() },
-    { id: "fleet", icon: "grid", label: "현황판 열기", hint: "", run: () => showView("fleet") },
-    { id: "review", icon: "diff", label: "변경 검토 패널", hint: `${MOD_KEY}\\`, run: () => togglePanel("review") },
-    { id: "graph", icon: "branch", label: "커밋 그래프 패널", hint: "", run: () => togglePanel("graph") },
-    { id: "kernel", icon: "bolt", label: "Akra 커널 패널", hint: "", run: () => togglePanel("kernel") },
-    { id: "browser", icon: "globe", label: "브라우저 패널", hint: "", run: () => togglePanel("browser") },
-    { id: "work", icon: "briefcase", label: "업무 패널 (GitHub, Jira, Notion)", hint: "", run: () => togglePanel("work") },
-    { id: "docs", icon: "book", label: "문서 패널", hint: "", run: () => togglePanel("docs") },
-    { id: "skills", icon: "stack", label: "설치된 스킬 패널 (출처, 업데이트)", hint: "", run: () => togglePanel("skills") },
-    { id: "terminal", icon: "terminal", label: "터미널 열기 / 닫기", hint: `${MOD_KEY}J`, run: toggleTerminal },
-    { id: "theme", icon: "sun", label: "밝은 화면 / 어두운 화면", hint: "", run: toggleTheme },
-    { id: "settings", icon: "sliders", label: "설정 (글자 크기, 알림, 잠자기 방지)", hint: `${MOD_KEY},`, run: () => useUiStore.setState({ overlay: "settings" }) },
-  ];
+  const handlers = commandHandlers();
+  return PALETTE_ORDER.map((id) => {
+    const spec = command(id);
+    return {
+      id,
+      icon: (spec.paletteIcon ?? "bolt") as IconName,
+      label: spec.paletteTitle ?? spec.title,
+      hint: spec.keyLabel ? `${MOD_KEY}${spec.keyLabel}` : "",
+      run: () => handlers[id]?.(),
+    };
+  });
 }
 
 export function CommandPalette({ onOpenThread }: { onOpenThread(threadId: string): void }) {
@@ -201,22 +233,19 @@ export function CommandPalette({ onOpenThread }: { onOpenThread(threadId: string
   );
 }
 
-const SHORTCUTS = [
-  [`${MOD_KEY}K`, "검색과 명령"],
-  [`${MOD_KEY}N`, "새 스레드"],
-  [`${MOD_KEY}B`, "사이드바 열기 / 닫기"],
-  [`${MOD_KEY}\\`, "오른쪽 패널 열기 / 닫기"],
-  [`${MOD_KEY}J`, "터미널 열기 / 닫기"],
-  [`${MOD_KEY},`, "설정"],
-  [`${MOD_KEY}[ · ${MOD_KEY}]`, "뒤로 · 앞으로 (마우스 뒤로·앞으로 단추)"],
-  [`${MOD_KEY}F`, "대화 안 찾기 (⏎ 다음, ⇧⏎ 이전)"],
-  [`${MOD_KEY}+ · ${MOD_KEY}− · ${MOD_KEY}0`, `포커스한 영역 확대 · 축소 · 실제 크기 (${MOD_KEY}휠, 핀치는 포인터 아래 영역)`],
+/** 명령 표에 없는 입력 규칙이다. 단축키 창에만 보인다. */
+const INPUT_KEYS = [
   ["↑ · ↓", "빈 입력창에서 이전 프롬프트 불러오기"],
   ["⏎", "보내기 (진행 중이면 추가 지시)"],
   ["⇧⏎", "줄바꿈"],
   [`${MOD_KEY}⏎`, "승인 요청 허용"],
   [`${MOD_KEY}⌫`, "승인 요청 거부"],
 ] as const;
+
+const SHORTCUTS: ReadonlyArray<readonly [string, string]> = [
+  ...COMMANDS.filter((spec) => (spec.keys || spec.accelerator) && spec.keyLabel).map((spec) => [`${MOD_KEY}${spec.keyLabel}`, spec.title] as const),
+  ...INPUT_KEYS,
+];
 
 export function ShortcutsDialog() {
   const close = () => useUiStore.setState({ overlay: null });
@@ -281,24 +310,9 @@ export function useShortcuts(onNavigate: (delta: -1 | 1) => void): void {
       const inTerminal = event.target instanceof Element && event.target.closest(".terminal-body") !== null;
       if (inTerminal && !event.metaKey && event.code !== "Backquote") return;
       // 글자가 아니라 글쇠 자리로 찾는다. 한글 입력 상태에서는 `event.key` 가 한글 자모이다.
-      const actions: Record<string, () => void> = {
-        KeyK: () => useUiStore.setState((state) => ({ overlay: state.overlay === "palette" ? null : "palette" })),
-        KeyN: () => showHome(),
-        KeyB: () => useUiStore.setState((state) => ({ sidebarOpen: !state.sidebarOpen })),
-        KeyJ: toggleTerminal,
-        Backquote: toggleTerminal,
-        Backslash: () => (useUiStore.getState().panel ? useUiStore.setState({ panel: null }) : openPanel("review")),
-        BracketLeft: () => onNavigate(-1),
-        BracketRight: () => onNavigate(1),
-        // 대화가 화면에 있을 때만 찾기 막대를 연다. 이미 열려 있으면 입력란으로 포커스를 옮긴다.
-        KeyF: () => {
-          const view = useUiStore.getState().view;
-          if (view !== "thread" && view !== "remote") return;
-          useUiStore.setState({ findOpen: true, overlay: null });
-          document.querySelector<HTMLInputElement>("[data-find-input]")?.select();
-        },
-      };
-      const action = actions[event.code];
+      const id = commandForKey(event.code);
+      const actions = commandHandlers(onNavigate);
+      const action = id ? actions[id] : undefined;
       if (action) {
         event.preventDefault();
         action();
