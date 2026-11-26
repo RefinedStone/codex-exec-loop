@@ -187,7 +187,7 @@ where
         .turn_activity
         .as_ref()
         .filter(|_| is_local)
-        .map(|registry| registry.observer());
+        .map(|registry| super::turn_activity::TurnActivityTracker::new(registry.observer()));
     let provider_session = if is_local {
         services
             .resource_versions
@@ -257,6 +257,9 @@ where
                             }
                             if let Some(context) = &storage_conversation {
                                 context.client_message(text.as_str());
+                            }
+                            if let Some(tracker) = &turn_activity {
+                                tracker.client_message(text.as_str());
                             }
                             record(RecordDirection::Client, text.as_str());
                             if upstream_sink.send(Message::Text(text)).await.is_err() {
@@ -502,8 +505,8 @@ where
                         if let Some(context) = &storage_conversation {
                             context.upstream_message(text.as_str());
                         }
-                        if let Some(observer) = &turn_activity {
-                            super::turn_activity::observe_upstream(observer, text.as_str());
+                        if let Some(tracker) = &turn_activity {
+                            tracker.upstream_message(text.as_str());
                         }
                         record(RecordDirection::Gateway, text.as_str());
                     }
