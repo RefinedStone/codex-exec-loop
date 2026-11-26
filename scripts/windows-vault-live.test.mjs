@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { STEPS, canary, operatorResults, readPowerShellText, scanProductFiles, validateConfig, validateEnvironment } from './windows-vault-live.mjs';
+import { STEPS, canary, holdForeignGateway, operatorResults, probeWindowsGateway, readPowerShellText, scanProductFiles, validateConfig, validateEnvironment } from './windows-vault-live.mjs';
 
 const runId = 'a'.repeat(32);
 const config = () => ({
@@ -80,6 +80,32 @@ test('scan budgets and hardlinks are explicit gaps, never a clean observation', 
   const linked = await scanProductFiles(root, runId);
   assert.equal(linked.result, 'incomplete');
   assert.equal(linked.skipped.filter((item) => item.reason === 'redirected_or_special_entry').length, 2);
+});
+
+test('a Gateway left by an earlier fixture holds the next launch instead of being followed', () => {
+  const oldRoot = 'C:\\Users\\fixture\\akra-vault-live-' + 'c'.repeat(32);
+  const newRoot = 'C:\\Users\\fixture\\akra-vault-live-' + 'd'.repeat(32);
+  const manifest = (root) => ({ root, config: config() });
+  const asked = [];
+  const oldDaemon = (sid, akraHome) => {
+    asked.push([sid, akraHome]);
+    return { present: true, executable: oldRoot + '\\helper\\akra-gateway.exe', homeLocked: false };
+  };
+  assert.throws(() => holdForeignGateway(manifest(newRoot), oldDaemon), /이미 실행 중/);
+  assert.deepEqual(asked, [[config().expectedUserSid, newRoot + '\\akra-home']]);
+  const own = { present: true, executable: oldRoot + '\\HELPER\\akra-gateway.exe', homeLocked: true };
+  assert.doesNotThrow(() => holdForeignGateway(manifest(oldRoot), () => own));
+  for (const found of [{}, { ...own, homeLocked: false }, { ...own, executable: null },
+    { present: true, executable: 'C:\\Program Files\\Akra\\akra-gateway.exe', homeLocked: true }]) {
+    assert.throws(() => holdForeignGateway(manifest(oldRoot), () => found), /이미 실행 중/);
+  }
+  assert.throws(() => holdForeignGateway(manifest(newRoot), () => { throw new Error('ERROR_PIPE_BUSY'); }), /확인할 수 없습니다/);
+  assert.doesNotThrow(() => holdForeignGateway(manifest(newRoot), () => ({ present: false })));
+});
+
+test('Windows Gateway probe reports an unused pipe as absent', { skip: process.platform !== 'win32' }, async (t) => {
+  const root = await fixture(t);
+  assert.deepEqual(probeWindowsGateway('S-1-5-21-0-0-0-0', path.join(root, 'akra-home')), { present: false });
 });
 
 test('Windows PowerShell text preserves non-ASCII paths independently of the OEM code page', { skip: process.platform !== 'win32' }, () => {

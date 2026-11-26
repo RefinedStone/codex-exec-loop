@@ -230,12 +230,84 @@ function ownedManifest(file) {
   }
   return manifest;
 }
+// The Desktop pipe name depends only on the OS user SID, and an earlier run's detached
+// Gateway can still own it. Read the pipe owner's image and this fixture's instance lock.
+const GATEWAY_PROBE_SOURCE = `using System;
+using System.ComponentModel;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
+public static class AkraGatewayProbe {
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool GetNamedPipeServerProcessId(SafeFileHandle pipe, out uint id);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern IntPtr OpenProcess(uint access, bool inherit, uint id);
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern bool QueryFullProcessImageNameW(IntPtr process, uint flags, StringBuilder name, ref uint size);
+  [DllImport("kernel32.dll")]
+  static extern bool CloseHandle(IntPtr handle);
+  public static uint ServerProcessId(string pipe) {
+    using (SafeFileHandle handle = CreateFileW(pipe, 0x80000000, 0, IntPtr.Zero, 3, 0, IntPtr.Zero)) {
+      if (handle.IsInvalid) {
+        int error = Marshal.GetLastWin32Error();
+        if (error == 2) return 0;
+        throw new Win32Exception(error);
+      }
+      uint id;
+      if (!GetNamedPipeServerProcessId(handle, out id)) throw new Win32Exception(Marshal.GetLastWin32Error());
+      return id;
+    }
+  }
+  public static string ImagePath(uint id) {
+    IntPtr process = OpenProcess(0x1000, false, id);
+    if (process == IntPtr.Zero) return null;
+    try {
+      StringBuilder name = new StringBuilder(32768);
+      uint size = (uint)name.Capacity;
+      return QueryFullProcessImageNameW(process, 0, name, ref size) ? name.ToString(0, (int)size) : null;
+    } finally { CloseHandle(process); }
+  }
+  public static bool Locked(string file) {
+    if (!File.Exists(file)) return false;
+    using (FileStream stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)) {
+      try { stream.Lock(0, 1); stream.Unlock(0, 1); return false; } catch (IOException) { return true; }
+    }
+  }
+}`;
+export function probeWindowsGateway(userSid, akraHome) {
+  const text = (value) => "([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" +
+    Buffer.from(value, 'utf8').toString('base64') + "')))";
+  return JSON.parse(readPowerShellText("$ErrorActionPreference = 'Stop'; Add-Type -TypeDefinition " +
+    text(GATEWAY_PROBE_SOURCE) + '; $id = [AkraGatewayProbe]::ServerProcessId(' +
+    text('\\\\.\\pipe\\akra-gateway-' + userSid) + '); $found = if ($id -eq 0) { [PSCustomObject]@{present=$false} } ' +
+    'else { [PSCustomObject]@{present=$true; executable=[AkraGatewayProbe]::ImagePath($id); homeLocked=[AkraGatewayProbe]::Locked(' +
+    text(path.win32.join(akraHome, 'run', 'gateway.lock')) + ')} }; $found | ConvertTo-Json -Compress'));
+}
+export function holdForeignGateway(manifest, probe = probeWindowsGateway) {
+  let found;
+  try {
+    found = probe(manifest.config.expectedUserSid, path.win32.join(manifest.root, 'akra-home'));
+  } catch {
+    fail('현재 OS 사용자의 Gateway 접속 주소를 확인할 수 없습니다. 제품을 시작하지 않았습니다.');
+  }
+  if (found?.present === false) return;
+  const helper = path.win32.join(manifest.root, 'helper', 'akra-gateway.exe').toLowerCase();
+  if (typeof found.executable !== 'string' || path.win32.normalize(found.executable).toLowerCase() !== helper ||
+      found.homeLocked !== true) {
+    fail('이 실행의 helper와 AKRA_HOME으로 확인되지 않는 Gateway가 이미 실행 중입니다. ' +
+      '그 akra-gateway를 종료한 뒤 --resume으로 다시 시작하세요. 제품을 시작하지 않았습니다.');
+  }
+}
 async function launch(manifest) {
   validateEnvironment(process.env);
   const fresh = await preflight(manifest.config);
   if (JSON.stringify(fresh.hashes) !== JSON.stringify(manifest.artifacts.hashes)) fail('원본 빌드 파일이 실행 준비 이후 변경되었습니다.');
   const helper = path.join(manifest.root, 'helper', 'akra-gateway.exe');
   if (await hashFile(helper) !== manifest.artifacts.hashes[0]) fail('private helper 사본의 SHA-256이 원본과 다릅니다.');
+  holdForeignGateway(manifest);
   const attempt = manifest.launches.length + 1;
   const captures = ['stdout', 'stderr'].map((stream) =>
     fs.createWriteStream(path.join(manifest.root, 'captures', 'electron-' + attempt + '-' + stream + '.log'), { flags: 'wx' }));
