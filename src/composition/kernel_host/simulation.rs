@@ -17,11 +17,11 @@
 //! 지금 모델하는 범위: 수동 턴 제출(새 thread, 기존 thread), thread 지정 프롬프트(준비, 큐에 남김, 다시 냄), 중지
 //! 요청(성공, 실패, 무효), 턴 시작·종료·실패, 턴 뒤 평가, 자동 후속, 클라이언트 떼기와 다시 붙기, 커널 재시작(기록을
 //! 다 쓴 뒤), 기록을 다 쓰지 못한 강제 종료(#2806: 기록의 끝을 잃음, 마지막 효과를 버림), 승인 요청과 그 끝(app-server
-//! 가 알린 결정, 결정 없이 끝난 턴, 재시작), 멱등 키가 있는 thread 지정 프롬프트의 재전송, 시계. 병렬 모드, 클라이언트의
-//! 승인 결정 명령, steer 는 아직 모델하지 않는다. 강제 종료 뒤의 기대값은 `docs/reference/kernel-crash-recovery.md` 의
-//! 계약 C1~C5 를 따른다.
+//! 가 알린 결정, 결정 없이 끝난 턴, 재시작), 멱등 키가 있는 thread 지정 프롬프트의 재전송, 클라이언트의 승인 결정
+//! 명령과 steer(#2805: 효과의 완료는 늦게 올 수 있고, 지난 턴이나 끝난 승인을 가리킬 수 있다), 시계. 병렬 모드는 아직
+//! 모델하지 않는다. 강제 종료 뒤의 기대값은 `docs/reference/kernel-crash-recovery.md` 의 계약 C1~C5 를 따른다.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -39,15 +39,18 @@ use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPor
 use crate::composition::native_client_runtime::NativeClientRuntime;
 use crate::composition::native_client_runtime::tests::post_turn_execution;
 use crate::core::app::{
-    AppCommand, AppEvent, CoreEffect, CoreEffectCompletion, CoreInput, CorePromptOrigin,
-    PostTurnEvaluationCorrelation, SessionCatalogLoadCorrelation, SessionCatalogLoadIntent,
-    SessionCatalogReadySnapshot, StopRequestAttempt, StopRequestCorrelation,
-    ThreadPromptSubmission, TurnStreamEvent, TurnSubmissionCorrelation, TurnSubmissionRequest,
+    AppCommand, AppEvent, ApprovalDecisionCorrelation, CoreEffect, CoreEffectCompletion, CoreInput,
+    CorePromptOrigin, PlanningWorkspaceOperationCorrelation, PlanningWorkspaceResetIntent,
+    PlanningWorkspaceResetSnapshot, PlanningWorkspaceResetTarget, PostTurnEvaluationCorrelation,
+    SessionCatalogLoadCorrelation, SessionCatalogLoadIntent, SessionCatalogReadySnapshot,
+    StopRequestAttempt, StopRequestCorrelation, ThreadPromptSubmission, TurnSteerCorrelation,
+    TurnStreamEvent, TurnSubmissionCorrelation, TurnSubmissionRequest,
 };
 use crate::core::runtime::{CoreEffectExecutor, CoreInputSender};
 use crate::domain::conversation::{
-    ConversationApprovalRequest, ConversationApprovalRequestIdentity,
-    ConversationApprovalRequestKind, ConversationApprovalResolution,
+    ConversationApprovalDecision, ConversationApprovalRequest, ConversationApprovalRequestIdentity,
+    ConversationApprovalRequestKind, ConversationApprovalResolution, ConversationTurnSteerReceipt,
+    ConversationTurnSteerRequest,
 };
 use crate::domain::conversation_runtime_envelope::{
     ConversationRuntimeConfigurationRequest, ConversationRuntimeEnvelope,
@@ -56,6 +59,7 @@ use crate::domain::kernel_event::{
     ApprovalResolution, KernelCommandDescriptor, KernelEvent, RecordedKernelEvent,
     ThreadPromptSettlement, open_queued_thread_prompts,
 };
+use crate::domain::kernel_spec::{KernelCommandKind, OperationState};
 use crate::domain::planning::{
     ManualPromptCorrelation, ManualPromptIntakeOutcome, ManualPromptMainSessionHandoff,
     ManualPromptOutcome, PostTurnAutoFollowSkipReason, PostTurnContinuationAction,
@@ -168,6 +172,10 @@ struct ScenarioSettings {
     restarts: bool,
     /// 가짜 app-server 가 도는 턴에서 요청하는 승인 수이다 (plan 19 Q3-5).
     approval_budget: usize,
+    /// 클라이언트가 보내는 승인 결정 명령 수이다 (#2805). 끝난 승인을 가리키는 늦은 결정도 섞는다.
+    decision_budget: usize,
+    /// 클라이언트가 보내는 steer 명령 수이다 (#2805). 끝난 턴을 가리키는 늦은 steer 도 섞는다.
+    steer_budget: usize,
 }
 
 impl ScenarioSettings {
@@ -179,6 +187,8 @@ impl ScenarioSettings {
             thread_prompt_budget: rng.index(5),
             restarts: rng.percent(50),
             approval_budget: rng.index(4),
+            decision_budget: rng.index(4),
+            steer_budget: rng.index(4),
         }
     }
 }
@@ -201,6 +211,8 @@ struct FakeTurn {
     interrupt_requested: bool,
     /// 이 턴이 결정을 기다리는 승인의 id 이다.
     approval: Option<String>,
+    /// app-server 가 그 승인에 받은 클라이언트의 결정이다. 승인 하나는 결정을 한 번만 받는다 (I8).
+    decision: Option<ConversationApprovalDecision>,
 }
 
 /*
@@ -246,6 +258,47 @@ enum PendingCompletion {
         correlation: ManualPromptCorrelation,
         raw_prompt: String,
     },
+    /// 클라이언트의 승인 결정을 app-server 에 보낸다 (#2805). `op` 는 그 명령의 `client_ops` 자리이다.
+    ApprovalDecision {
+        correlation: ApprovalDecisionCorrelation,
+        op: usize,
+    },
+    /// 클라이언트의 steer 를 app-server 에 보낸다 (#2805).
+    Steer {
+        correlation: TurnSteerCorrelation,
+        request: ConversationTurnSteerRequest,
+        op: usize,
+    },
+    /// planning 초기화이다. 가짜 실행기는 지울 파일이 없다고 답한다.
+    PlanningReset {
+        correlation: PlanningWorkspaceOperationCorrelation,
+        op: Option<usize>,
+    },
+    /// app-server 는 일을 했지만 worker 의 완료가 늦게 온다 (#2805). 그 사이 턴과 승인은 이어서 바뀐다.
+    LateCompletion {
+        input: CoreInput,
+        op: usize,
+        succeeded: bool,
+    },
+}
+
+/*
+ * 클라이언트가 보낸, 끝을 기록으로 알리는 명령 하나이다 (#2805: 승인 결정, steer, planning 초기화). 기대하는 끝은
+ * 시뮬레이션이 한 일에서만 정한다: 바로 거절, 효과의 성공·실패, 또는 커널이 그 완료를 처리하기 전에 다시 켜져 `lost`.
+ * 강제 종료가 받은 기록을 잃은 명령은 그 연산 id 를 새 커널이 다시 쓸 수 있어 지운다 (`forgotten`).
+ */
+#[derive(Debug, Clone)]
+struct ClientOperation {
+    op_id: i64,
+    label: String,
+    lifetime: usize,
+    /// steer 가 가리킨 턴이다. 커널은 그 턴 그대로 app-server 에 보내야 한다.
+    steer_turn: Option<String>,
+    /// 기대하는 끝이다. `None` 이면 아직 효과가 끝나지 않았다.
+    expected: Option<OperationState>,
+    /// 기대하는 끝을 정한 입력을 커널이 처리했다 (그 뒤 커널 주기가 돌았다).
+    end_processed: bool,
+    forgotten: bool,
 }
 
 /// 시뮬레이션이 한 걸음에 고를 수 있는 행동이다.
@@ -257,6 +310,10 @@ enum SimAction {
     ResendThreadPrompt,
     RestartKernel,
     RequestStop,
+    /// 승인 결정을 보낸다. 지금 기다리는 승인이거나, 이미 끝난 승인이다 (#2805).
+    DecideApproval,
+    /// steer 를 보낸다. 지금 도는 턴이거나, 이미 끝난 턴이다 (#2805).
+    SteerTurn,
     ToggleClient,
     AdvanceTurn,
     DeliverCompletion,
@@ -817,6 +874,29 @@ fn check_operations_ended(
     Ok(())
 }
 
+/*
+ * I11 의 확장이다 (#2805). 승인 결정, steer, planning 초기화의 연산은 끝날 뿐 아니라 그 명령의 효과가 받은 결과로
+ * 끝난다: 바로 거절이면 `rejected`, 효과가 성공하면 `done`, 실패하면 `failed`, 커널이 완료를 처리하기 전에 다시
+ * 켜졌으면 `lost` 이다. 늦은 완료가 다른 명령(다른 턴의 steer, 다른 승인의 결정)의 끝으로 적히면 여기서 걸린다.
+ */
+fn check_client_operation_ends(
+    recorded: &[RecordedKernelEvent],
+    operations: &[ClientOperation],
+) -> Result<(), String> {
+    let states =
+        crate::domain::kernel_event::operation_states(recorded.iter().map(|record| &record.event));
+    for operation in operations.iter().filter(|operation| !operation.forgotten) {
+        let recorded_state = states.get(&operation.op_id).copied();
+        if operation.expected.is_none() || recorded_state != operation.expected {
+            return Err(format!(
+                "I11: operation {} ({}) should end {:?}, but the record says {recorded_state:?}",
+                operation.op_id, operation.label, operation.expected
+            ));
+        }
+    }
+    Ok(())
+}
+
 struct Simulation {
     rng: SimRng,
     settings: ScenarioSettings,
@@ -867,6 +947,16 @@ struct Simulation {
     prompt_probably_queued: bool,
     ledger: InvariantLedger,
     kernel_log: Arc<SimKernelLog>,
+    /// 클라이언트가 보낸 승인 결정, steer, planning 초기화이다 (#2805). I11 이 그 끝의 종류를 본다.
+    client_ops: Vec<ClientOperation>,
+    /// 받아들인 승인 결정의 `client_ops` 자리이다. 커널은 받아들인 차례대로 결정 효과를 낸다.
+    accepted_decisions: VecDeque<usize>,
+    /// 받아들인 planning 초기화의 `client_ops` 자리이다.
+    accepted_resets: VecDeque<usize>,
+    /// 가짜 app-server 가 끝낸 턴이다. 늦은 steer 가 가리킨다.
+    ended_turns: Vec<(String, String)>,
+    /// 가짜 바깥 세계가 본 위반이다. 다음 커널 주기가 돌려준다.
+    world_violation: Option<String>,
 }
 
 impl Simulation {
@@ -924,6 +1014,11 @@ impl Simulation {
             prompt_prepared_behind_turn: false,
             prompt_probably_queued: false,
             ledger: InvariantLedger::default(),
+            client_ops: Vec::new(),
+            accepted_decisions: VecDeque::new(),
+            accepted_resets: VecDeque::new(),
+            ended_turns: Vec::new(),
+            world_violation: None,
         }
     }
 
@@ -960,6 +1055,7 @@ impl Simulation {
                 .and_then(|()| self.ledger.check_queued_prompt_records(&records))
                 .and_then(|()| self.ledger.check_approval_records(&records))
                 .and_then(|()| check_operations_ended(&records, &operations))
+                .and_then(|()| check_client_operation_ends(&records, &self.client_ops))
                 .map_err(|message| Violation { step, message })
         });
         match result {
@@ -1015,6 +1111,20 @@ impl Simulation {
         if self.turn.is_some() && self.settings.stop_requests {
             choices.push((SimAction::RequestStop, 4));
         }
+        if self.decisions_sent() < self.settings.decision_budget
+            && !self.ledger.approvals.is_empty()
+        {
+            let waiting = self
+                .turn
+                .as_ref()
+                .is_some_and(|turn| turn.approval.is_some());
+            choices.push((SimAction::DecideApproval, if waiting { 12 } else { 2 }));
+        }
+        if self.steers_sent() < self.settings.steer_budget
+            && (self.turn.is_some() || !self.ended_turns.is_empty())
+        {
+            choices.push((SimAction::SteerTurn, 4));
+        }
         if !self.pending.is_empty() {
             choices.push((SimAction::DeliverCompletion, 12));
         }
@@ -1054,6 +1164,8 @@ impl Simulation {
                 self.record("client: stop all sessions".to_string());
                 self.send_recorded_stop();
             }
+            SimAction::DecideApproval => self.decide_approval(),
+            SimAction::SteerTurn => self.steer_turn(),
             SimAction::ToggleClient => self.toggle_client(),
             SimAction::AdvanceTurn => self.advance_turn(),
             SimAction::DeliverCompletion => self.deliver_completion(),
@@ -1159,9 +1271,13 @@ impl Simulation {
         } = build_sim_kernel();
         // 이전 커널을 버려야 기록기가 남은 사건을 다 쓴다. 새 커널은 그 뒤에 기록을 읽는다.
         drop(std::mem::replace(&mut self.host, host));
+        let crashed = crash.is_some();
         if let Some((keep, dropped_prompts)) = crash {
             self.lose_record_tail(keep, &dropped_prompts);
         }
+        self.expect_client_ops_after_restart(crashed);
+        self.accepted_decisions.clear();
+        self.accepted_resets.clear();
         self.inbox = inbox;
         self.effects = effects;
         self.core_inputs = core_inputs;
@@ -1253,6 +1369,322 @@ impl Simulation {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /*
+     * 커널이 다시 켜졌다. 그 커널이 받은 명령 가운데 끝을 처리하지 못한 것은 새 커널이 `lost` 로 닫는다. 강제 종료가
+     * 기록을 잃었으면 (#2806 계약 C1, C3): 받은 기록을 잃은 명령은 잊고, 끝 기록을 잃은 명령은 `lost` 로 닫힌다.
+     */
+    fn expect_client_ops_after_restart(&mut self, crashed: bool) {
+        let ended_lifetime = self.restarts - 1;
+        let lifetime_start = self.lifetime_starts.last().copied().unwrap_or(0);
+        let (received, ended) = {
+            let records = self.kernel_log.0.lock().expect("kernel log should lock");
+            let kept = &records[lifetime_start.min(records.len())..];
+            let received = kept
+                .iter()
+                .filter(|record| matches!(record.event, KernelEvent::CommandReceived { .. }))
+                .filter_map(|record| record.event.op_id())
+                .collect::<BTreeSet<_>>();
+            let ended = crate::domain::kernel_event::operation_states(
+                records.iter().map(|record| &record.event),
+            )
+            .into_iter()
+            .filter(|(_, state)| state.is_end())
+            .map(|(op_id, _)| op_id)
+            .collect::<BTreeSet<_>>();
+            (received, ended)
+        };
+        for operation in &mut self.client_ops {
+            if operation.lifetime != ended_lifetime || operation.forgotten {
+                continue;
+            }
+            if crashed && !received.contains(&operation.op_id) {
+                operation.forgotten = true;
+            } else if !operation.end_processed || (crashed && !ended.contains(&operation.op_id)) {
+                operation.expected = Some(OperationState::Lost);
+                operation.end_processed = true;
+            }
+        }
+    }
+
+    fn decisions_sent(&self) -> usize {
+        self.client_ops
+            .iter()
+            .filter(|operation| operation.label.starts_with("decide"))
+            .count()
+    }
+
+    fn steers_sent(&self) -> usize {
+        self.client_ops
+            .iter()
+            .filter(|operation| operation.steer_turn.is_some())
+            .count()
+    }
+
+    /*
+     * 끝을 기록으로 알리는 명령을 Gateway 처럼 설명과 함께 보내고 영수증을 받는다. 바로 거절된 명령은 그 자리에서
+     * 끝난다. 받아들인 명령은 그 효과의 완료가 끝을 정한다. 돌려주는 값은 받아들였을 때의 `client_ops` 자리이다.
+     */
+    fn send_client_operation(
+        &mut self,
+        command: AppCommand,
+        kind: KernelCommandKind,
+        thread_id: &str,
+        label: String,
+        steer_turn: Option<String>,
+    ) -> Option<usize> {
+        let (reply, answer) = mpsc::channel();
+        self.send_host_input(KernelHostInput::Command {
+            command: crate::composition::native_client_runtime::KernelClientCommand::Core(command),
+            descriptor: Some(KernelCommandDescriptor {
+                command: kind,
+                thread_id: thread_id.to_string(),
+                fingerprint: label.clone(),
+                idempotency_key: None,
+                caller: None,
+                confirmed: kind == KernelCommandKind::ResetPlanning,
+            }),
+            reply,
+        });
+        let outcome = answer
+            .try_recv()
+            .expect("the host answers a command when it handles its inputs");
+        let KernelCommandOutcome::Handled {
+            operation: Some(receipt),
+            ..
+        } = outcome
+        else {
+            panic!("the command '{label}' did not run with a receipt: {outcome:?}");
+        };
+        let rejected = receipt.rejection.is_some();
+        if let Some(reason) = receipt.rejection {
+            self.record(format!(
+                "{REJECTED_AT_ONCE} '{label}' with {}",
+                reason.name()
+            ));
+        }
+        self.client_ops.push(ClientOperation {
+            op_id: receipt.op_id,
+            label,
+            lifetime: self.restarts,
+            steer_turn,
+            expected: rejected.then_some(OperationState::Rejected),
+            end_processed: rejected,
+            forgotten: false,
+        });
+        (!rejected).then(|| self.client_ops.len() - 1)
+    }
+
+    /// 승인 결정을 보낸다. 지금 턴이 기다리는 승인을 주로 고르고, 가끔 이미 끝난 승인을 고른다 (늦은 결정).
+    fn decide_approval(&mut self) {
+        let waiting = self
+            .turn
+            .as_ref()
+            .and_then(|turn| turn.approval.clone().map(|id| (turn.thread_id.clone(), id)));
+        let (thread_id, approval_id) = match waiting {
+            Some(waiting) if self.rng.percent(80) => waiting,
+            _ => {
+                let index = self.rng.index(self.ledger.approvals.len());
+                let approval = &self.ledger.approvals[index];
+                (approval.thread_id.clone(), approval.approval_id.clone())
+            }
+        };
+        let decision = if self.rng.percent(50) {
+            ConversationApprovalDecision::Accept
+        } else {
+            ConversationApprovalDecision::Decline
+        };
+        self.send_decision(&thread_id, approval_id, decision);
+    }
+
+    fn send_decision(
+        &mut self,
+        thread_id: &str,
+        approval_id: String,
+        decision: ConversationApprovalDecision,
+    ) -> Option<usize> {
+        let label = format!("decide {approval_id} {decision:?}");
+        self.record(format!("client: {label} on {thread_id}"));
+        let command = AppCommand::SubmitApprovalDecision {
+            request_identity: ConversationApprovalRequestIdentity {
+                server_request_id: format!("server-{approval_id}"),
+                approval_id,
+            },
+            decision,
+        };
+        let op = self.send_client_operation(
+            command,
+            KernelCommandKind::DecideApproval,
+            thread_id,
+            label,
+            None,
+        )?;
+        self.accepted_decisions.push_back(op);
+        Some(op)
+    }
+
+    /// steer 를 보낸다. 지금 도는 턴을 주로 고르고, 가끔 이미 끝난 턴을 고른다 (늦은 steer).
+    fn steer_turn(&mut self) {
+        let running = self
+            .turn
+            .as_ref()
+            .map(|turn| (turn.thread_id.clone(), turn.turn_id.clone()));
+        let (thread_id, turn_id) = match running {
+            Some(running) if self.ended_turns.is_empty() || self.rng.percent(70) => running,
+            _ => self.ended_turns[self.rng.index(self.ended_turns.len())].clone(),
+        };
+        self.send_steer(&thread_id, &turn_id);
+    }
+
+    fn send_steer(&mut self, thread_id: &str, turn_id: &str) -> Option<usize> {
+        let prompt = format!("steer {}", self.steers_sent() + 1);
+        self.record(format!("client: {prompt} for {turn_id} on {thread_id}"));
+        let command = AppCommand::SteerTurn(ConversationTurnSteerRequest {
+            thread_id: thread_id.to_string(),
+            expected_turn_id: turn_id.to_string(),
+            prompt: prompt.clone(),
+        });
+        self.send_client_operation(
+            command,
+            KernelCommandKind::SteerTurn,
+            thread_id,
+            prompt,
+            Some(turn_id.to_string()),
+        )
+    }
+
+    /// planning 초기화를 확인과 함께 보낸다 (파괴 명령, plan 18 K4-5).
+    fn reset_planning(&mut self) {
+        let label = format!("reset planning {}", self.client_ops.len() + 1);
+        self.record(format!("client: {label}"));
+        let command = AppCommand::ResetPlanningWorkspace(PlanningWorkspaceResetIntent::new(
+            WORKSPACE,
+            PlanningWorkspaceResetTarget::Queue,
+        ));
+        if let Some(op) =
+            self.send_client_operation(command, KernelCommandKind::ResetPlanning, "", label, None)
+        {
+            self.accepted_resets.push_back(op);
+        }
+    }
+
+    /*
+     * 명령의 효과가 끝났다는 완료를 커널에 넣는다. 기대하는 끝은 이 입력으로 정해진다. 반은 바로 넣고, 반은 늦게 넣는다:
+     * 그 사이 턴과 승인이 바뀐다. 커널은 늦은 완료를 그 명령의 끝으로만 적어야 한다.
+     */
+    fn complete_client_operation(&mut self, op: usize, input: CoreInput, succeeded: bool) {
+        if self.rng.percent(50) {
+            self.record(format!(
+                "worker: the completion of '{}' is late",
+                self.client_ops[op].label
+            ));
+            self.pending.push(PendingCompletion::LateCompletion {
+                input,
+                op,
+                succeeded,
+            });
+        } else {
+            self.send_client_completion(op, input, succeeded);
+        }
+    }
+
+    /// 기대하는 끝은 완료를 커널에 넣을 때 정한다. 커널이 처리하기 전에 다시 켜지면 `lost` 로 바뀐다.
+    fn send_client_completion(&mut self, op: usize, input: CoreInput, succeeded: bool) {
+        let operation = &mut self.client_ops[op];
+        operation.expected = Some(if succeeded {
+            OperationState::Done
+        } else {
+            OperationState::Failed
+        });
+        operation.end_processed = false;
+        self.send_core_input(input);
+    }
+
+    /// app-server 가 승인 결정을 받는다. 그 승인을 기다리는 턴이 있으면 결정을 적는다. 두 번째 결정은 위반이다 (I8).
+    fn deliver_approval_decision(&mut self, correlation: ApprovalDecisionCorrelation, op: usize) {
+        let delivered = self.rng.percent(80);
+        let approval_id = correlation.request_identity.approval_id.clone();
+        if delivered
+            && let Some(turn) = self
+                .turn
+                .as_mut()
+                .filter(|turn| turn.approval.as_deref() == Some(approval_id.as_str()))
+        {
+            if turn.decision.is_some() {
+                self.world_violation = Some(format!(
+                    "I8: {approval_id} reached the app-server with a second decision"
+                ));
+            }
+            turn.decision = Some(correlation.decision);
+        }
+        let result = if delivered {
+            Ok(())
+        } else {
+            Err("simulated decision delivery failure".to_string())
+        };
+        self.record(format!(
+            "app-server: decision {:?} for {approval_id} -> {result:?}",
+            correlation.decision
+        ));
+        let input = CoreInput::EffectCompleted(CoreEffectCompletion::ApprovalDecisionSubmitted {
+            correlation,
+            result,
+        });
+        self.complete_client_operation(op, input, delivered);
+    }
+
+    /// app-server 가 steer 를 받는다. 그 턴이 지금 돌 때만 받아들인다 (`expectedTurnId`). 다른 턴에는 적용하지 않는다.
+    fn deliver_steer(
+        &mut self,
+        correlation: TurnSteerCorrelation,
+        request: ConversationTurnSteerRequest,
+        op: usize,
+    ) {
+        let applies = self.turn.as_ref().is_some_and(|turn| {
+            turn.stage == TurnStage::Started
+                && turn.thread_id == request.thread_id
+                && turn.turn_id == request.expected_turn_id
+        }) && !self.rng.percent(10);
+        let result = if applies {
+            Ok(ConversationTurnSteerReceipt {
+                turn_id: request.expected_turn_id.clone(),
+            })
+        } else {
+            Err("expected turn is not running".to_string())
+        };
+        self.record(format!(
+            "app-server: {} for {} -> {result:?}",
+            request.prompt, request.expected_turn_id
+        ));
+        let input = CoreInput::EffectCompleted(CoreEffectCompletion::TurnSteered {
+            correlation,
+            result,
+        });
+        self.complete_client_operation(op, input, applies);
+    }
+
+    fn deliver_planning_reset(
+        &mut self,
+        correlation: PlanningWorkspaceOperationCorrelation,
+        op: Option<usize>,
+    ) {
+        let target = correlation
+            .reset_target()
+            .expect("the simulation resets only through the reset operation");
+        let input =
+            CoreInput::EffectCompleted(CoreEffectCompletion::PlanningWorkspaceResetCompleted {
+                correlation,
+                result: Ok(Box::new(PlanningWorkspaceResetSnapshot {
+                    target,
+                    rewritten_paths: Vec::new(),
+                    removed_paths: Vec::new(),
+                })),
+            });
+        match op {
+            Some(op) => self.complete_client_operation(op, input, true),
+            None => self.send_core_input(input),
         }
     }
 
@@ -1488,6 +1920,14 @@ impl Simulation {
         self.host.run_cycle(now, Duration::ZERO);
         self.queued_core_inputs = 0;
         self.ledger.mark_approval_inputs_delivered(self.restarts);
+        for operation in &mut self.client_ops {
+            if operation.lifetime == self.restarts && operation.expected.is_some() {
+                operation.end_processed = true;
+            }
+        }
+        if let Some(message) = self.world_violation.take() {
+            return Err(self.violation(message));
+        }
         // 커널이 준비 완료를 처리한 뒤에야 프롬프트가 큐에 있다. 턴이 없으면 커널은 큐를 바로 비운다.
         self.prompt_probably_queued = self.turn.is_some()
             && (self.prompt_probably_queued || self.prompt_prepared_behind_turn);
@@ -1607,6 +2047,48 @@ impl Simulation {
                 });
                 Ok(())
             }
+            CoreEffect::SubmitApprovalDecision { correlation } => {
+                // 결정 효과는 받아들인 결정 명령마다 하나이고, 받아들인 차례대로 나온다.
+                let Some(op) = self.accepted_decisions.pop_front() else {
+                    return Err(self.violation(format!(
+                        "a decision for {} left the kernel without an accepted command",
+                        correlation.request_identity.approval_id
+                    )));
+                };
+                self.pending
+                    .push(PendingCompletion::ApprovalDecision { correlation, op });
+                Ok(())
+            }
+            CoreEffect::SteerTurn {
+                correlation,
+                request,
+            } => {
+                // 커널은 클라이언트가 가리킨 턴 그대로 보낸다. 늦은 steer 를 지금 도는 다른 턴으로 바꾸면 안 된다.
+                let op = self.client_ops.iter().position(|operation| {
+                    operation.label == request.prompt && operation.lifetime == self.restarts
+                });
+                let Some(op) = op.filter(|op| {
+                    self.client_ops[*op].steer_turn.as_deref()
+                        == Some(request.expected_turn_id.as_str())
+                }) else {
+                    return Err(self.violation(format!(
+                        "'{}' left the kernel for {}, which no client steer named",
+                        request.prompt, request.expected_turn_id
+                    )));
+                };
+                self.pending.push(PendingCompletion::Steer {
+                    correlation,
+                    request,
+                    op,
+                });
+                Ok(())
+            }
+            CoreEffect::ResetPlanningWorkspace { correlation } => {
+                let op = self.accepted_resets.pop_front();
+                self.pending
+                    .push(PendingCompletion::PlanningReset { correlation, op });
+                Ok(())
+            }
             // 시뮬레이션의 준비는 모두 thread 지정 프롬프트의 것이다. 화면의 취소가 그 준비를 끊으면 안 된다
             // (plan 18 K3-3b 의 회귀).
             CoreEffect::CancelManualPromptPreparation { .. } => Err(self.violation(
@@ -1662,6 +2144,7 @@ impl Simulation {
             stage: TurnStage::Submitted,
             interrupt_requested: false,
             approval: None,
+            decision: None,
         });
         Ok(())
     }
@@ -1741,6 +2224,7 @@ impl Simulation {
             },
         });
         turn.approval = Some(approval_id);
+        turn.decision = None;
         self.turn = Some(turn);
     }
 
@@ -1749,7 +2233,13 @@ impl Simulation {
         let Some(approval_id) = turn.approval.take() else {
             return;
         };
-        let (sent, expected) = match self.rng.below(3) {
+        // 클라이언트의 결정을 받았으면 app-server 는 그 결정으로 승인을 닫는다 (#2805).
+        let choice = match turn.decision.take() {
+            Some(ConversationApprovalDecision::Accept) => 0,
+            Some(ConversationApprovalDecision::Decline) => 1,
+            None => self.rng.below(3),
+        };
+        let (sent, expected) = match choice {
             0 => (
                 ConversationApprovalResolution::Accepted,
                 ApprovalResolution::Accepted,
@@ -1790,6 +2280,8 @@ impl Simulation {
                 .end_approval(approval_id, self.restarts, ApprovalResolution::Withdrawn);
         }
         self.turn = None;
+        self.ended_turns
+            .push((turn.thread_id.clone(), turn.turn_id.clone()));
         self.send_core_input(CoreInput::ConversationStreamUpdated {
             correlation: turn.correlation,
             event: TurnStreamEvent::Failed {
@@ -1836,6 +2328,8 @@ impl Simulation {
                 .end_approval(approval_id, self.restarts, ApprovalResolution::Withdrawn);
         }
         self.turn = None;
+        self.ended_turns
+            .push((turn.thread_id.clone(), turn.turn_id.clone()));
         let receipt = ConversationTurnTerminalReceipt::new(
             turn.thread_id.clone(),
             turn.turn_id.clone(),
@@ -1876,6 +2370,28 @@ impl Simulation {
                 correlation,
                 raw_prompt,
             } => self.complete_prompt_preparation(correlation, raw_prompt),
+            PendingCompletion::ApprovalDecision { correlation, op } => {
+                self.deliver_approval_decision(correlation, op);
+            }
+            PendingCompletion::Steer {
+                correlation,
+                request,
+                op,
+            } => self.deliver_steer(correlation, request, op),
+            PendingCompletion::PlanningReset { correlation, op } => {
+                self.deliver_planning_reset(correlation, op);
+            }
+            PendingCompletion::LateCompletion {
+                input,
+                op,
+                succeeded,
+            } => {
+                self.record(format!(
+                    "worker: the late completion of '{}' arrives",
+                    self.client_ops[op].label
+                ));
+                self.send_client_completion(op, input, succeeded);
+            }
         }
     }
 
@@ -2163,6 +2679,21 @@ fn kernel_simulation_keeps_the_invariants_for_every_seed() {
             .filter(|line| line.contains(REJECTED_AT_ONCE))
             .count();
         assert!(rejected > 0, "no seed rejected a thread prompt at once");
+        // #2805: the default seeds must reach decisions, steers on an ended turn, and late completions.
+        for expected in [
+            "app-server: decision",
+            "expected turn is not running",
+            "worker: the late completion of",
+        ] {
+            assert!(
+                traces
+                    .iter()
+                    .flatten()
+                    .flatten()
+                    .any(|line| line.contains(expected)),
+                "no seed reached '{expected}'"
+            );
+        }
     }
 }
 
@@ -2471,6 +3002,242 @@ fn kernel_simulation_closes_a_command_as_lost_when_a_crash_dropped_its_effect() 
         "{}",
         trace.join("\n")
     );
+}
+
+/// 정해진 순서의 시험용 시뮬레이션이다. 자동 후속과 무작위 승인이 없어 스크립트가 바깥 세계를 정한다.
+fn scripted_simulation() -> Simulation {
+    Simulation::with_settings(
+        SimRng::new(0),
+        ScenarioSettings {
+            max_auto_turns: 0,
+            manual_turn_budget: 0,
+            stop_requests: false,
+            thread_prompt_budget: 0,
+            restarts: false,
+            approval_budget: 0,
+            decision_budget: 0,
+            steer_budget: 0,
+        },
+    )
+}
+
+/// 스크립트를 돌리고 불변식을 본 뒤 기록과 클라이언트 명령을 돌려준다.
+fn run_client_script(
+    script: impl FnOnce(&mut Simulation) -> Result<(), Violation>,
+) -> (Vec<RecordedKernelEvent>, Vec<ClientOperation>) {
+    let mut simulation = scripted_simulation();
+    let result = script(&mut simulation);
+    let log = simulation.kernel_log.clone();
+    let operations = simulation.client_ops.clone();
+    if let Err((violation, trace)) = simulation.finish(result) {
+        panic!(
+            "step {}: {}\n{}",
+            violation.step,
+            violation.message,
+            trace.join("\n")
+        );
+    }
+    let records = log.0.lock().expect("kernel log should lock").clone();
+    (records, operations)
+}
+
+fn start_scripted_session(simulation: &mut Simulation, cycle: Duration) -> Result<(), Violation> {
+    simulation.open_client_session();
+    simulation.run_host_cycle(cycle)?;
+    deliver_everything(simulation, cycle)
+}
+
+/// 바깥 세계가 기다리는 완료(늦은 완료 포함)를 모두 돌려준다.
+fn deliver_everything(simulation: &mut Simulation, cycle: Duration) -> Result<(), Violation> {
+    for _ in 0..50 {
+        if simulation.pending.is_empty() {
+            return Ok(());
+        }
+        simulation.deliver_completion();
+        simulation.run_host_cycle(cycle)?;
+    }
+    panic!("the scripted completions did not run out");
+}
+
+fn start_scripted_turn(
+    simulation: &mut Simulation,
+    prompt: &str,
+    continues_viewed: bool,
+    cycle: Duration,
+) -> Result<FakeTurn, Violation> {
+    simulation.submit_manual_turn_with(prompt.to_string(), continues_viewed);
+    simulation.run_host_cycle(cycle)?;
+    let turn = simulation
+        .turn
+        .clone()
+        .expect("the manual turn should reach the app-server");
+    simulation.start_turn(turn);
+    simulation.run_host_cycle(cycle)?;
+    Ok(simulation.turn.clone().expect("the turn should run"))
+}
+
+fn operation_state_of(records: &[RecordedKernelEvent], op_id: i64) -> OperationState {
+    crate::domain::kernel_event::operation_state(op_id, records.iter().map(|record| &record.event))
+}
+
+#[test]
+fn kernel_simulation_ends_an_approval_decision_and_a_planning_reset_with_their_completion() {
+    /*
+     * #2805: 승인 결정과 파괴 명령(planning 초기화)이 그 효과의 완료로 `command_completed` 까지 간다. 순서: 턴이 승인을
+     * 요청한다 → 클라이언트가 결정한다 → 결정이 가는 동안 두 번째 결정은 바로 거절된다 → app-server 가 그 결정으로
+     * 승인을 닫는다 → planning 초기화가 끝난다. 결정 효과의 완료는 늦게 올 수 있다.
+     */
+    let cycle = Duration::from_millis(10);
+    let mut decision = None;
+    let mut second = None;
+    let mut reset = None;
+    let (records, operations) = run_client_script(|simulation| {
+        start_scripted_session(simulation, cycle)?;
+        let turn = start_scripted_turn(simulation, "task 1", false, cycle)?;
+        let thread_id = turn.thread_id.clone();
+        simulation.request_approval(turn);
+        simulation.run_host_cycle(cycle)?;
+        decision = simulation.send_decision(
+            &thread_id,
+            "approval-1".to_string(),
+            ConversationApprovalDecision::Accept,
+        );
+        second = Some(simulation.client_ops.len());
+        let accepted_twice = simulation.send_decision(
+            &thread_id,
+            "approval-1".to_string(),
+            ConversationApprovalDecision::Decline,
+        );
+        assert_eq!(
+            accepted_twice, None,
+            "one approval takes one decision at a time"
+        );
+        simulation.run_host_cycle(cycle)?;
+        deliver_everything(simulation, cycle)?;
+
+        let waiting = simulation.turn.clone().expect("the turn should still wait");
+        simulation.resolve_approval(waiting);
+        simulation.run_host_cycle(cycle)?;
+        let turn = simulation.turn.clone().expect("the turn should run");
+        simulation.finish_turn(&turn);
+        simulation.run_host_cycle(cycle)?;
+        deliver_everything(simulation, cycle)?;
+
+        reset = Some(simulation.client_ops.len());
+        simulation.reset_planning();
+        simulation.run_host_cycle(cycle)?;
+        deliver_everything(simulation, cycle)?;
+        simulation.settle()
+    });
+    let decision = &operations[decision.expect("the kernel should take the first decision")];
+    let second = &operations[second.expect("the script sent a second decision")];
+    let reset = &operations[reset.expect("the script sent a planning reset")];
+    assert!(
+        matches!(
+            operation_state_of(&records, decision.op_id),
+            OperationState::Done | OperationState::Failed
+        ),
+        "the decision ends with its completion"
+    );
+    assert_eq!(
+        operation_state_of(&records, second.op_id),
+        OperationState::Rejected
+    );
+    assert_eq!(
+        operation_state_of(&records, reset.op_id),
+        OperationState::Done
+    );
+    let ends = records
+        .iter()
+        .filter(|record| {
+            matches!(&record.event, KernelEvent::ApprovalResolved { approval_id, .. }
+                if approval_id == "approval-1")
+        })
+        .count();
+    assert_eq!(ends, 1, "the approval ends once");
+}
+
+/*
+ * #2805: 늦은 steer 의 완료는 다른 턴에 적용되지 않는다. 순서: 턴 1 에 steer 를 보낸다 → 그 효과가 app-server 에 닿기
+ * 전에 턴 1 이 끝나고 같은 thread 에서 턴 2 가 돈다 → 턴 2 에도 steer 를 보낸다 → 턴 1 의 steer 가 늦게 닿는다.
+ * app-server 는 `expectedTurnId` 가 다르므로 거절하고, 커널은 그 실패를 턴 1 의 steer 명령의 끝으로만 적는다.
+ * 돌려주는 값은 기록, 클라이언트 명령, 늦은 steer 의 `client_ops` 자리이다.
+ */
+fn run_late_steer_script() -> (Vec<RecordedKernelEvent>, Vec<ClientOperation>, usize) {
+    let cycle = Duration::from_millis(10);
+    let mut late_steer = None;
+    let (records, operations) = run_client_script(|simulation| {
+        start_scripted_session(simulation, cycle)?;
+        let first = start_scripted_turn(simulation, "task 1", false, cycle)?;
+        late_steer = simulation.send_steer(&first.thread_id, &first.turn_id);
+        assert!(
+            late_steer.is_some(),
+            "the kernel takes a steer for the running turn"
+        );
+        simulation.run_host_cycle(cycle)?;
+        let held = simulation
+            .pending
+            .iter()
+            .position(|pending| matches!(pending, PendingCompletion::Steer { .. }))
+            .expect("the steer should leave the kernel");
+        let held = simulation.pending.remove(held);
+        simulation.finish_turn(&first);
+        simulation.run_host_cycle(cycle)?;
+        deliver_everything(simulation, cycle)?;
+
+        let second = start_scripted_turn(simulation, "task 2", true, cycle)?;
+        assert_eq!(second.thread_id, first.thread_id);
+        simulation.send_steer(&second.thread_id, &second.turn_id);
+        simulation.run_host_cycle(cycle)?;
+        simulation.pending.push(held);
+        deliver_everything(simulation, cycle)?;
+        simulation.send_steer(&second.thread_id, &second.turn_id);
+        simulation.run_host_cycle(cycle)?;
+        deliver_everything(simulation, cycle)?;
+        simulation.settle()
+    });
+    let late_steer = late_steer.expect("the script sent the late steer");
+    (records, operations, late_steer)
+}
+
+#[test]
+fn kernel_simulation_ends_a_late_steer_on_its_own_turn_only() {
+    let (records, operations, late_steer) = run_late_steer_script();
+    assert_eq!(operations[late_steer].steer_turn.as_deref(), Some("turn-1"));
+    assert_eq!(
+        operation_state_of(&records, operations[late_steer].op_id),
+        OperationState::Failed
+    );
+    let steers_of_turn_two = operations
+        .iter()
+        .filter(|operation| operation.steer_turn.as_deref() == Some("turn-2"))
+        .map(|operation| operation_state_of(&records, operation.op_id))
+        .collect::<Vec<_>>();
+    assert_eq!(steers_of_turn_two.len(), 2);
+    assert!(
+        steers_of_turn_two
+            .iter()
+            .any(|state| matches!(state, OperationState::Done | OperationState::Failed)),
+        "a steer of turn 2 reaches the app-server: {steers_of_turn_two:?}"
+    );
+}
+
+#[test]
+fn kernel_simulation_catches_a_command_end_written_from_another_completion() {
+    // 결함 주입 (#2805): 늦은 steer 의 실패가 턴 2 의 성공으로 적힌 기록을 I11 이 잡는다.
+    let (mut records, operations, late_steer) = run_late_steer_script();
+    let late_op = operations[late_steer].op_id;
+    let injected = records.iter_mut().any(|record| match &mut record.event {
+        KernelEvent::CommandCompleted { op_id, result, .. } if *op_id == late_op => {
+            *result = crate::domain::kernel_event::OperationEnd::Done;
+            true
+        }
+        _ => false,
+    });
+    assert!(injected, "the late steer should have a completion record");
+    let error = check_client_operation_ends(&records, &operations)
+        .expect_err("the invariant should catch the wrong end");
+    assert!(error.starts_with("I11:"), "{error}");
 }
 
 #[test]
