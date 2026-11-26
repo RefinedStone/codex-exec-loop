@@ -9,6 +9,7 @@ import { useDesktopStore } from "../session/desktopStore";
 import { HOME_DRAFT, setDraft as setDraftFor, useUiStore } from "../session/uiStore";
 import { isSendKey, recallCursor } from "./composerKeys";
 import { type ActiveMention, activeMention, applyMention, sameMention } from "./fileMention";
+import { type ImageAttachment, readImage, refuseAttachment } from "./imageAttachments";
 import { isSentComposerDraft, runComposerAction, useComposerRequests } from "./composerAction";
 import { PlanList } from "./ConversationView";
 import { loadPrompts, rememberPrompt } from "./promptHistory";
@@ -25,7 +26,8 @@ export interface ComposerActions {
   queue?: NextTurnQueue;
   queueMessage?(text: string): void;
   resumeQueuedMessages?(): void;
-  sendMessage(text: string): Promise<void>;
+  /** `images` 는 첨부한 이미지의 data URL 이다 (#2838). */
+  sendMessage(text: string, images?: readonly string[]): Promise<void>;
   interrupt(): Promise<void>;
   /** 새 스레드를 만들고 첫 메시지를 보낸다. 사용자가 폴더 고르기를 취소하면 false 이다. */
   startThread(text: string): Promise<boolean>;
@@ -123,16 +125,60 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
     }
   };
 
+  // 이미지 첨부이다 (#2838). 입력창은 스레드마다 새로 만들므로 첨부는 다른 스레드로 따라가지 않는다.
+  const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
+  const attachFiles = (files: readonly File[]) => {
+    let count = attachments.length;
+    for (const file of files) {
+      const refused = refuseAttachment(file, count);
+      if (refused) {
+        setError(refused);
+        continue;
+      }
+      count += 1;
+      readImage(file).then(
+        (image) => setAttachments((current) => (current.length < count ? [...current, image] : current)),
+        (cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)),
+      );
+    }
+  };
+  const attachRef = useRef(attachFiles);
+  attachRef.current = attachFiles;
+  // 대화 창 어디에 놓아도 이 입력창에 붙는다. 터미널과 오른쪽 패널은 제외한다.
+  useEffect(() => {
+    if (home) return;
+    const accepts = (event: DragEvent) => event.dataTransfer?.types.includes("Files")
+      && !(event.target instanceof Element && event.target.closest(".terminal-body, .right-panel"));
+    const over = (event: DragEvent) => {
+      if (!accepts(event)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    };
+    const drop = (event: DragEvent) => {
+      if (!accepts(event)) return;
+      event.preventDefault();
+      attachRef.current([...(event.dataTransfer?.files ?? [])]);
+    };
+    window.addEventListener("dragover", over);
+    window.addEventListener("drop", drop);
+    return () => {
+      window.removeEventListener("dragover", over);
+      window.removeEventListener("drop", drop);
+    };
+  }, [home]);
+
   const send = () => {
     const text = draft;
-    if (text.trim().length === 0 || disabled) {
+    const images = attachments.map((image) => image.url);
+    if ((text.trim().length === 0 && images.length === 0) || disabled) {
       return;
     }
     void run(async () => {
       if (home) {
         if (!(await actions.startThread(text))) return;
       } else {
-        await actions.sendMessage(text);
+        await actions.sendMessage(text, images);
+        setAttachments([]);
       }
       rememberPrompt(text);
       if (isSentComposerDraft(useUiStore.getState().drafts[draftKey], text)) clearDraft();
@@ -265,6 +311,19 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
               ))}
             </ul>
           )}
+          {attachments.length > 0 && (
+            <ul className="attachments" data-testid="attachments">
+              {attachments.map((image) => (
+                <li key={image.id} className="attachment">
+                  <img src={image.url} alt={image.name} />
+                  <button type="button" className="icon-button" title={`${image.name} 빼기`} aria-label={`${image.name} 빼기`}
+                    onClick={() => setAttachments((current) => current.filter((item) => item.id !== image.id))} data-testid="attachment-remove">
+                    <Icon name="close" size={12} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
           <textarea
             ref={input}
             value={draft}
@@ -278,6 +337,12 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
               if (!sameMention(activeMention(value, selectionStart), mentionAt.current)) updateMention(value, selectionStart);
             }}
             onKeyDown={onKeyDown}
+            onPaste={home ? undefined : (event) => {
+              const images = [...event.clipboardData.files].filter((file) => file.type.startsWith("image/"));
+              if (images.length === 0) return;
+              event.preventDefault();
+              attachFiles(images);
+            }}
             placeholder={writerElsewhere ? "다른 Codex 앱이 이 스레드를 쓰는 동안 보낼 수 없습니다" : inProgress ? "진행 중인 턴에 추가 지시 (steer)" : "무엇을 할까요?"}
             disabled={disabled}
             data-testid="composer-input"
@@ -291,7 +356,7 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
                 <span className="stop-square" />
               </button>
             )}
-            <button type="button" className="round-button send" title={sendTitle} aria-label={sendTitle} onClick={send} disabled={disabled || draft.trim().length === 0} data-testid="composer-send">
+            <button type="button" className="round-button send" title={sendTitle} aria-label={sendTitle} onClick={send} disabled={disabled || (draft.trim().length === 0 && attachments.length === 0)} data-testid="composer-send">
               <Icon name="arrowUp" />
             </button>
           </div>

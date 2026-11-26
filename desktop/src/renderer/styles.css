@@ -2494,3 +2494,34 @@ button.issues-title:hover {
 .mention-list button.selected {
   background: var(--bg-hover, rgb(127 127 127 / 0.12));
 }
+
+
+/* 입력창의 이미지 첨부 미리보기 (#2838). */
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 6px;
+  padding: 0;
+  list-style: none;
+}
+
+.attachment {
+  position: relative;
+}
+
+.attachment img {
+  display: block;
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+}
+
+.attachment .icon-button {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  background: var(--bg-elevated);
+}
