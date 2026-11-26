@@ -11,6 +11,7 @@ import type { TaskDraftSource } from "../kernel/TaskEditor";
 import { useConversationStore } from "../session/desktopStore";
 import { openPanel, useUiStore } from "../session/uiStore";
 import { copyText } from "./copyText";
+import { newContentTurnId } from "./newContent";
 import { diffFileFromChange, totalCounts, turnDiffFiles, type DiffFile } from "./diff";
 import { DiffCounts, DiffFileList } from "./DiffView";
 import { findTurns, matchRanges } from "./find";
@@ -264,6 +265,17 @@ function findRanges(root: HTMLElement, needle: string): Range[] {
   return ranges;
 }
 
+/**
+ * 스레드별로 이 창이 기억하는 것이다 (#2843). 창의 메모리에만 있다.
+ * - position: 보던 자리(그 턴 안의 위치). 맨 아래를 보고 있었으면 null 이고, 다시 열면 맨 아래로 간다.
+ * - lastSeenTurnId: 이 스레드를 떠날 때의 마지막 턴. 다시 열 때 그 뒤의 턴 앞에 "새 내용" 구분선을 둔다.
+ */
+interface ThreadViewMemory {
+  position: { turnId: string; offset: number } | null;
+  lastSeenTurnId: string | null;
+}
+const threadViewMemory = new Map<string, ThreadViewMemory>();
+
 /** 스레드마다 새로 만든다. 스크롤 자리와 "이전 턴" 읽기의 상태(읽는 중, 오류)가 다른 스레드로 넘어가지 않는다. */
 interface ConversationViewProps {
   onLoadOlder(): Promise<void>;
@@ -319,8 +331,39 @@ function ThreadConversation({ threadId, onLoadOlder, onDraftTask }: Conversation
     overscan: 3,
   });
 
+  // 다시 연 스레드의 기억이다. 열 때 한 번 읽는다 (#2843).
+  const remembered = useRef(threadViewMemory.get(threadId) ?? null);
+  const restored = useRef(false);
+  const position = useRef<ThreadViewMemory["position"]>(null);
+  const dividerTurnId = useMemo(
+    () => newContentTurnId(turns.map((turn) => turn.id), remembered.current?.lastSeenTurnId),
+    [turns],
+  );
+  const latestTurnId = useRef<string | null>(null);
+  latestTurnId.current = turns.at(-1)?.id ?? null;
+  useEffect(() => () => {
+    threadViewMemory.set(threadId, { position: position.current, lastSeenTurnId: latestTurnId.current });
+  }, [threadId]);
+
   // 내용이 바뀔 때마다, 맨 아래를 보고 있었으면 맨 아래로 간다. 이전 턴을 붙였으면 보던 턴으로 돌아간다.
   useLayoutEffect(() => {
+    if (!restored.current && turns.length > 0) {
+      restored.current = true;
+      // 새 내용이 있으면 그 앞에서, 아니면 보던 자리에서 시작한다. 둘 다 없으면 맨 아래이다.
+      const startTurn = dividerTurnId ?? remembered.current?.position?.turnId ?? null;
+      const index = startTurn ? turns.findIndex((turn) => turn.id === startTurn) : -1;
+      if (index >= 0) {
+        followBottom.current = false;
+        setAtBottom(false);
+        const offset = dividerTurnId ? 0 : (remembered.current?.position?.offset ?? 0);
+        virtualizer.scrollToIndex(index, { align: "start" });
+        requestAnimationFrame(() => {
+          const item = virtualizer.getVirtualItems().find((row) => row.key === startTurn);
+          if (item && offset > 0) virtualizer.scrollToOffset(item.start + offset);
+        });
+        return;
+      }
+    }
     const anchor = anchorTurnId.current;
     if (anchor) {
       const index = turns.findIndex((turn) => turn.id === anchor);
@@ -424,6 +467,10 @@ function ThreadConversation({ threadId, onLoadOlder, onDraftTask }: Conversation
     if (element) {
       followBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < BOTTOM_THRESHOLD_PX;
       setAtBottom(followBottom.current);
+      // 보던 자리를 기억한다: 화면 맨 위에 걸친 턴과 그 안의 위치이다.
+      const offset = virtualizer.scrollOffset ?? element.scrollTop;
+      const top = virtualizer.getVirtualItems().find((row) => row.end > offset);
+      position.current = followBottom.current || !top ? null : { turnId: String(top.key), offset: offset - top.start };
     }
   };
 
@@ -482,6 +529,7 @@ function ThreadConversation({ threadId, onLoadOlder, onDraftTask }: Conversation
               const turn = turns[row.index];
               return turn ? (
                 <div key={row.key} data-index={row.index} ref={virtualizer.measureElement} className="turn-row" style={{ transform: `translateY(${row.start}px)` }}>
+                  {turn.id === dividerTurnId && <div className="new-content-divider" role="separator" data-testid="new-content-divider"><span>새 내용</span></div>}
                   <Turn turn={turn} />
                 </div>
               ) : null;
