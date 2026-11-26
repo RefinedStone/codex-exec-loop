@@ -41,7 +41,7 @@ use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 use crate::application::service::task_evidence::TaskEvidenceService;
 use crate::application::service::task_verification::{
-    TaskVerificationHandle, TaskVerificationService,
+    TaskVerificationHandle, TaskVerificationService, VerificationWake,
 };
 use crate::composition::clipboard_image_probe::ClipboardImageProbeTrigger;
 use crate::composition::core_effect_runner::CoreEffectRunner;
@@ -228,6 +228,12 @@ struct NativeBindingPauseAttachment {
     log: Arc<dyn KernelEventLogPort>,
 }
 
+/// TUI 가 저장소 커널 owner 일 때 붙이는 호스트 검증이다. 런타임의 waker 가 있어야 만들 수 있어서 bind 때 만든다.
+struct NativeTaskVerificationAttachment {
+    handle: TaskVerificationHandle,
+    build: Box<dyn FnOnce(VerificationWake) -> anyhow::Result<Arc<TaskVerificationService>>>,
+}
+
 pub(crate) struct NativeTuiApplicationComposition {
     core_runtime: NativeCoreRuntime,
     parallel_control_plane: ParallelModeControlPlaneComposition,
@@ -235,6 +241,7 @@ pub(crate) struct NativeTuiApplicationComposition {
     clipboard_image_probe_trigger: Arc<dyn ClipboardImageProbeTrigger>,
     github_review_polling: Option<crate::core::app::GithubReviewPollingSettings>,
     binding_pause_attachment: Option<NativeBindingPauseAttachment>,
+    task_verification_attachment: Option<NativeTaskVerificationAttachment>,
 }
 
 pub(crate) struct BoundNativeTuiApplication {
@@ -547,6 +554,7 @@ impl NativeTuiApplicationComposition {
             clipboard_image_probe_trigger,
             github_review_polling: None,
             binding_pause_attachment: None,
+            task_verification_attachment: None,
         }
     }
 
@@ -576,6 +584,19 @@ impl NativeTuiApplicationComposition {
         self
     }
 
+    /// 병렬 완료가 쓰는 `handle` 과 같은 것을 받아야 한다. 그래야 recipe 가 있는 완료가 이 owner 로 검증된다.
+    pub(in crate::composition) fn with_task_verification(
+        mut self,
+        handle: TaskVerificationHandle,
+        build: impl FnOnce(VerificationWake) -> anyhow::Result<Arc<TaskVerificationService>> + 'static,
+    ) -> Self {
+        self.task_verification_attachment = Some(NativeTaskVerificationAttachment {
+            handle,
+            build: Box::new(build),
+        });
+        self
+    }
+
     pub(crate) fn bind_client_runtime(self) -> BoundNativeTuiApplication {
         let mut client_runtime =
             NativeClientRuntime::from_parts(self.core_runtime, self.parallel_control_plane);
@@ -585,6 +606,9 @@ impl NativeTuiApplicationComposition {
             client_runtime
                 .attach_issue_binding_pause(binding.service, binding.admission)
                 .expect("one TUI binding owner");
+        }
+        if let Some(verification) = self.task_verification_attachment {
+            client_runtime.attach_owned_task_verification(&verification.handle, verification.build);
         }
         BoundNativeTuiApplication {
             client_runtime,
@@ -1912,6 +1936,29 @@ impl NativeClientRuntime {
         self.task_verification = Some(service);
         self.drain_task_evidence_outbox(Instant::now());
         Ok(())
+    }
+
+    /// 저장소 커널 owner 만 부른다. 실패하면 검증은 쓸 수 없고(fail-closed) recipe 가 있는 완료는 보류된다.
+    pub(super) fn attach_owned_task_verification(
+        &mut self,
+        handle: &TaskVerificationHandle,
+        build: impl FnOnce(VerificationWake) -> anyhow::Result<Arc<TaskVerificationService>>,
+    ) -> Option<Arc<TaskVerificationService>> {
+        let waker = self.host_waker();
+        let attached = build(Arc::new(move || waker.wake())).and_then(|service| {
+            self.attach_task_verification(service.clone(), handle)
+                .map(|()| service)
+        });
+        match attached {
+            Ok(service) => Some(service),
+            Err(error) => {
+                tracing::warn!(
+                    error = %format!("{error:#}"),
+                    "host verification is unavailable; completions with a verification recipe stay held"
+                );
+                None
+            }
+        }
     }
 
     fn drain_task_evidence_outbox(&mut self, now: Instant) {

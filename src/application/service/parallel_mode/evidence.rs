@@ -1,6 +1,9 @@
 //! Evidence inspection shares the worker-pool mutation exclusion used by host completion.
 //! A busy pool is an unavailable observation; a UI query never waits for allocation.
+//! Official completion waits for the pool until its own deadline, so one contended
+//! lock does not fail the completion.
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
@@ -16,11 +19,25 @@ use super::pool::{
     resolve_workspace_slot_lease_with_runtime, try_acquire_pool_mutation_lock_at,
 };
 
+const POOL_LOCK_RETRY: Duration = Duration::from_millis(25);
+
 pub(crate) fn with_running_worker<T>(
     authority: &dyn PlanningAuthorityPort,
     runtime: &dyn ParallelModeRuntimePort,
     workspace: &str,
     expected: &ParallelModeSlotLeaseSnapshot,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    with_running_worker_until(authority, runtime, workspace, expected, None, operation)
+}
+
+/// `wait_until` 까지 pool 잠금을 다시 시도한다. `None` 이면 한 번만 시도한다.
+pub(crate) fn with_running_worker_until<T>(
+    authority: &dyn PlanningAuthorityPort,
+    runtime: &dyn ParallelModeRuntimePort,
+    workspace: &str,
+    expected: &ParallelModeSlotLeaseSnapshot,
+    wait_until: Option<Instant>,
     operation: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
     let canonical =
@@ -29,9 +46,19 @@ pub(crate) fn with_running_worker<T>(
         return Err(TaskEvidenceError::Unavailable.into());
     }
     let pool = derive_default_pool_root(&canonical);
-    let guard = try_acquire_pool_mutation_lock_at(runtime, &pool)
-        .map_err(|_| TaskEvidenceError::Unavailable)?
-        .ok_or(TaskEvidenceError::Unavailable)?;
+    let guard = loop {
+        if let Some(guard) = try_acquire_pool_mutation_lock_at(runtime, &pool)
+            .map_err(|_| TaskEvidenceError::Unavailable)?
+        {
+            break guard;
+        }
+        match wait_until {
+            Some(deadline) if Instant::now() + POOL_LOCK_RETRY < deadline => {
+                std::thread::sleep(POOL_LOCK_RETRY)
+            }
+            _ => return Err(TaskEvidenceError::Unavailable.into()),
+        }
+    };
     let verify = || -> Result<()> {
         let resolution =
             resolve_workspace_slot_lease_with_runtime(runtime, authority, &expected.worktree_path)

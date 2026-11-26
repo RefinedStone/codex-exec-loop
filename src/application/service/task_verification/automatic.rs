@@ -7,7 +7,7 @@ use crate::application::port::outbound::task_verification_repository_port::{
     TaskVerificationFailureLimitCommit, TaskVerificationFailureLimitOutcome,
 };
 use crate::application::service::parallel_mode::evidence::{
-    snapshot_worker_tree, with_running_worker,
+    snapshot_worker_tree, with_running_worker_until,
 };
 use crate::domain::parallel_mode::{ParallelModeSlotLeaseSnapshot, ParallelModeSlotLeaseState};
 use crate::domain::planning::TaskAcceptanceChannel;
@@ -114,7 +114,7 @@ impl TaskVerificationService {
             return Err(TaskEvidenceError::LeaseChanged.into());
         }
         let expected_lease = running_lease;
-        let source = self.automatic_source(expected_lease, source_commit_sha)?;
+        let source = self.automatic_source(expected_lease, source_commit_sha, deadline)?;
         let guard = ExecutionGuard {
             source: source.clone(),
             continuation,
@@ -178,7 +178,7 @@ impl TaskVerificationService {
             drop(cancel_on_exit);
         }
         self.require_automatic_live(guard.continuation.as_ref(), deadline)?;
-        if self.automatic_source(expected_lease, source_commit_sha)? != source {
+        if self.automatic_source(expected_lease, source_commit_sha, deadline)? != source {
             return Err(TaskEvidenceError::Stale.into());
         }
         Ok(AutomaticTaskVerificationOutcome::Finished { receipts })
@@ -188,12 +188,16 @@ impl TaskVerificationService {
         &self,
         lease: &ParallelModeSlotLeaseSnapshot,
         commit_sha: &str,
+        deadline: Instant,
     ) -> Result<TaskEvidenceTree> {
-        let source = with_running_worker(
+        // A busy pool (allocation, evidence query) is transient. Wait for it within
+        // the completion deadline instead of failing the official completion.
+        let source = with_running_worker_until(
             self.dependencies.authority.as_ref(),
             self.dependencies.runtime.as_ref(),
             &self.dependencies.workspace,
             lease,
+            Some(deadline),
             || snapshot_worker_tree(self.dependencies.runtime.as_ref(), lease),
         )?;
         if !source.worktree_clean || source.head_commit_sha != commit_sha {

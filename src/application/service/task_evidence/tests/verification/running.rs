@@ -1,5 +1,7 @@
 //! Exercise the real running-worker query/guard path with in-memory port observations.
 //! No filesystem, Git process, network, or model I/O is performed by this fixture.
+use std::time::{Duration, Instant};
+
 use super::*;
 use crate::application::port::inbound::task_evidence_query_port::TaskEvidenceSourceKind;
 use crate::application::port::outbound::parallel_mode_runtime_port::{
@@ -118,6 +120,77 @@ fn the_final_running_tree_snapshot_cannot_leave_a_success_from_an_earlier_enviro
             "the last environment observation must follow the final source snapshot and second DB read"
         );
     }
+}
+
+#[test]
+fn official_completion_waits_for_a_busy_pool_while_a_query_does_not() {
+    use crate::application::service::parallel_mode::evidence::{
+        with_running_worker, with_running_worker_until,
+    };
+    let fixture = HostFixture::new();
+    let stored = fixture.install_host(TaskVerificationPhase::Finished);
+    let canonical = PathBuf::from("/repo");
+    let pool = crate::domain::parallel_mode::default_parallel_pool_root(&canonical);
+    let mut lease = stored.lease;
+    lease.worktree_path = pool.join(&lease.slot_id).to_string_lossy().into_owned();
+    lease.branch_name = "akra-agent/slot-1/task-1".into();
+    let mut projection = PlanningAuthorityRuntimeProjectionSnapshot::default();
+    projection
+        .slot_leases
+        .insert(lease.slot_id.clone(), lease.clone());
+    let authority = NoopPlanningAuthorityPort::default()
+        .with_canonical_repo_root(canonical.to_string_lossy().into_owned())
+        .with_runtime_projection(projection);
+    let runtime = RunningRuntime {
+        canonical,
+        pool,
+        lease: lease.clone(),
+        runner: fixture.runner.clone(),
+        change_on_final_snapshot: None,
+        snapshots: AtomicUsize::new(0),
+        permits: AtomicUsize::new(0),
+        permit_checks: Arc::new(AtomicUsize::new(0)),
+        held: Arc::new(AtomicBool::new(true)),
+    };
+
+    // Another pool mutation (allocation, evidence query) holds the lock.
+    let query = with_running_worker(&authority, &runtime, "/repo", &lease, || Ok(()));
+    assert_eq!(
+        query.unwrap_err().downcast_ref::<TaskEvidenceError>(),
+        Some(&TaskEvidenceError::Unavailable)
+    );
+    let expired = with_running_worker_until(
+        &authority,
+        &runtime,
+        "/repo",
+        &lease,
+        Some(Instant::now() + Duration::from_millis(60)),
+        || Ok(()),
+    );
+    assert_eq!(
+        expired.unwrap_err().downcast_ref::<TaskEvidenceError>(),
+        Some(&TaskEvidenceError::Unavailable)
+    );
+    assert_eq!(runtime.permits.load(Ordering::SeqCst), 0);
+
+    let held = runtime.held.clone();
+    let completion = std::thread::scope(|threads| {
+        threads.spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            held.store(false, Ordering::SeqCst);
+        });
+        with_running_worker_until(
+            &authority,
+            &runtime,
+            "/repo",
+            &lease,
+            Some(Instant::now() + Duration::from_secs(5)),
+            || Ok("ran"),
+        )
+    });
+    assert_eq!(completion.unwrap(), "ran");
+    assert_eq!(runtime.permits.load(Ordering::SeqCst), 1);
+    assert!(!runtime.held.load(Ordering::SeqCst));
 }
 
 struct RunningRuntime {
