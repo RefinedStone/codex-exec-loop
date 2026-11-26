@@ -8,8 +8,13 @@ interface AreaBoundaryState {
   attempt: number;
 }
 
-export class AreaBoundary extends Component<{ area: string; children: ReactNode }, AreaBoundaryState> {
+export class AreaBoundary extends Component<{ area: string; resetKey?: string; children: ReactNode }, AreaBoundaryState> {
   override state: AreaBoundaryState = { failed: false, attempt: 0 };
+
+  /** 보는 대상(스레드, 패널)이 바뀌면 실패 표시를 지운다. 자식은 다시 만들지 않는다: 자식의 수명은 그대로이다. */
+  override componentDidUpdate(previous: { resetKey?: string }): void {
+    if (previous.resetKey !== this.props.resetKey && this.state.failed) this.setState({ failed: false });
+  }
 
   static getDerivedStateFromError(): Partial<AreaBoundaryState> {
     return { failed: true };

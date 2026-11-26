@@ -35,4 +35,16 @@ describe("area error boundary (#2845)", () => {
     expect(redrawn.key).toBe("1");
     expect(texts(redrawn)).toEqual(["panel body"]);
   });
+
+  it("clears the failure when the viewed thread or panel changes without remounting the children", () => {
+    const boundary = new AreaBoundary({ area: "대화", resetKey: "thread-a", children: "body" });
+    boundary.state = { failed: true, attempt: 0 };
+    let next = boundary.state;
+    boundary.setState = ((update: typeof next) => { next = { ...next, ...update }; }) as typeof boundary.setState;
+    boundary.componentDidUpdate({ resetKey: "thread-a" });
+    expect(next.failed).toBe(true);
+    Object.assign(boundary, { props: { area: "대화", resetKey: "thread-b", children: "body" } });
+    boundary.componentDidUpdate({ resetKey: "thread-a" });
+    expect(next).toEqual({ failed: false, attempt: 0 });
+  });
 });
