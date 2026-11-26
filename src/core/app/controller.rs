@@ -1,4 +1,5 @@
 mod state;
+mod task_usage;
 
 use self::state::AppState;
 use super::conversation_preferences::ConversationPreferenceFeatureReducer;
@@ -149,6 +150,12 @@ impl CoreController {
             self.record_command_end(&effect, failure);
         }
         self.record_turn_submissions(&outcome.effects);
+        for event in task_usage::usage_events(
+            &outcome.events,
+            &self.conversation_turn.published_thread_turns(),
+        ) {
+            self.conversation_turn.record_kernel_event(event);
+        }
         if let Some(activity) = self.conversation_turn.take_thread_activity_change() {
             // 턴의 시작과 끝은 thread 요약의 변화로 기록한다 (plan 19 Q3-2). 요약은 보지 않는 thread 도 담는다.
             for mut event in kernel_event::turn_events_between(
@@ -1877,6 +1884,19 @@ impl CoreController {
         effects: Vec<CoreEffect>,
         record: Option<KernelEvent>,
     ) -> CoreDispatchOutcome {
+        if let super::ThreadPromptOutcome::Submitted {
+            admission: TurnSubmissionAdmission::Accepted { correlation },
+            task_id,
+        } = &outcome
+            && let Some(op_id) = self.conversation_turn.operation_of_turn(*correlation)
+        {
+            self.conversation_turn
+                .record_kernel_event(KernelEvent::TaskExecutionLinked {
+                    task_id: task_id.clone(),
+                    thread_id: thread_id.clone(),
+                    op_id,
+                });
+        }
         if let Some(record) = record {
             self.conversation_turn.record_kernel_event(record);
         }
@@ -10791,7 +10811,11 @@ mod tests {
             controller.handle_input(prepared_thread_prompt(1, "fix the test", "planned prompt"));
         let turn = submitted_turn(&prepared);
         let (records, state) = operation_records(&mut controller, 7);
-        assert_eq!(kinds(&records), ["turn_submitted"]);
+        assert_eq!(kinds(&records), ["task_execution_linked", "turn_submitted"]);
+        assert!(
+            matches!(&records[0], KernelEvent::TaskExecutionLinked { task_id, thread_id, op_id: 7 }
+            if task_id == "task-1" && thread_id == "thread-beta")
+        );
         assert_eq!(state, OperationState::Running);
 
         controller.handle_input(test_turn_stream_input(
@@ -10911,7 +10935,14 @@ mod tests {
         end_test_turn(&mut controller, running);
         controller.handle_input(CoreInput::Command(AppCommand::ResubmitQueuedThreadPrompt));
         let (records, state) = operation_records(&mut controller, 7);
-        assert_eq!(kinds(&records), ["thread_prompt_settled", "turn_submitted"]);
+        assert_eq!(
+            kinds(&records),
+            [
+                "task_execution_linked",
+                "thread_prompt_settled",
+                "turn_submitted"
+            ]
+        );
         assert_eq!(state, OperationState::Running);
     }
 

@@ -21,6 +21,7 @@ use crate::domain::kernel_event::{
 pub use crate::domain::kernel_spec::OperationState;
 use crate::domain::kernel_spec::{KernelCommandKind, spec_names};
 use crate::domain::planning::evidence::TaskEvidenceStatus;
+use crate::domain::task_usage::TaskUsageState;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -1109,6 +1110,8 @@ pub enum KernelCommand {
         idempotency_key: String,
         #[serde(default)]
         session: crate::domain::delegation::ChatSession,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
     },
     CancelDelegation {
         id: String,
@@ -1280,6 +1283,7 @@ pub enum KernelCommandInput {
         instruction: String,
         idempotency_key: String,
         session: crate::domain::delegation::ChatSession,
+        task_id: Option<String>,
     },
     CancelDelegation {
         id: String,
@@ -1686,7 +1690,14 @@ impl KernelCommand {
                 instruction,
                 idempotency_key,
                 session,
+                task_id,
             } => {
+                if let Some(task_id) = &task_id {
+                    crate::domain::planning::evidence::validate_evidence_identifier(task_id)
+                        .map_err(|_| {
+                            KernelProtocolError::invalid_params("invalid delegation task identity")
+                        })?;
+                }
                 if !session.valid() {
                     return Err(KernelProtocolError::invalid_params(
                         "invalid ChatGPT conversation URL",
@@ -1696,6 +1707,7 @@ impl KernelCommand {
                     instruction,
                     idempotency_key,
                     session,
+                    task_id,
                 });
             }
             Self::CancelDelegation { id } => {
@@ -1946,6 +1958,10 @@ pub enum KernelQuery {
         #[schemars(length(min = 1, max = 4096), regex(pattern = NON_BLANK))]
         task_id: String,
     },
+    TaskUsage {
+        #[schemars(length(min = 1, max = 4096), regex(pattern = NON_BLANK))]
+        task_id: String,
+    },
     TaskEvidence {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(length(min = 1, max = 256))]
@@ -2005,6 +2021,15 @@ pub struct QueryRequest {
 }
 
 impl KernelQuery {
+    pub fn task_usage_id(&self) -> Result<Option<&str>, KernelProtocolError> {
+        if let Self::TaskUsage { task_id } = self {
+            crate::domain::planning::evidence::validate_evidence_identifier(task_id)
+                .map_err(|_| KernelProtocolError::invalid_params("invalid task_usage identity"))?;
+            return Ok(Some(task_id));
+        }
+        Ok(None)
+    }
+
     pub fn task_result_id(&self) -> Result<Option<&str>, KernelProtocolError> {
         if let Self::TaskResult { task_id } = self {
             crate::domain::planning::evidence::validate_evidence_identifier(task_id)
@@ -2081,6 +2106,9 @@ impl KernelQuery {
             Self::TaskResult { task_id } => KernelQueryAnswer::TaskResult(Box::new(
                 TaskResultState::unavailable(task_id.clone()),
             )),
+            Self::TaskUsage { task_id } => {
+                KernelQueryAnswer::TaskUsage(TaskUsageState::unavailable(task_id))
+            }
             Self::TaskEvidence { .. } => {
                 KernelQueryAnswer::TaskEvidence(TaskEvidenceState::unavailable())
             }
@@ -2167,6 +2195,8 @@ spec_names! {
             "Read all persisted tasks, including completed and cancelled tasks, with their editable fields and the planning revision from the same authority snapshot. This reuses the planning-tool list_tasks read and never starts work.";
         TaskResult => "task_result",
             "Read one exact persisted task ID with stored execution, delivery, host evidence and immutable work-order/PR lineage. Completed and cancelled tasks remain queryable after delivery-queue pruning. Missing or unavailable lineage is explicit; the query never starts work or infers external issue closure.";
+        TaskUsage => "task_usage",
+            "Read one task's observed token lower bound, exact operation/thread links and unobserved executions. Repeated cumulative snapshots are deduplicated. Missing usage is null; old unlinked delegations are repository-scoped gaps, not zero-cost task executions. This is not billing or a complete cost estimate.";
         TaskEvidence => "task_evidence",
             "Read current task acceptance scopes and host-observed evidence without creating attempts or artifacts. Choose explicit task_ids or after_task_id, never both. The default and maximum limit are 256; truncated and next_task_id describe later tasks. Unavailable source observations do not become Pass or Pending.";
         Parallel => "parallel",
@@ -2228,6 +2258,7 @@ pub enum KernelQueryAnswer {
     Planning(PlanningState),
     ListTasks(PlanningTaskList),
     TaskResult(Box<TaskResultState>),
+    TaskUsage(TaskUsageState),
     TaskEvidence(TaskEvidenceState),
     Parallel(ParallelState),
     Attention {

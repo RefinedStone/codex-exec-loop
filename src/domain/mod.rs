@@ -82,3 +82,5 @@ pub(crate) mod provider_credentials;
 pub(crate) mod provider_work;
 
 pub mod conversation_workspace;
+
+pub(crate) mod task_usage;

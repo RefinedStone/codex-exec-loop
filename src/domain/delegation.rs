@@ -58,6 +58,8 @@ pub enum Phase {
 pub struct Delegation {
     pub id: String,
     pub caller: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
     pub state: State,
     pub delivery: Delivery,
     pub phase: Phase,

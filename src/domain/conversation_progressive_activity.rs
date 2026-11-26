@@ -1112,7 +1112,17 @@ impl ConversationProgressiveTokenUsage {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
 pub struct ConversationProgressiveTokenUsageBreakdown {
     pub cached_input_tokens: u64,
     pub input_tokens: u64,
