@@ -491,16 +491,16 @@ export class DesktopSession {
   }
 
   /** 메시지를 보낸다. 진행 중인 턴이 있으면 steer, 없으면 새 턴이다 (P3 §6.2). */
-  async sendMessage(text: string): Promise<void> {
+  async sendMessage(text: string, images: readonly string[] = []): Promise<void> {
     this.assertWritable();
     const threadId = this.store.getOpenThreadId();
     this.assertSubscribed(threadId);
     const trimmed = text.trim();
-    if (!threadId || trimmed.length === 0) {
+    if (!threadId || (trimmed.length === 0 && images.length === 0)) {
       return;
     }
     this.assertTurnSubmissionAvailable(threadId);
-    const input: UserInput[] = [{ type: "text", text: trimmed, text_elements: [] }];
+    const input = userInput(trimmed, images);
     const transcript = this.store.getTranscript();
     const activeTurn = isTurnInProgress(transcript) ? transcript?.turns.at(-1) : undefined;
     if (activeTurn) {
@@ -510,7 +510,7 @@ export class DesktopSession {
       if (acknowledgedTurnId) {
         await this.client.request("turn/steer", { threadId, input, expectedTurnId: acknowledgedTurnId });
       } else {
-        await this.startTextTurn(threadId, trimmed);
+        await this.startTextTurn(threadId, trimmed, images);
       }
     }
   }
@@ -551,12 +551,12 @@ export class DesktopSession {
     return this.pendingTurnStarts.has(threadId) || this.nextTurnQueue.hasInFlight(threadId);
   }
 
-  private async startTextTurn(threadId: string, text: string): Promise<TurnStartResponse> {
+  private async startTextTurn(threadId: string, text: string, images: readonly string[] = []): Promise<TurnStartResponse> {
     const generation = this.conversationGeneration;
     const settings = this.nextTurnSettings.prepare(threadId);
     this.pendingTurnStarts.add(threadId);
     try {
-      const input: UserInput[] = [{ type: "text", text, text_elements: [] }];
+      const input = userInput(text, images);
       const response = await this.client.request<TurnStartResponse>("turn/start", { threadId, input, ...settings.params });
       if (typeof response?.turn?.id === "string" && response.turn.id.length > 0) {
         this.nextTurnSettings.accepted(settings);
@@ -1236,6 +1236,14 @@ export class DesktopSession {
 const FILE_SEARCH_LIMIT = 20;
 
 /** 메시지 버스와 세션을 잇는다. 반환한 함수로 연결을 끊는다. */
+/** 글과 첨부 이미지(#2838)를 턴 입력으로 만든다. 이미지는 글 뒤에 붙는다. 원본은 로그에 남기지 않는다. */
+export function userInput(text: string, images: readonly string[] = []): UserInput[] {
+  return [
+    ...(text ? [{ type: "text" as const, text, text_elements: [] }] : []),
+    ...images.map((url) => ({ type: "image" as const, url })),
+  ];
+}
+
 export function startDesktopSession(bridge: AkraBridge, store: SessionStore, clientVersion: string): () => void {
   const session = new DesktopSession(bridge, store, clientVersion);
   session.start();
