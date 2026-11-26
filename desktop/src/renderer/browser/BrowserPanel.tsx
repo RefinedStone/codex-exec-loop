@@ -8,6 +8,22 @@ import { profileIdFromName } from "./profileId";
 
 type Editing = { kind: "profile" | "preset"; value: string } | null;
 
+// 팔레트, 단축키 창, 설정 창 같은 대화 상자이다. 페이지는 main 의 보기라서 이것들보다 위에 그려진다.
+const OVERLAY_SELECTOR = ".overlay, dialog[open]";
+
+/** 대화 상자가 열려 있는지 본다. 열린 동안 보기를 숨긴다. 숨기면 main 이 에이전트 조작을 일시 정지한다. */
+function useCoveredByOverlay(): boolean {
+  const [covered, setCovered] = useState(() => document.querySelector(OVERLAY_SELECTOR) !== null);
+  useEffect(() => {
+    const update = () => setCovered(document.querySelector(OVERLAY_SELECTOR) !== null);
+    const observer = new MutationObserver(update);
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["open", "class"] });
+    update();
+    return () => observer.disconnect();
+  }, []);
+  return covered;
+}
+
 
 export function BrowserPanel({ bridge, threadId, onStartConversation }: {
   bridge: BrowserBridge;
@@ -81,11 +97,17 @@ export function BrowserPanel({ bridge, threadId, onStartConversation }: {
     };
   }, [bridge]);
 
-  // 프로필이 정해지면(또는 바뀌면) 그 프로필의 세션으로 보기를 연다.
+  const covered = useCoveredByOverlay();
+
+  // 프로필이 정해지면(또는 바뀌면) 그 프로필의 세션으로 보기를 연다. 대화 상자가 닫히면 같은 페이지를 다시 보인다.
   useLayoutEffect(() => {
     if (!settings) return;
+    if (covered) {
+      bridge.hide();
+      return;
+    }
     void bridge.show(profileId, bounds(), null).then(setState);
-  }, [bridge, settings, profileId]);
+  }, [bridge, settings, profileId, covered]);
 
   // 자리의 크기나 위치가 바뀌면 보기도 옮긴다.
   useEffect(() => {
