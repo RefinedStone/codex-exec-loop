@@ -23,8 +23,7 @@ use super::acquire_pool_mutation_lock;
 use super::{
     AKRA_AGENT_BRANCH_PREFIX, DEFAULT_POOL_SIZE, GitWorktreeRecord, PoolMutationLock,
     SlotGitStatus, current_branch_name, derive_default_pool_root,
-    inspect_slot_git_status_with_runtime, load_worktree_records,
-    orphaned_slot_lease_mirror_matches_identity_or_missing,
+    inspect_slot_git_status_with_runtime, orphaned_slot_lease_mirror_matches_identity_or_missing,
     remove_orphaned_slot_lease_mirror_if_matches, remove_slot_lease, slot_id,
     slot_lease_mirror_matches_or_missing, worktree_paths_match_with_runtime,
 };
@@ -202,8 +201,10 @@ impl<'a> PoolSlotCleanupIdentity<'a> {
             ));
         }
 
-        let worktree_records = load_worktree_records(runtime, self.repo_root)
-            .ok_or_else(|| "git worktree inventory could not be loaded for cleanup".to_string())?;
+        let worktree_records =
+            super::inventory::load(runtime, self.repo_root).map_err(|error| {
+                format!("git worktree inventory could not be loaded for cleanup: {error}")
+            })?;
         let registered = worktree_records.iter().any(|record| {
             runtime.canonicalize_path(&record.path).ok().as_ref() == Some(&canonical_slot)
                 && if branch_must_be_checked_out {

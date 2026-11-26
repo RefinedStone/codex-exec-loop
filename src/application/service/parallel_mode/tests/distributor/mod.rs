@@ -804,7 +804,10 @@ fn assert_close_inspection_drift_preserves_remote_review_surface(
         .is_some(),
         "the remote source branch should remain available for operator review"
     );
-    let record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
+    // Review preservation is persisted in the authority, including on Windows without mirrors.
+    let record = SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+        .expect("authoritative runtime projection should remain readable")
+        .distributor_queue_records
         .into_iter()
         .next()
         .expect("queue record should persist");

@@ -1238,10 +1238,14 @@ fn distributor_blocks_queue_and_live_lease_identity_drift_before_remote_operatio
     let operations = github.operations.clone();
     let service = test_parallel_mode_service_with_github(Arc::new(github));
     enqueue_single_commit_ready_result(&service, &repo, "turn-source-identity-drift");
-    let mut record = load_distributor_queue_records(&test_parallel_runtime(), &repo.pool_root())
-        .into_iter()
-        .next()
-        .expect("queue record should exist");
+    // Identity validation reads the authority row; Windows has no filesystem queue mirror.
+    let mut record =
+        SqlitePlanningAuthorityAdapter::load_runtime_projections(&repo.workspace_dir())
+            .expect("authoritative runtime projection should remain readable")
+            .distributor_queue_records
+            .into_iter()
+            .next()
+            .expect("queue record should exist");
     record.agent_id = "different-agent".to_string();
     SqlitePlanningAuthorityAdapter::upsert_runtime_distributor_queue_record(
         &repo.workspace_dir(),
