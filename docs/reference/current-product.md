@@ -930,6 +930,15 @@ Akra Desktop (`desktop/`) runs from source as a development build; it has no pac
   and enum types, or a URL to visit). A form with a field type Desktop cannot draw offers only decline and
   cancel. `serverRequest/resolved` removes a card that another connection answered. Any other server
   request is refused with `-32601`, and Desktop shows a notice that names the method.
+- Desktop next-turn approval and sandbox policy (#2832): the "다음 턴 설정" panel above the composer
+  shows the thread's current `approvalPolicy` and sandbox policy and where Desktop read them (the
+  `thread/start` or `thread/resume` response, or `thread/settings/updated`). A value Desktop cannot read
+  (a `thread/read` open, an unknown value, or the time after a turn that sent a new value until the
+  next settings notification) shows "미확인". The user can choose `untrusted`, `on-request`, or `never`
+  and `readOnly`, `workspaceWrite`, or `dangerFullAccess` (no network, no extra writable roots). Only
+  the next `turn/start` carries the choice (`approvalPolicy`, `sandboxPolicy`); `turn/steer` never does.
+  The app-server keeps the value for later turns. A choice wider than the current value, or any choice
+  while the current value is "미확인", blocks sending until the user selects "넓은 권한 적용 확인".
 - Desktop installed skills (#2383): the "스킬" panel lists installed skills, one row per runtime, host
   (`local` only), install scope, and install path. Codex rows come from `skills/list`; Claude Code rows
   come from `~/.claude/skills` and `<work folder>/.claude/skills` on disk (install state only). Only a
