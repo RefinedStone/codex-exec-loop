@@ -110,7 +110,7 @@ try {
   await page.getByTestId("forked-from-open").click();
   await page.getByTestId("writer-elsewhere-banner").waitFor({ timeout: 15_000 });
 
-  // 결과 불명 뒤의 두 번째 분기는 먼저 묻는다. 취소하면 아무것도 보내지 않는다.
+  // 결과 불명 뒤의 두 번째 분기는 renderer 재시작 뒤에도 먼저 묻는다.
   malformedFork = true;
   const forkCount = () => requests.filter((request) => request.method === "thread/fork").length;
   await page.waitForFunction(() => !document.querySelector('[data-testid="writer-elsewhere-fork"]')?.hasAttribute("disabled"), null, { timeout: 10_000 });
@@ -118,12 +118,17 @@ try {
   await page.getByText("분기 결과를 확인하지 못했습니다").first().waitFor({ timeout: 15_000 });
   check("an answer without a new thread id is an unknown result", forkCount() === 2 && (await page.getByTestId("forked-from-banner").count()) === 0);
   await page.waitForFunction(() => !document.querySelector('[data-testid="writer-elsewhere-fork"]')?.hasAttribute("disabled"), null, { timeout: 10_000 });
+  await page.reload();
+  await page.getByTestId("connection-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 30_000 });
+  await page.getByTestId("thread-entry").first().click();
+  await page.getByTestId("writer-elsewhere-banner").waitFor({ timeout: 15_000 });
+  await page.waitForFunction(() => !document.querySelector('[data-testid="writer-elsewhere-fork"]')?.hasAttribute("disabled"), null, { timeout: 10_000 });
   let questionText = "";
   // confirm 창은 click 을 막는다. 창이 뜨는 즉시 취소한다.
   page.once("dialog", (question) => { questionText = question.message(); void question.dismiss(); });
   await forkButton.click();
   await page.waitForTimeout(500);
-  check("a fork after an unknown result asks first", questionText.includes("지난 분기 결과를 확인하지 못했습니다"), questionText);
+  check("a fork after an unknown result and reload asks first", questionText.includes("지난 분기 결과를 확인하지 못했습니다"), questionText);
   check("a cancelled fork sends nothing", forkCount() === 2, String(forkCount()));
 } catch (error) {
   check(`flow finished without error (${String(error).split("\n")[0]})`, false);

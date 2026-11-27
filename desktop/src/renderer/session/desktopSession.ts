@@ -47,6 +47,7 @@ import { applyMcpWriteApprovalNotification, clearMcpWriteApprovals, MCP_WRITE_AP
 import { NextTurnQueue } from "./nextTurnQueue";
 import { NextTurnSettingsController } from "./nextTurnSettings";
 import { ThreadCompactionController } from "./threadCompaction";
+import { ForkOutcomeJournal } from "./forkOutcomeJournal";
 import { ProvisionalThreadTitles, threadDisplayTitle } from "./threadTitles";
 import { type DotLiveState, type DotSummary, type GatewayInfo, type SessionStore, sortFolders, type WorkspaceFolder, type WorkspaceThread } from "./desktopStore";
 
@@ -257,8 +258,8 @@ export class DesktopSession {
   private addedThreads = new Map<string, Thread>();
   /** 원본 id → 진행 중인 분기이다. 같은 원본의 두 번째 요청은 같은 결과를 기다린다. */
   private readonly forksInFlight = new Map<string, Promise<ForkThreadOutcome>>();
-  /** 분기 결과를 모르는 원본이다. 다시 분기하기 전에 사용자에게 묻는다. */
-  private readonly unknownForkSources = new Set<string>();
+  /** 요청 전 기록하여 renderer 재시작 뒤에도 결과 불명 경고를 유지한다. */
+  private readonly forkOutcomes = new ForkOutcomeJournal();
   /** 사용자의 답을 기다리는 승인 요청의 응답 함수이다. 키는 요청 id 이다. */
   private readonly approvalAnswers = new Map<string, { approval: PendingApproval; answer: (answer: unknown) => void }>();
   /** 커널 패널의 연결이다 (plan 18 K3-6). 같은 Gateway 접속을 쓴다. */
@@ -668,7 +669,7 @@ export class DesktopSession {
 
   /** 이 원본의 지난 분기 결과를 모른다. 다시 분기하면 대화가 하나 더 생길 수 있다. */
   forkOutcomeUnknown(sourceThreadId: string): boolean {
-    return this.unknownForkSources.has(sourceThreadId);
+    return this.forkOutcomes.has(sourceThreadId);
   }
 
   /**
@@ -703,7 +704,12 @@ export class DesktopSession {
       return { kind: "refused", reason: `분기하지 않았습니다: ${errorMessage(error)}` };
     }
     // 여기부터 서버가 대화를 만들 수 있다. 결과를 모르면 다시 보내지 않는다.
-    this.unknownForkSources.delete(sourceThreadId);
+    let attemptId: string;
+    try {
+      attemptId = this.forkOutcomes.begin(sourceThreadId);
+    } catch {
+      return { kind: "refused", reason: "분기 결과를 안전하게 기록할 수 없어 요청을 보내지 않았습니다." };
+    }
     const params: ThreadForkParams = { threadId: sourceThreadId, lastTurnId, excludeTurns: true, ephemeral: false };
     const request = this.client.request<ThreadForkResponse>("thread/fork", params);
     let response: ThreadForkResponse | typeof FORK_TIMED_OUT;
@@ -712,9 +718,10 @@ export class DesktopSession {
       response = await Promise.race([request, new Promise<typeof FORK_TIMED_OUT>((resolve) => { timer = setTimeout(() => resolve(FORK_TIMED_OUT), FORK_RESPONSE_TIMEOUT_MS); })]);
     } catch (error) {
       if (error instanceof JsonRpcError) {
+        this.forkOutcomes.resolve(sourceThreadId, attemptId);
         return { kind: "refused", reason: error.code === -32601 ? "이 Codex app-server 는 대화 분기(thread/fork)를 지원하지 않습니다." : `분기하지 못했습니다: ${error.message}` };
       }
-      return this.forkOutcomeLost(sourceThreadId);
+      return this.forkOutcomeLost();
     } finally {
       clearTimeout(timer);
     }
@@ -727,11 +734,12 @@ export class DesktopSession {
           this.releaseUnopenedFork(forked.id);
         }
       }, () => undefined);
-      return this.forkOutcomeLost(sourceThreadId);
+      return this.forkOutcomeLost();
     }
     const forked = forkedThreadOf(response, sourceThreadId);
-    if (!forked) return this.forkOutcomeLost(sourceThreadId);
+    if (!forked) return this.forkOutcomeLost();
     this.listFork(forked);
+    this.forkOutcomes.resolve(sourceThreadId, attemptId);
     if (this.store.getOpenThreadId() === sourceThreadId && claimSelection(forked.id)) {
       this.leaveOpenThread(forked.id);
       this.batcher.clear();
@@ -745,8 +753,7 @@ export class DesktopSession {
   }
 
   /** 서버가 대화를 만들었는지 모른다. 이 원본을 다시 분기하기 전에 사용자에게 묻는다. */
-  private forkOutcomeLost(sourceThreadId: string): ForkThreadOutcome {
-    this.unknownForkSources.add(sourceThreadId);
+  private forkOutcomeLost(): ForkThreadOutcome {
     return { kind: "unknown", reason: FORK_UNKNOWN };
   }
 
@@ -952,7 +959,7 @@ export class DesktopSession {
       this.store.setActiveThreads(activeThreadIds(threads, statusChanges));
       // 원격 호스트는 목록을 한 번만 읽는다 (plan 25 §8).
       if (!this.readOnly) {
-        void this.addThreadsFromRolloutScan(generation);
+        void this.addThreadsFromRolloutScan(generation, titleReadRevision);
         void this.readAccountLimits();
       } else {
         void this.loadDots();
@@ -1014,9 +1021,8 @@ export class DesktopSession {
    * 먼저 보여 준다. 2026-11-06 실측 (rollout 1,465개, 18 GB): 상태 DB 67ms, 전체 검사 27s. 검사 중에는 스레드
    * 열기가 0.8s 에서 3.4s 로 느려진다.
    */
-  private async addThreadsFromRolloutScan(generation: number): Promise<void> {
+  private async addThreadsFromRolloutScan(generation: number, titleReadRevision: number): Promise<void> {
     try {
-      const titleReadRevision = this.titleRevision;
       const threads = await this.listAllThreads(false);
       if (generation === this.listGeneration && this.connected) {
         this.store.mergeFolders(groupThreadsByCwd(this.withLifecycleChanges(threads, titleReadRevision)));
@@ -1096,8 +1102,12 @@ export class DesktopSession {
         transcript = prependOlderTurns(transcript, page.data, page.nextCursor);
       }
       // Reconcile the authoritative name only after the complete resume is still current.
-      if (opened.thread.id === threadId) this.observeThreadName(opened.thread, titleReadRevision);
-      const title = this.renamedThreads.get(threadId);
+      const summary = this.store.getWorkspaceThread(threadId);
+      // Recovery of a missing fork origin must not overwrite a newer sidebar title
+      // with metadata from an older thread/read or thread/resume response.
+      const olderThanSummary = summary !== undefined && summary.updatedAt > opened.thread.updatedAt;
+      if (opened.thread.id === threadId && !olderThanSummary) this.observeThreadName(opened.thread, titleReadRevision);
+      const title = this.renamedThreads.get(threadId) ?? (olderThanSummary ? summary.title : undefined);
       const loaded = applyNotifications(transcript, loading.buffer);
       this.store.setTranscript(title === undefined ? loaded : { ...loaded, title });
     } catch (error) {
