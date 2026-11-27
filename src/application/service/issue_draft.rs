@@ -16,7 +16,8 @@ use crate::application::port::inbound::issue_draft_port::{
     IssueDraftValidationError,
 };
 use crate::application::port::outbound::issue_code_validator_runner_port::{
-    IssueCodeValidatorCancellation, IssueCodeValidatorRunnerPort,
+    IssueCodeValidatorCancellation, IssueCodeValidatorNotRun, IssueCodeValidatorRunOutcome,
+    IssueCodeValidatorRunnerPort,
 };
 use crate::application::port::outbound::issue_snapshot_port::{
     IssueSnapshotPort, IssueSnapshotResolveRequest, IssueSnapshotResponse,
@@ -462,7 +463,14 @@ fn evaluate(
                 .map(|result| IssueDraftValidationError {
                     field: "code_validator",
                     label: Some(result.id.clone()),
-                    kind: "failed",
+                    kind: if result.outcome
+                        == IssueCodeValidatorRunOutcome::NotRun(
+                            IssueCodeValidatorNotRun::IsolationUnavailable,
+                        ) {
+                        "isolation_unavailable"
+                    } else {
+                        "failed"
+                    },
                 })
                 .collect(),
             false,
@@ -812,6 +820,17 @@ mod tests {
         }
     }
 
+    struct IsolationUnavailableRunner;
+    impl IssueCodeValidatorRunnerPort for IsolationUnavailableRunner {
+        fn run(
+            &self,
+            _: IssueCodeValidatorRunRequest,
+            _: &IssueCodeValidatorCancellation,
+        ) -> IssueCodeValidatorRunOutcome {
+            IssueCodeValidatorRunOutcome::NotRun(IssueCodeValidatorNotRun::IsolationUnavailable)
+        }
+    }
+
     /// 시작을 알리고 취소를 받을 때까지 기다린 뒤 통과로 끝난다: 취소와 겹친 늦은 성공이다.
     struct PassesAfterCancel {
         started: Mutex<std::sync::mpsc::Sender<()>>,
@@ -938,6 +957,63 @@ mod tests {
             shared_copy_only: false,
             validation_id: None,
         }
+    }
+
+    #[test]
+    fn unavailable_isolation_blocks_publish_with_actionable_reason() {
+        let fixture = fixture_with_runner(false, Arc::new(IsolationUnavailableRunner));
+        let command = if cfg!(windows) {
+            "C:/validators/team-rules.exe"
+        } else {
+            "/opt/validators/team-rules"
+        };
+        *fixture.files.user_policy.lock().unwrap() = Some(format!(
+            "[approved_code_validators.team-rules]\ncommand = \"{command}\"\nsha256 = \"{}\"\n",
+            "a".repeat(64)
+        ));
+        fixture
+            .files
+            .policy
+            .lock()
+            .unwrap()
+            .push_str("\n[[code_validators]]\nid = \"team-rules\"\n");
+        let text = text_with_span(Some(IssueSensitiveSpanClass::Secret));
+        let (_, approval, publishable) = ready(
+            fixture
+                .service
+                .preview(IssueDraftPreviewRequest {
+                    expected_labels: Vec::new(),
+                    target: target(),
+                    text: text.clone(),
+                })
+                .unwrap(),
+        );
+        assert!(publishable);
+        let published = fixture
+            .service
+            .publish(publish_request(&fixture, text, approval))
+            .unwrap();
+        let IssueDraftPublished::Blocked {
+            preview:
+                IssueDraftPreview::Ready {
+                    errors,
+                    publishable,
+                    ..
+                },
+        } = published
+        else {
+            panic!("expected blocked publish")
+        };
+        assert!(!publishable);
+        assert_eq!(
+            errors,
+            [IssueDraftValidationError {
+                field: "code_validator",
+                label: Some("team-rules".into()),
+                kind: "isolation_unavailable",
+            }]
+        );
+        assert_eq!(*fixture.remote.writes.lock().unwrap(), 0);
     }
 
     #[test]

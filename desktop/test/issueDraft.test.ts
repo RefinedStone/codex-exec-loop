@@ -73,6 +73,10 @@ describe("issue draft approval and status", () => {
     expect(issueDraftTarget("/work/app", "widgets", 7)).toBeNull();
     expect(validationErrorText({ field: "required_section", label: "Impact", kind: "missing" })).toBe('필수 섹션 "Impact": 섹션이 없습니다');
     expect(validationErrorText({ field: "title", label: null, kind: "empty" })).toBe("제목: 값이 비어 있습니다");
+    const isolation = validationErrorText({ field: "code_validator", label: "team-rules", kind: "isolation_unavailable" });
+    expect(isolation).toContain("게시가 차단됩니다");
+    expect(isolation).toContain("Ubuntu 22.04 + bubblewrap 0.13.1");
+    expect(isolation).toContain("격리 없는 실행은 지원하지 않습니다");
   });
 });
 

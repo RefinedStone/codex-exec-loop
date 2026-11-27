@@ -54,3 +54,20 @@ Ubuntu 22.04 + 고정 upstream bubblewrap 0.13.1에서 network namespace, root �
 거부 메시지는 보관하는 원시 바이트뿐 아니라 lossy UTF-8 변환 이후에도 4096 byte 이하로 자른다. 문자 중간을 자르지 않는다. Linux/macOS/Windows가 공통 함수를 사용한다.
 
 검증: Windows x64, Rust 1.95.0, prerelease 1d538c2fe 기반 변경에서 issue_code_validator 모듈 16/16 통과. 정상 LPAC 실행, 실제 격리, native 취소·Job 정리, suspended 상태의 취소 및 무효 token 검사, 공통 UTF-8 경계 회귀 포함. Linux/macOS 변경은 이 실행에서 native로 검증하지 않았다. 기존 지원 프로필·미지원 호스트 계약은 바꾸지 않는다.
+
+
+## Ubuntu 24.04 기본 호스트 지원 결정 (#2861)
+
+기존 native 검증 기록의 Ubuntu 24.04 기본 프로필은 **미지원**으로 유지한다.
+필수 namespace를 제공하지 못한 환경을 성공으로 간주하지 않는다. 배포판 이름만으로
+안전하다고 판단하거나 전체 Ubuntu 24.04 환경이 본질적으로 격리 불가능하다고 단정하지 않는다.
+실행 시 기존 capability 검사와 sandbox 시작 프레임이 최종 경계다.
+
+필수 검증기가 격리 불가로 실행되지 않으면 게시 응답은
+code_validator / isolation_unavailable을 반환한다. Desktop은 검증된 호스트에서
+다시 실행하도록 안내한다. 지원이 검증된 Linux 프로필은 Ubuntu 22.04 +
+upstream bubblewrap 0.13.1이다. 초안은 로컬에 유지하고 필수 검증을 생략하거나
+sysctl/AppArmor를 완화하거나 직접 실행하는 대안은 제공하지 않는다.
+24.04를 지원 범위로 올리려면 정책 변경 없는 별도 disposable native 호스트에서
+기존 전체 suite를 통과해야 한다. 이 변경은 기존 증거를 기반으로 한 미지원 안내이며
+새로운 24.04 native 실행 결과가 아니다.

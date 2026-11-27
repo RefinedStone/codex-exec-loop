@@ -74,7 +74,7 @@ export interface IssueDraftValidationError {
   field: "title" | "template_field" | "required_section" | "code_validator";
   label: string | null;
   /** `failed` 는 필수 코드 검증기가 통과하지 않은 것이다. 게시할 때만 나온다. */
-  kind: "missing" | "empty" | "invalid_format" | "failed" | "cancelled";
+  kind: "missing" | "empty" | "invalid_format" | "failed" | "cancelled" | "isolation_unavailable";
 }
 
 export type IssueDraftAutonomy = "off" | "observe" | "propose" | "gated" | "auto";
@@ -233,7 +233,7 @@ export function intentStatus(intent: IssueDraftIntent | null): IssuePublishStatu
   return null;
 }
 
-const ERROR_KIND: Record<IssueDraftValidationError["kind"], string> = { missing: "섹션이 없습니다", empty: "값이 비어 있습니다", invalid_format: "값의 형식이 맞지 않습니다", failed: "통과하지 못했습니다", cancelled: "사용자가 검증을 취소했습니다" };
+const ERROR_KIND: Record<IssueDraftValidationError["kind"], string> = { missing: "섹션이 없습니다", empty: "값이 비어 있습니다", invalid_format: "값의 형식이 맞지 않습니다", failed: "통과하지 못했습니다", cancelled: "사용자가 검증을 취소했습니다", isolation_unavailable: "필수 격리를 구성할 수 없어 실행하지 않았습니다. 게시가 차단됩니다. 지원이 검증된 호스트에서 다시 실행하세요 (Linux: Ubuntu 22.04 + bubblewrap 0.13.1, Ubuntu 24.04 기본 프로필 미지원). 격리 없는 실행은 지원하지 않습니다." };
 const ERROR_FIELD: Record<Exclude<IssueDraftValidationError["field"], "title">, string> = { template_field: "템플릿 필드", required_section: "필수 섹션", code_validator: "코드 검증기" };
 
 export function validationErrorText(error: IssueDraftValidationError): string {
