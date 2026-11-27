@@ -52,6 +52,8 @@ export class ProvisionalThreadTitles {
 
   stopGenerating(threadId: string): void { this.eligible.delete(threadId); }
 
+  candidate(threadId: string): string | undefined { return this.displayed.get(threadId); }
+
   forget(threadId: string): void {
     this.eligible.delete(threadId);
     this.displayed.delete(threadId);

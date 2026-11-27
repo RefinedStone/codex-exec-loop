@@ -1,6 +1,6 @@
-﻿// 화면 시험 (#2841): 사이드바 스레드의 오른쪽 클릭 메뉴로 이름 바꾸기, 보관과 되돌리기를 공식 app-server 요청으로 보낸다.
+// 화면 시험 (#2841): 사이드바 스레드의 오른쪽 클릭 메뉴로 이름 바꾸기, 보관과 되돌리기를 공식 app-server 요청으로 보낸다.
 // 실제 codex 와 턴은 쓰지 않는다 (가짜 Gateway). userData 는 임시 폴더를 쓴다.
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -25,9 +25,19 @@ const requests = [];
 let failUnarchive = true;
 const userData = mkdtempSync(join(tmpdir(), "akra-e2e-thread-menu-"));
 const endpoint = fake.uniqueTestEndpoint();
+let newThreads = 0;
+const task = "Kafka 결제 중복 재현";
+const external = join(userData, "external.jsonl");
+writeFileSync(external, [
+  ["client", { method: "fixture/external-name" }],
+  ["gateway", { method: "thread/name/updated", params: { threadId: "new-2", threadName: `${task} #2` } }],
+].map(([direction, frame]) => JSON.stringify({ direction, text: JSON.stringify(frame) })).join("\n"));
 // 녹화 둘: 스레드 목록과, initialize 응답이 있는 턴 녹화이다.
-const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING], {
+const gateway = await fake.startFakeGateway(endpoint, [external, fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING], {
   appServer(method, params) {
+    if (method === "thread/start") return { result: { thread: { ...listed, name: null, preview: "", id: `new-${++newThreads}`, turns: [] } } };
+    if (method === "turn/start") return { result: { turn: { id: "active-fixture", status: "inProgress", items: [] } } };
+    if (method === "turn/steer") return { result: { turnId: params.expectedTurnId } };
     if (!["thread/name/set", "thread/archive", "thread/unarchive"].includes(method)) return undefined;
     requests.push({ method, params });
     if (method === "thread/unarchive" && failUnarchive) {
@@ -85,6 +95,34 @@ try {
   check("the menu opens at the click point in a zoomed sidebar", Math.abs(menu.left - click.x) < 2 && Math.abs(menu.top - click.y) < 2,
     JSON.stringify({ click, menu }));
   await page.keyboard.press("Escape");
+  // Start with a greeting. The first useful text is accepted through steer, not turn/start.
+  const makeCandidate = async (text) => {
+    await page.getByTestId("new-thread").first().click();
+    const input = page.getByTestId("composer-input");
+    await input.fill("안녕하세요!");
+    await page.getByTestId("composer-send").click();
+    await page.getByTestId("conversation").waitFor();
+    await input.fill(text);
+    await page.getByTestId("composer-send").click();
+    const row = page.getByTestId("thread-entry").filter({ hasText: text });
+    await row.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "임시 제목 검토 및 저장…" }).click();
+  };
+  const nameWrites = () => requests.filter(request => request.method === "thread/name/set");
+  const editor = page.getByTestId("thread-rename-input");
+  await makeCandidate(task);
+  check("review does not write", nameWrites().length === 1 && await editor.inputValue() === task);
+  await editor.press("Enter");
+  await page.getByTestId("thread-entry").filter({ hasText: task }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "이름 바꾸기" }).waitFor();
+  check("explicit Enter saves the unchanged local candidate once", nameWrites().length === 2
+    && nameWrites().at(-1).params.threadId === "new-1" && nameWrites().at(-1).params.name === task);
+  await page.keyboard.press("Escape");
+  await makeCandidate(`${task} #2`);
+  await editor.fill("저장하면 안 되는 초안");
+  await page.evaluate(() => window.akra.send(JSON.stringify({ method: "fixture/external-name" })));
+  await editor.waitFor({ state: "detached", timeout: 5_000 });
+  check("an equal external name invalidates the edited candidate without writing", nameWrites().length === 2);
 } catch (error) {
   check(`flow finished without error (${String(error).split("\n")[0]})`, false);
 } finally {
