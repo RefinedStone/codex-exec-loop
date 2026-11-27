@@ -5,6 +5,7 @@ import type { BrowserAgentBridge } from "./browserAgent";
 import type { AppSettings, AppSettingsPatch } from "./settings";
 import type { SkillsBridge } from "./skills";
 import type { VaultApprovedMapping, VaultRestoreTarget, VaultRestoreViewState } from "./vaultRestore";
+import type { EvidencePreview } from "./evidencePreview";
 import type { ZoomDirection, ZoomFactors, ZoomScope } from "./zoom";
 import type { ConfirmTaskCriterionWaiverRequest, ConfirmIssueBindingResumeRequest, ConfirmIssueAutonomyRequest, ConfirmIssueAutomationModeRequest, ConfirmIssueDecisionRequest, IssueConfirmationResponse } from "./issueConfirmation";
 import type { DiagnosticsBridge } from "./diagnostics";
@@ -109,6 +110,7 @@ export const IPC_CHANNELS = {
   settingsOpen: "akra:settings-open",
   reportWorking: "akra:report-working",
   vaultRestoreOpen: "akra:vault-restore-open",
+  evidencePreview: "akra:evidence-preview",
   vaultRestoreProjectChanged: "akra:vault-restore-project-changed",
   skillsList: "akra:skills-list",
   skillsLink: "akra:skills-link",
@@ -486,6 +488,7 @@ export interface AkraBridge {
   skills: SkillsBridge;
   /** 로컬 복원본 창을 연다 (#2427). 복원한 글은 이 버스로 오지 않는다. */
   vaultRestore: VaultRestoreOpenerBridge;
+  openEvidencePreview?(target: EvidencePreview): Promise<void>;
 }
 
 /** 앱 설정이다 (plan 26 U2). 값은 main 이 가지고 저장한다. */

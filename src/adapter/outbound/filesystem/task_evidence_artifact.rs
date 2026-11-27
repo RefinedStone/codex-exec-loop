@@ -128,6 +128,37 @@ impl FilesystemTaskEvidenceArtifactAdapter {
 }
 
 impl TaskEvidenceArtifactPort for FilesystemTaskEvidenceArtifactAdapter {
+    fn preview_bytes(
+        &self,
+        workspace: &str,
+        receipt: akra_verification::ports::task_evidence_artifact_port::SealedEvidence<'_>,
+    ) -> Result<Vec<u8>> {
+        use akra_verification::ports::task_evidence_artifact_port::{
+            MAX_PREVIEW_BYTES, SealedEvidence,
+        };
+        let (directory, expected) = match receipt {
+            SealedEvidence::Worker(attempt, artifact) => {
+                (self.sealed(workspace, attempt, false)?, artifact)
+            }
+            SealedEvidence::Host(id, artifact) => {
+                validate_host_id(id)?;
+                (
+                    self.evidence_root(workspace, false)?
+                        .child("sealed", false)?
+                        .child("verification", false)?
+                        .child(id, false)?,
+                    artifact,
+                )
+            }
+        };
+        expected.validate()?;
+        let bytes = files::StableFile::open(&directory, ARTIFACT_FILE)?
+            .read_bounded(&directory, MAX_PREVIEW_BYTES)?;
+        if artifact_for_bytes(&bytes)? != *expected {
+            return Err(TaskEvidenceError::Stale.into());
+        }
+        Ok(bytes)
+    }
     fn prepare_lease_incoming_root(
         &self,
         workspace: &str,

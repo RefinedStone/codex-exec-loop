@@ -2,6 +2,7 @@
 import type { PlanningEvidenceFreshness } from "./kernelConnection";
 import { TaskVerificationView, type TaskVerificationActions } from "./TaskVerificationView";
 import { TaskCriterionWaiverView } from "./TaskCriterionWaiverView";
+import { EvidencePreviewButton } from "./EvidencePreviewButton";
 import type { TaskCriterionWaiverActions } from "./taskCriterionWaiver";
 import type {
   PlanningCriterionEvidenceState, PlanningState, TaskAcceptanceCriterion, TaskCriterionEvidenceState,
@@ -113,6 +114,11 @@ function CriterionRow({ entry, current, unavailable, task, snapshot, freshness, 
             <dt>파일 크기</dt><dd>{evidence.artifact.size_bytes} 바이트</dd>
             <TreeMetadata tree={evidence.recorded_tree} />
           </dl>
+          {currentReport && entry.evidence && <EvidencePreviewButton key={entry.evidence.event_id} target={{
+            kind: "worker", task_id: task.scope.task_id, criterion_id: entry.criterion.id,
+            scope_id: task.scope.scope_id, revision: task.scope.acceptance_revision,
+            event_id: entry.evidence.event_id, sha256: evidence.artifact.sha256,
+          }} />}
         </details>
       )}
       {waiver && (

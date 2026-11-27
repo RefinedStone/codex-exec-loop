@@ -19,6 +19,7 @@ use std::sync::{Arc, Barrier};
 const NOW: &str = "2026-11-23T12:00:00Z";
 
 mod delivery;
+mod preview;
 mod verification;
 
 struct Fixture {

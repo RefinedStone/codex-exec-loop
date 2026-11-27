@@ -85,6 +85,14 @@ symlink/reparse point, 빈 파일, 크기 초과, 파일 교체와 읽는 동안
 
 ## 현재 상태
 
+Desktop에서 기준의 **정제된 증거 열기**를 누르면 main이 해당 scope·revision·criterion 및
+receipt event ID와 hash로 전용 로컬 helper에 요청한다. 읽을 수 있는 대상은 16 KiB 이하의
+sealed UTF-8 텍스트이며, 호스트 capture는 같은 한도 안에서 stdout/stderr를 풀어 보여 준다.
+같은 파일 핸들에서 읽은 bytes의 hash와 크기가 일치해야 한다. 일반 경로·incoming 파일·
+binary나 잘린 부분은 열지 않는다. 기존 공유본 정책의 알려진 비밀 형식을 가린 뒤 별도 OS
+대화상자에 표시한다. 사용자가 닫으면 본문은 유지하지 않는다. 일반 renderer, 이벤트 장부,
+예외에는 본문이 없다. 알려지지 않은 비밀 형식까지 탐지한다는 보장은 아니다.
+
 | 상태 | 의미 |
 | --- | --- |
 | `pending` | 이 기준에 적용할 완료된 증거 기록이나 현재 면제가 없음 |

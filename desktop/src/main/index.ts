@@ -1,4 +1,5 @@
 import { revealStoragePath } from "./storageReveal";
+import { openEvidencePreview } from "./evidencePreview";
 // Electron main: Gateway 문자열 중계와 native UI를 소유한다. 확인 프로토콜은 별도 utility process에서 처리한다.
 import { spawn } from "node:child_process";
 import { lstat } from "node:fs/promises";
@@ -903,6 +904,8 @@ ipcMain.handle(IPC_CHANNELS.diagnosticsPreview, (event, versions: unknown) => {
   diagnosticOwner(event);
   return diagnosticsFor(event.sender.id).preview(versions);
 });
+ipcMain.handle(IPC_CHANNELS.evidencePreview, (event, target: unknown) =>
+  openEvidencePreview(diagnosticOwner(event), resolveGatewayExecutable(repositoryRoot()), target));
 ipcMain.handle(IPC_CHANNELS.diagnosticsDiscard, (event, id: unknown) => {
   diagnosticOwner(event);
   diagnosticsFor(event.sender.id).discard(id);
