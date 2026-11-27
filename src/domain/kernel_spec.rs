@@ -105,6 +105,14 @@ spec_names! {
             "Replace a planning direction as the operator. A missing summary becomes the title and a missing state becomes `active`. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.";
         DeleteDirection => "delete_direction",
             "Delete a planning direction, its tasks, and the references to them. The default direction is kept. `expected_planning_revision` is the revision that the sender read; a different current revision rejects the command.";
+        ExportPlanningFiles => "export_planning_files",
+            "Write the stored planning support files into the primary checkout of the repository as files to edit. Planning data does not change. The answer carries the directory and the paths. Not available on Windows.";
+        ApplyPlanningFiles => "apply_planning_files",
+            "Read the exported planning support files and store them. The export recorded the planning revision; a different current revision rejects the command. Not available on Windows.";
+        PromoteDraft => "promote_draft",
+            "Promote a saved planning editor draft into active planning as the operator. `expected_planning_revision` is the revision that the draft was made from; a different current revision rejects the command. A draft that fails validation changes nothing; the answer carries the validation result.";
+        SaveParallelAgentProfiles => "save_parallel_agent_profiles",
+            "Replace the parallel agent profiles of the repository in its primary checkout. The profiles are validated first; an empty list restores the built-in profiles. Not available on Windows.";
         SetIssueAutomationMode => "set_issue_automation_mode",
             "Persist the issue collection mode: off or observe. Raising the mode requires Desktop human confirmation; lowering it does not. The answer follows the ledger commit.";
         SetIssueAutonomy => "set_issue_autonomy",
@@ -424,6 +432,10 @@ impl KernelCommandKind {
             | Self::CreateDirection
             | Self::UpdateDirection
             | Self::DeleteDirection
+            | Self::ExportPlanningFiles
+            | Self::ApplyPlanningFiles
+            | Self::PromoteDraft
+            | Self::SaveParallelAgentProfiles
             | Self::SetIssueAutomationMode
             | Self::SetIssueAutonomy
             | Self::SetIssueBindingPaused
@@ -591,7 +603,17 @@ impl KernelCommandKind {
                 Keyed,
                 &[Reason::PlanningLocked],
             ),
-            Self::UpdateTask | Self::UpdateDirection => (
+            Self::ExportPlanningFiles => (
+                CommandScope::Planning,
+                Write,
+                Natural,
+                &[Reason::PlanningLocked],
+            ),
+            Self::SaveParallelAgentProfiles => (CommandScope::Parallel, Write, Natural, &[]),
+            Self::UpdateTask
+            | Self::UpdateDirection
+            | Self::ApplyPlanningFiles
+            | Self::PromoteDraft => (
                 CommandScope::Planning,
                 Write,
                 Natural,
@@ -617,6 +639,10 @@ impl KernelCommandKind {
                 | Self::CreateDirection
                 | Self::UpdateDirection
                 | Self::DeleteDirection
+                | Self::ExportPlanningFiles
+                | Self::ApplyPlanningFiles
+                | Self::PromoteDraft
+                | Self::SaveParallelAgentProfiles
                 | Self::SetIssueAutomationMode
                 | Self::SetIssueAutonomy
                 | Self::AnswerIssueDecision

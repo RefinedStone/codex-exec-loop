@@ -11,6 +11,7 @@ use crate::application::port::inbound::stored_command_port::{
 };
 use crate::application::service::issue_collection::IssueCollectionService;
 use crate::application::service::issue_decision::IssueDecisionService;
+use crate::application::service::parallel_agent_profile::ParallelAgentProfileService;
 use crate::application::service::planning::PlanningAdminFacadeService;
 use crate::application::service::planning::task_mutation::{
     PlanningTaskCreateInput, PlanningTaskMutationCommand, PlanningTaskUpdateInput,
@@ -32,6 +33,7 @@ pub struct StoredCommandService {
     task_evidence: Option<Arc<TaskEvidenceService>>,
     task_verification: Option<Arc<TaskVerificationService>>,
     binding_pause: Option<Arc<super::issue_binding_pause::IssueBindingPauseService>>,
+    parallel_agent_profiles: Option<ParallelAgentProfileService>,
 }
 
 impl StoredCommandService {
@@ -44,7 +46,13 @@ impl StoredCommandService {
             task_evidence: None,
             task_verification: None,
             binding_pause: None,
+            parallel_agent_profiles: None,
         }
+    }
+
+    pub fn with_parallel_agent_profiles(mut self, profiles: ParallelAgentProfileService) -> Self {
+        self.parallel_agent_profiles = Some(profiles);
+        self
     }
 
     pub fn with_binding_pause(
@@ -323,6 +331,47 @@ impl StoredCommandService {
                     default_retained: deletion.default_retained,
                     planning_revision: deletion.planning_revision,
                 })
+            }
+            // 파일은 이 실행기의 작업 공간(커널의 대표 checkout)에 있다. 명령을 보낸 쪽의 폴더가 아니다.
+            StoredCommand::ExportPlanningFiles => Ok(StoredCommandResult::PlanningFilesExported {
+                directory: self.planning.workspace_dir().to_string(),
+                paths: self.planning.export_operator_planning_files()?,
+            }),
+            StoredCommand::ApplyPlanningFiles => {
+                let (paths, planning_revision) = self.planning.apply_operator_planning_files()?;
+                Ok(StoredCommandResult::PlanningFilesApplied {
+                    directory: self.planning.workspace_dir().to_string(),
+                    paths,
+                    planning_revision,
+                })
+            }
+            StoredCommand::PromoteDraft {
+                draft_name,
+                kind,
+                direction_id,
+                expected_planning_revision,
+            } => {
+                let promotion = self.planning.promote_operator_draft(
+                    &draft_name,
+                    kind,
+                    direction_id.as_deref(),
+                    expected_planning_revision,
+                )?;
+                Ok(StoredCommandResult::DraftPromoted {
+                    promoted_file_count: promotion.promoted_file_count,
+                    is_valid: promotion.validation_report.is_valid(),
+                    planning_revision: promotion.committed_planning_revision,
+                })
+            }
+            // 프로필도 이 실행기의 작업 공간(커널의 대표 checkout)에 쓴다. 커널이 배분할 때 그 파일을 읽는다.
+            StoredCommand::SaveParallelAgentProfiles { config } => {
+                let directory = self.planning.workspace_dir().to_string();
+                self.parallel_agent_profiles
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("parallel agent profiles are unavailable"))?
+                    .save_config(&directory, &config)
+                    .map_err(anyhow::Error::msg)?;
+                Ok(StoredCommandResult::ParallelAgentProfilesSaved { directory })
             }
         }
     }

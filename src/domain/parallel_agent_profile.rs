@@ -11,7 +11,7 @@ const AVATAR_CLASSES: &[&str] = &[
     "Runner",
 ];
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ParallelAgentProfile {
     pub agent_id: String,
     pub display_name: String,

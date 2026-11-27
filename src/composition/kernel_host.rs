@@ -647,6 +647,13 @@ fn stored_change_being_read(outcome: &KernelCommandOutcome) -> Option<i64> {
             }
             | StoredCommandResult::DirectionDeleted {
                 planning_revision, ..
+            }
+            | StoredCommandResult::PlanningFilesApplied {
+                planning_revision, ..
+            }
+            | StoredCommandResult::DraftPromoted {
+                planning_revision: Some(planning_revision),
+                ..
             },
         ) => *planning_revision,
         StoredCommandOutcome::Rejected(rejection) => rejection.planning_revision?,
@@ -660,7 +667,13 @@ fn stored_change_being_read(outcome: &KernelCommandOutcome) -> Option<i64> {
             | StoredCommandResult::IssueBindingPauseRequested { .. }
             | StoredCommandResult::IssueDecisionResolved { .. }
             | StoredCommandResult::IssueDecisionRequested { .. }
-            | StoredCommandResult::IssueIntervened { .. },
+            | StoredCommandResult::IssueIntervened { .. }
+            | StoredCommandResult::PlanningFilesExported { .. }
+            | StoredCommandResult::DraftPromoted {
+                planning_revision: None,
+                ..
+            }
+            | StoredCommandResult::ParallelAgentProfilesSaved { .. },
         ) => {
             return None;
         }

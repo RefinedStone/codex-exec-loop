@@ -19,8 +19,8 @@ use crate::application::service::planning::shared::authority_mutation_guard::wit
 use crate::domain::planning::PriorityQueueService;
 use crate::domain::planning::{DEFAULT_QUEUE_IDLE_PROMPT_FILE_PATH, RESULT_OUTPUT_FILE_PATH};
 use crate::domain::planning::{
-    DirectionCatalogDocument, PlanningValidationReport, TASK_AUTHORITY_FORMAT_VERSION,
-    TaskAuthorityDocument,
+    DirectionCatalogDocument, PlanningMutationRefusal, PlanningValidationReport,
+    TASK_AUTHORITY_FORMAT_VERSION, TaskAuthorityDocument,
 };
 use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
@@ -350,13 +350,19 @@ impl PlanningInitService {
         if let Some(source_planning_revision) = source_planning_revision
             && baseline.observed_planning_revision != Some(source_planning_revision)
         {
-            let current_planning_revision = baseline
-                .observed_planning_revision
-                .map(|revision| revision.to_string())
-                .unwrap_or_else(|| "missing".to_string());
-            return Err(anyhow!(
-                "planning authority changed from revision {source_planning_revision} to {current_planning_revision}; reload and retry"
-            ));
+            // 낡은 초안의 승격은 거절이다 (plan 18 K4-9d-5). 저장소에 revision 이 없으면 그냥 실패이다.
+            return Err(match baseline.observed_planning_revision {
+                Some(current_planning_revision) => PlanningMutationRefusal::revision_stale(
+                    format!(
+                        "planning authority changed from revision {source_planning_revision} to {current_planning_revision}; reload and retry"
+                    ),
+                    current_planning_revision,
+                )
+                .into(),
+                None => anyhow!(
+                    "planning authority changed from revision {source_planning_revision} to missing; reload and retry"
+                ),
+            });
         }
         let validation_result = self.validate_loaded_draft_result(
             workspace_dir,
@@ -611,9 +617,13 @@ impl PlanningInitService {
             PlanningTaskAuthorityCommitResult::Conflict {
                 observed_planning_revision,
                 current_planning_revision,
-            } => Err(anyhow!(
-                "planning authority changed from revision {observed_planning_revision} to {current_planning_revision}; reload and retry"
-            )),
+            } => Err(PlanningMutationRefusal::revision_stale(
+                format!(
+                    "planning authority changed from revision {observed_planning_revision} to {current_planning_revision}; reload and retry"
+                ),
+                current_planning_revision,
+            )
+            .into()),
         }
     }
 

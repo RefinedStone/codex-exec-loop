@@ -1400,6 +1400,242 @@
       }
     },
     {
+      "name": "export_planning_files",
+      "scope": "planning",
+      "state": "store",
+      "summary": "Write the stored planning support files into the primary checkout of the repository as files to edit. Planning data does not change. The answer carries the directory and the paths. Not available on Windows.",
+      "effect": "write",
+      "idempotency": "natural",
+      "rejections": [
+        "planning_locked"
+      ],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "export_planning_files",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": {
+            "const": "planning_files_exported",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "directory",
+          "paths"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "apply_planning_files",
+      "scope": "planning",
+      "state": "store",
+      "summary": "Read the exported planning support files and store them. The export recorded the planning revision; a different current revision rejects the command. Not available on Windows.",
+      "effect": "write",
+      "idempotency": "natural",
+      "rejections": [
+        "planning_revision_stale",
+        "planning_locked"
+      ],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "apply_planning_files",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "planning_revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "type": {
+            "const": "planning_files_applied",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "directory",
+          "paths",
+          "planning_revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "promote_draft",
+      "scope": "planning",
+      "state": "store",
+      "summary": "Promote a saved planning editor draft into active planning as the operator. `expected_planning_revision` is the revision that the draft was made from; a different current revision rejects the command. A draft that fails validation changes nothing; the answer carries the validation result.",
+      "effect": "write",
+      "idempotency": "natural",
+      "rejections": [
+        "planning_revision_stale",
+        "planning_locked"
+      ],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "direction_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "draft_name": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "expected_planning_revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/$defs/PlanningAdminDraftKind"
+          },
+          "type": {
+            "const": "promote_draft",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "draft_name",
+          "kind",
+          "expected_planning_revision"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "is_valid": {
+            "type": "boolean"
+          },
+          "planning_revision": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "promoted_file_count": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": {
+            "const": "draft_promoted",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "promoted_file_count",
+          "is_valid"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "save_parallel_agent_profiles",
+      "scope": "parallel",
+      "state": "store",
+      "summary": "Replace the parallel agent profiles of the repository in its primary checkout. The profiles are validated first; an empty list restores the built-in profiles. Not available on Windows.",
+      "effect": "write",
+      "idempotency": "natural",
+      "rejections": [],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "profiles": {
+            "items": {
+              "$ref": "#/$defs/ParallelAgentProfile"
+            },
+            "type": "array"
+          },
+          "type": {
+            "const": "save_parallel_agent_profiles",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "profiles"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "type": {
+            "const": "parallel_agent_profiles_saved",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "directory"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "set_issue_automation_mode",
       "scope": "issue",
       "state": "store",
@@ -7023,6 +7259,102 @@
         },
         {
           "properties": {
+            "directory": {
+              "type": "string"
+            },
+            "paths": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "planning_files_exported",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "directory",
+            "paths"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "directory": {
+              "type": "string"
+            },
+            "paths": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "planning_revision": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "planning_files_applied",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "directory",
+            "paths",
+            "planning_revision"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "is_valid": {
+              "type": "boolean"
+            },
+            "planning_revision": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "promoted_file_count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "draft_promoted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "promoted_file_count",
+            "is_valid"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "directory": {
+              "type": "string"
+            },
+            "type": {
+              "const": "parallel_agent_profiles_saved",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "directory"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "autonomy": {
               "$ref": "#/$defs/IssueAutonomyState"
             },
@@ -11634,6 +11966,86 @@
         {
           "additionalProperties": false,
           "properties": {
+            "type": {
+              "const": "export_planning_files",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "apply_planning_files",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "direction_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "draft_name": {
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "expected_planning_revision": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "kind": {
+              "$ref": "#/$defs/PlanningAdminDraftKind"
+            },
+            "type": {
+              "const": "promote_draft",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "draft_name",
+            "kind",
+            "expected_planning_revision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "profiles": {
+              "items": {
+                "$ref": "#/$defs/ParallelAgentProfile"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "save_parallel_agent_profiles",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "profiles"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "mode": {
               "$ref": "#/$defs/IssueAutomationModeRecord"
             },
@@ -15127,6 +15539,44 @@
       ],
       "type": "object"
     },
+    "ParallelAgentProfile": {
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "avatar_class": {
+          "type": "string"
+        },
+        "capabilities": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "persona_prompt": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent_id",
+        "display_name",
+        "role",
+        "persona_prompt",
+        "avatar_class"
+      ],
+      "type": "object"
+    },
     "ParallelAgentState": {
       "enum": [
         "starting",
@@ -15425,6 +15875,14 @@
         "blocked",
         "unreachable",
         "unknown"
+      ],
+      "type": "string"
+    },
+    "PlanningAdminDraftKind": {
+      "enum": [
+        "full_planning",
+        "queue_idle_prompt",
+        "direction_detail"
       ],
       "type": "string"
     },

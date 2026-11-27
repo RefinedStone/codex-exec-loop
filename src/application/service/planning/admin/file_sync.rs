@@ -24,6 +24,65 @@ impl PlanningAdminFacadeService {
     // Accepted planning support file을 workspace 파일로 export한다. parallel worker가 같은 planning authority를
     // 수정 중이면 stale file을 내보낼 수 있으므로 guard를 먼저 통과해야 한다.
     pub fn export_active_files_for_edit(&self) -> Result<PlanningAdminFileSyncOutcome> {
+        let paths = self.export_operator_planning_files()?;
+        Ok(self.file_export_outcome(self.workspace_dir.as_str(), paths))
+    }
+
+    // workspace에 export된 파일을 다시 accepted operator documents로 적용한다. 이 경로는 draft validation/promotion이
+    // 아니라 admin이 직접 support file을 동기화하는 명령이므로 missing file을 오류로 본다.
+    pub fn apply_exported_files(&self) -> Result<PlanningAdminFileSyncOutcome> {
+        let (paths, _planning_revision) = self.apply_operator_planning_files()?;
+        Ok(self.file_apply_outcome(self.workspace_dir.as_str(), paths))
+    }
+
+    /*
+     * 끝난 내보내기와 적용의 화면 결과이다. 직접 실행한 변경과 커널 명령으로 간 변경(plan 18 K4-9d-4)이 같은 결과를
+     * 만든다. `directory` 는 파일이 있는 작업 공간이다. 커널 명령은 커널의 대표 checkout 을 쓴다. 그 폴더가 이
+     * admin 의 작업 공간과 다르면 알림이 그 폴더를 말한다.
+     */
+    pub fn file_export_outcome(
+        &self,
+        directory: &str,
+        paths: Vec<String>,
+    ) -> PlanningAdminFileSyncOutcome {
+        PlanningAdminFileSyncOutcome {
+            notice: format!(
+                "exported {} planning support files for editing{}",
+                paths.len(),
+                self.other_directory_note(directory)
+            ),
+            paths,
+        }
+    }
+
+    pub fn file_apply_outcome(
+        &self,
+        directory: &str,
+        paths: Vec<String>,
+    ) -> PlanningAdminFileSyncOutcome {
+        PlanningAdminFileSyncOutcome {
+            notice: format!(
+                "applied {} exported planning paths{}",
+                paths.len(),
+                self.other_directory_note(directory)
+            ),
+            paths,
+        }
+    }
+
+    fn other_directory_note(&self, directory: &str) -> String {
+        if directory == self.workspace_dir {
+            String::new()
+        } else {
+            format!(" in `{directory}`")
+        }
+    }
+
+    /*
+     * 사용자의 파일 내보내기이다. admin 과 저장 명령 `export_planning_files` (plan 18 K4-9d-4)가 같은 길을 쓴다. 쓴
+     * 파일의 경로(이 작업 공간 안)를 돌려준다.
+     */
+    pub fn export_operator_planning_files(&self) -> Result<Vec<String>> {
         self.ensure_default_authority()?;
         self.with_file_sync_guard("export planning support files", |_owner_token| {
             let documents = self.load_operator_planning_documents()?;
@@ -35,20 +94,15 @@ impl PlanningAdminFacadeService {
                     documents.observed_planning_revision,
                 )
                 .with_context(|| format!("failed to export {RESULT_OUTPUT_FILE_PATH}"))?;
-            let paths = vec![RESULT_OUTPUT_FILE_PATH.to_string()];
-            Ok(PlanningAdminFileSyncOutcome {
-                notice: format!(
-                    "exported {} planning support files for editing",
-                    paths.len()
-                ),
-                paths,
-            })
+            Ok(vec![RESULT_OUTPUT_FILE_PATH.to_string()])
         })
     }
 
-    // workspace에 export된 파일을 다시 accepted operator documents로 적용한다. 이 경로는 draft validation/promotion이
-    // 아니라 admin이 직접 support file을 동기화하는 명령이므로 missing file을 오류로 본다.
-    pub fn apply_exported_files(&self) -> Result<PlanningAdminFileSyncOutcome> {
+    /*
+     * 사용자의 파일 적용이다. admin 과 저장 명령 `apply_planning_files` 가 같은 길을 쓴다. 적용한 경로와 그 저장이 만든
+     * planning revision 을 돌려준다. 내보낼 때 둔 revision 이 지금의 것과 다르면 저장이 낡은 revision 으로 거절한다.
+     */
+    pub fn apply_operator_planning_files(&self) -> Result<(Vec<String>, i64)> {
         self.ensure_default_authority()?;
         self.with_file_sync_guard("apply exported planning support files", |owner_token| {
             let exported = self
@@ -61,12 +115,9 @@ impl PlanningAdminFacadeService {
             let mut documents = self.load_operator_planning_documents()?;
             documents.result_output_markdown = exported.body;
             documents.observed_planning_revision = exported.observed_planning_revision;
-            self.commit_operator_planning_documents_with_guard(documents, owner_token)?;
-            let paths = vec![RESULT_OUTPUT_FILE_PATH.to_string()];
-            Ok(PlanningAdminFileSyncOutcome {
-                notice: format!("applied {} exported planning paths", paths.len()),
-                paths,
-            })
+            let planning_revision =
+                self.commit_operator_planning_documents_with_guard(documents, owner_token)?;
+            Ok((vec![RESULT_OUTPUT_FILE_PATH.to_string()], planning_revision))
         })
     }
 

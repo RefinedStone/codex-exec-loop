@@ -12,7 +12,9 @@ use crate::domain::issue_automation::intervention::{
     IssueInterventionAction, IssueInterventionReceipt, IssueInterventionRequest,
 };
 
+use crate::application::port::inbound::planning_admin_port::PlanningAdminDraftKind;
 use crate::domain::kernel_spec::{KernelCommandKind, ReasonCode};
+use crate::domain::parallel_agent_profile::ParallelAgentProfileConfig;
 use crate::domain::planning::evidence::{
     TaskCriterionWaiverReceipt, TaskEvidencePrepared, TaskEvidenceReceipt,
 };
@@ -165,6 +167,24 @@ pub enum StoredCommand {
         direction_id: String,
         expected_planning_revision: i64,
     },
+    /// 저장된 지원 파일을 커널의 작업 공간에 편집용 파일로 쓴다. planning 데이터는 바뀌지 않는다.
+    ExportPlanningFiles,
+    /// 내보낸 파일을 다시 읽어 저장한다. 내보낼 때 둔 revision 이 지금의 것과 다르면 거절된다.
+    ApplyPlanningFiles,
+    /*
+     * 저장된 편집 초안을 기준 planning 으로 올린다. `expected_planning_revision` 은 초안을 만든 때의 revision 이다.
+     * 실행기는 admin 의 메모리를 볼 수 없으므로 보낸 쪽(입구)이 그 값을 보낸다 (설계 §3.4, Q-9d-3).
+     */
+    PromoteDraft {
+        draft_name: String,
+        kind: PlanningAdminDraftKind,
+        direction_id: Option<String>,
+        expected_planning_revision: i64,
+    },
+    /// 병렬 에이전트 프로필을 저장소의 대표 checkout 에 저장한다 (plan 18 K4-9b 의 9b-A).
+    SaveParallelAgentProfiles {
+        config: ParallelAgentProfileConfig,
+    },
 }
 
 impl StoredCommand {
@@ -196,6 +216,10 @@ impl StoredCommand {
             Self::CreateDirection { .. } => KernelCommandKind::CreateDirection,
             Self::UpdateDirection { .. } => KernelCommandKind::UpdateDirection,
             Self::DeleteDirection { .. } => KernelCommandKind::DeleteDirection,
+            Self::ExportPlanningFiles => KernelCommandKind::ExportPlanningFiles,
+            Self::ApplyPlanningFiles => KernelCommandKind::ApplyPlanningFiles,
+            Self::PromoteDraft { .. } => KernelCommandKind::PromoteDraft,
+            Self::SaveParallelAgentProfiles { .. } => KernelCommandKind::SaveParallelAgentProfiles,
         }
     }
 }
@@ -272,6 +296,24 @@ pub enum StoredCommandResult {
         default_retained: bool,
         planning_revision: i64,
     },
+    /// `directory` 는 파일을 쓴 작업 공간이고 `paths` 는 그 안의 경로이다.
+    PlanningFilesExported {
+        directory: String,
+        paths: Vec<String>,
+    },
+    PlanningFilesApplied {
+        directory: String,
+        paths: Vec<String>,
+        planning_revision: i64,
+    },
+    /// 검사에 실패한 초안은 아무것도 바꾸지 않는다 (`promoted_file_count` 0, `planning_revision` 없음).
+    DraftPromoted {
+        promoted_file_count: usize,
+        is_valid: bool,
+        planning_revision: Option<i64>,
+    },
+    /// `directory` 는 프로필 파일을 쓴 작업 공간이다.
+    ParallelAgentProfilesSaved { directory: String },
 }
 
 impl StoredCommandResult {

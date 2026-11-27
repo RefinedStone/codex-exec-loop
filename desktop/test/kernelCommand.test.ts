@@ -76,6 +76,12 @@ const commands = {
     expected_planning_revision: 7,
   },
   delete_direction: { type: "delete_direction", direction_id: "dir-release", expected_planning_revision: 7, confirm: true },
+  export_planning_files: { type: "export_planning_files" },
+  apply_planning_files: { type: "apply_planning_files" },
+  promote_draft: {
+    type: "promote_draft", draft_name: "draft-1", kind: "full_planning", expected_planning_revision: 7,
+  },
+  save_parallel_agent_profiles: { type: "save_parallel_agent_profiles", profiles: [] },
 } as const satisfies Record<KernelCommand["type"], KernelCommand>;
 
 function harness() {
