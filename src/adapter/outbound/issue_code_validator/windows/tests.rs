@@ -216,7 +216,10 @@ fn native_windows_validator_user_cancel_ends_the_owned_job_and_cleans_up() {
     let approved = storage::approved_content(&request).unwrap();
     let identity = security::Identity::create().unwrap();
     let local = crate::private_fs::windows_local_app_data_path().unwrap();
-    let workspace_path = local.join("Temp").join(&identity.name);
+    let workspace_path =
+        crate::adapter::outbound::github::automation::trusted_temp_directory_base()
+            .unwrap()
+            .join(&identity.name);
     let profile_path = local.join("Packages").join(&identity.name);
     let cancellation = IssueCodeValidatorCancellation::new();
     let started = Instant::now();
@@ -274,7 +277,10 @@ fn native_windows_validator_observes_workspace_and_profile_removal_on_all_outcom
         request.timeout = Duration::from_millis(200);
         let approved = storage::approved_content(&request).unwrap();
         let identity = security::Identity::create().unwrap();
-        let workspace_path = local.join("Temp").join(&identity.name);
+        let workspace_path =
+            crate::adapter::outbound::github::automation::trusted_temp_directory_base()
+                .unwrap()
+                .join(&identity.name);
         let profile_path = local.join("Packages").join(&identity.name);
         let outcome = execute(&identity, &approved, &request).unwrap();
         match mode {
@@ -360,7 +366,10 @@ fn native_windows_validator_removes_child_profile_payload_without_following_exte
     );
     assert!(!profile.exists(), "the newly owned profile was removed");
     assert!(
-        !local.join("Temp").join(&identity.name).exists(),
+        !crate::adapter::outbound::github::automation::trusted_temp_directory_base()
+            .unwrap()
+            .join(&identity.name)
+            .exists(),
         "the stage was removed"
     );
     assert_eq!(fs::read(&sentinel).unwrap(), b"synthetic outside canary");

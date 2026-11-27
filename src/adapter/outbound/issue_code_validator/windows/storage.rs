@@ -128,22 +128,35 @@ pub(super) struct Workspace {
     pub(super) input: Option<File>,
     executable_lock: Option<File>,
     directory_lock: Option<File>,
+    _parent_lock: File,
 }
 impl Workspace {
     pub(super) fn create(identity: &Identity, content: &[u8], input: &str) -> io::Result<Self> {
-        let temp = crate::private_fs::windows_local_app_data_path()
-            .map_err(io::Error::other)?
-            .join("Temp");
+        // The OS Temp directory may be owned by Administrators on hosted Windows runners.
+        // Reuse the atomically created current-user-only application boundary; never repair Temp.
+        let temp = crate::adapter::outbound::github::automation::trusted_temp_directory_base()
+            .map_err(io::Error::other)?;
+        Self::create_in(&temp, identity, content, input)
+    }
+
+    fn create_in(
+        temp: &Path,
+        identity: &Identity,
+        content: &[u8],
+        input: &str,
+    ) -> io::Result<Self> {
         let parent = OpenOptions::new()
             .read(true)
+            // Keep the validated parent from being replaced or made into a reparse point.
+            .share_mode(FILE_SHARE_READ)
             .custom_flags(
                 crate::private_fs::WINDOWS_FILE_FLAG_BACKUP_SEMANTICS
                     | FILE_FLAG_OPEN_REPARSE_POINT,
             )
-            .open(&temp)?;
-        // Other processes create children here; verify the shared parent identity and owner.
-        // The invocation-owned workspace below retains its own descriptor and strict locks.
-        crate::private_fs::validate_windows_shared_directory_path_identity(&temp, &parent)
+            .open(temp)?;
+        // Other helpers may add children; preserve identity and the protected owner-only DACL.
+        // The invocation-owned workspace retains its separate LPAC descriptor and strict locks.
+        crate::private_fs::validate_windows_shared_private_directory(temp, &parent)
             .map_err(io::Error::other)?;
         let path = temp.join(&identity.name);
         let descriptor = identity.workspace_descriptor()?;
@@ -159,6 +172,7 @@ impl Workspace {
             input: None,
             executable_lock: None,
             directory_lock: None,
+            _parent_lock: parent,
         };
         workspace.directory_lock = Some(
             OpenOptions::new()
@@ -274,6 +288,66 @@ mod tests {
         content[312..316].copy_from_slice(&4096u32.to_le_bytes());
         assert!(!native_headless_pe(&content));
     }
+    #[test]
+    fn owned_workspace_keeps_its_private_parent_anchored_and_cleans_only_its_child() {
+        let root = crate::adapter::outbound::github::automation::create_private_temp_directory(
+            "akra-validator-parent",
+        )
+        .unwrap();
+        let identity = super::Identity::create().unwrap();
+        let mut workspace =
+            super::Workspace::create_in(&root, &identity, b"synthetic stage", "{}").unwrap();
+        let stage = workspace.path.clone();
+        assert_eq!(stage.parent(), Some(root.as_path()));
+        crate::private_fs::validate_windows_shared_private_directory(
+            &root,
+            &workspace._parent_lock,
+        )
+        .unwrap();
+        assert!(
+            std::fs::rename(&root, root.with_extension("replaced")).is_err(),
+            "an executing validator keeps its private staging parent anchored"
+        );
+        workspace.cleanup().unwrap();
+        assert!(!stage.exists());
+        assert!(
+            root.is_dir(),
+            "cleanup only removes this invocation's child"
+        );
+        drop(workspace);
+        std::fs::remove_dir(&root).unwrap();
+    }
+
+    #[test]
+    fn owned_workspace_rejects_an_inherited_parent_without_repairing_it() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = crate::adapter::outbound::github::automation::create_private_temp_directory(
+            "akra-validator-untrusted-parent",
+        )
+        .unwrap();
+        let inherited = root.join("inherited");
+        std::fs::create_dir(&inherited).unwrap();
+        let parent = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(crate::private_fs::WINDOWS_FILE_FLAG_BACKUP_SEMANTICS)
+            .open(&inherited)
+            .unwrap();
+        let before = crate::private_fs::windows_file_identity_snapshot(&parent).unwrap();
+        let identity = super::Identity::create().unwrap();
+        assert!(
+            super::Workspace::create_in(&inherited, &identity, b"synthetic stage", "{}").is_err(),
+            "an existing inherited or differently owned parent must not become a private stage"
+        );
+        assert!(!inherited.join(&identity.name).exists());
+        assert_eq!(
+            before,
+            crate::private_fs::windows_file_identity_snapshot(&parent).unwrap(),
+            "reject without changing the existing parent identity or security metadata"
+        );
+        drop(parent);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     #[test]
     fn owned_workspace_cleanup_retries_transient_sharing_without_leaving_files() {
         use std::fs::OpenOptions;

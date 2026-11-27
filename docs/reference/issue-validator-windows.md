@@ -11,7 +11,7 @@ Windows x64에서 SHA-256으로 승인한 **AMD64 PE32+ Windows subsystem(2) 실
 ## 실행 경계
 
 1. OS 난수로 고유 이름/SID를 만들고 **이번 호출에서 새로 만든** disposable AppContainer profile만 소유한다. 기존 profile 충돌은 오류이며 기존 profile을 열거나 고치거나 지우지 않는다.
-2. OS known-folder의 LocalAppData/Temp 아래 새 stage에 owner/System 전체 권한과 고유 SID의 읽기·실행 권한을 원자적으로 부여한다. 기존 사용자 디렉터리, Vault, 시스템 ACL은 변경하지 않는다. image와 입력 파일의 쓰기 핸들은 실행 전에 닫고 읽기 잠금을 유지한다.
+2. OS known-folder의 LocalAppData/AkraTrustedTemp를 원자 생성한 current-user-only private 부모로 사용한다. 기존 부모는 owner·protected DACL·non-reparse identity를 검증하고 실행 동안 교체를 막는 handle을 유지한다. 그 아래 새 stage에 owner/System 전체 권한과 고유 SID의 읽기·실행 권한을 원자적으로 부여한다. 공유 OS Temp의 owner가 다른 환경에서도 그 디렉터리의 owner/ACL을 고치지 않는다. 기존 사용자 디렉터리, Vault, 시스템 ACL은 변경하지 않는다. image와 입력 파일의 쓰기 핸들은 실행 전에 닫고 읽기 잠금을 유지한다.
 3. LPAC opt-out, 빈 capability 목록, child-process 제한, Win32k 차단, stdio 3개 핸들 allowlist, creation-time Job 목록을 동시에 설치하고 suspended 상태로 생성한다. stdin은 읽기 전용 입력 파일 핸들, stdout/stderr는 child 측 쓰기 pipe 핸들이다. 부모·Job·파일 쓰기 핸들을 상속하지 않는다.
 4. Resume 전에 AppContainer 토큰 여부, 정확한 고유 SID, capability 수 0, Job 소속/활성 프로세스 수 1, child/Win32k mitigation을 검사한다. impersonation-token 사본에 대한 `AccessCheck`에서 AAP 권한은 거절되고 고유 SID 권한만 허용되는 양·음성 대조를 확인한다. 문서화가 불확실한 token information class 숫자를 성공 조건으로 삼지 않는다. API 실패를 접근 거절 성공으로 바꾸지도 않는다.
 5. 실행 종료·실패·시간 초과 뒤 owned Job 종료를 관찰하고 활성 프로세스 수 0을 확인한다. stage와 profile 정리 성공을 확인한 뒤에만 결과를 반환한다. 정리 실패도 게시 가능한 성공으로 바꾸지 않는다. Job이 빈 뒤 stage 삭제의 sharing/lock 오류(32/33)만 최대 2초 제한 재시도하며, 실제 열린 파일 제어군으로 이 경계를 검증한다.
@@ -56,6 +56,8 @@ PowerShell Full의 해당 selector는 **12 passed / 0 failed / 0 ignored**, 1.80
 [Propose 검증 기록](../validation/issue-automation-propose-flow.md)에 있다.
 기존 PowerShell inventory에만 있던 Windows validator selector는 CI Bash inventory에도 추가하고
 두 경로에서 정확히 한 번 포함되는지 정책 시험으로 검사한다.
+
+같은 날 #2921의 CI 재실행에서 OS LocalAppData/Temp의 owner가 현재 사용자와 다르면 stage 생성이 거절되는 문제가 확인됐다. PR 리뷰 대응은 이 OS 디렉터리를 수정하지 않고 기존 AkraTrustedTemp private 경계를 사용한다. 수정 후 동일 Windows 호스트와 Rust 1.95.0에서 native validator 모듈 **14 passed / 0 failed / 0 ignored**, 1.82초를 확인했다. 새 private 부모의 교체 잠금·기존 inherited ACL 거부와 실제 LPAC 실행·사용자 취소·stage/profile 정리를 포함하며, hosted CI의 통과 여부와 이 로컬 결과는 구분한다.
 
 초기 profileless 생성은 오류 2, profile만 만든 제한 환경은 오류 203을 반환했다. profile과 필수 known-folder 환경을 준비한 뒤에도 console subsystem fixture는 초기화에 실패했다. 최종 지원 프로필은 실제 통과한 headless Windows-subsystem PE로 제한하며, 이 조사 과정에서 network/registry capability나 Win32k 예외를 production에 추가하지 않았다.
 
