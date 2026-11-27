@@ -52,3 +52,26 @@ test("contract ownership and ignored preservation remain explicit", () => {
   assert.match(validateCrateOwnership(registry,metadata).join("\n"),/Unregistered contract owner/);
   assert.match(validateCrateOwnership(registry,metadata).join("\n"),/preserve ignored/);
 });
+
+function splitTransfer() {
+  return {source:"legacy.rs",owner:"rules",ignored:"preserve",oldTestPrefix:"legacy::tests::",newTestPrefix:"primitive::tests::",testMappings:[{oldTestPrefix:"legacy::tests::ace_contract",newTestPrefix:"windows_ace::tests::ace_contract"}]};
+}
+test("one source can explicitly move tests to multiple native modules", () => {
+  const {registry,metadata}=fixture();
+  registry.transfers=[splitTransfer()];
+  assert.deepEqual(validateCrateOwnership(registry,metadata),[]);
+});
+for (const invalid of [[], null, "legacy::", [{}], [null], [{oldTestPrefix:"",newTestPrefix:"native::"}], [{oldTestPrefix:"old::",newTestPrefix:17}], [{oldTestPrefix:"old::*",newTestPrefix:"native::"}], [{oldTestPrefix:"old::",newTestPrefix:"native::\n"}]]) {
+  test("malformed additional test mapping is rejected: " + JSON.stringify(invalid), () => {
+    const {registry,metadata}=fixture();
+    registry.transfers=[{...splitTransfer(),testMappings:invalid}];
+    assert.match(validateCrateOwnership(registry,metadata).join("\n"),/mapping/i);
+  });
+}
+test("duplicate mapping cannot create two owners for the same transfer", () => {
+  const {registry,metadata}=fixture();
+  const transfer=splitTransfer();
+  transfer.testMappings.push({oldTestPrefix:transfer.oldTestPrefix,newTestPrefix:transfer.newTestPrefix});
+  registry.transfers=[transfer];
+  assert.match(validateCrateOwnership(registry,metadata).join("\n"),/Duplicate test prefix/);
+});

@@ -3,7 +3,7 @@
 use super::*;
 
 #[derive(Debug)]
-pub(crate) enum ControlledTermination {
+pub enum ControlledTermination {
     Exited(ExitStatus),
     TimedOut,
     Cancelled,
@@ -11,15 +11,15 @@ pub(crate) enum ControlledTermination {
     IoFailure,
 }
 
-pub(crate) struct ControlledOutput {
-    pub(crate) termination: ControlledTermination,
-    pub(crate) stdout: Vec<u8>,
-    pub(crate) stderr: Vec<u8>,
-    pub(crate) stdout_complete: bool,
-    pub(crate) stderr_complete: bool,
+pub struct ControlledOutput {
+    pub termination: ControlledTermination,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub stdout_complete: bool,
+    pub stderr_complete: bool,
 }
 
-pub(crate) fn wait_with_output_controlled(
+pub fn wait_with_output_controlled(
     mut child: ManagedChild,
     deadline: Instant,
     cancelled: &dyn Fn() -> bool,

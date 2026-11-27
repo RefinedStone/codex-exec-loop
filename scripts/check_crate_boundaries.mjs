@@ -59,6 +59,28 @@ export function validateCrateOwnership(registry, metadata, workspaceRoot = metad
     transfers.add(transfer.source);
     if (!declared.has(transfer.owner)) errors.push("Unregistered transfer owner: " + transfer.owner);
     if (transfer.ignored !== "preserve") errors.push("Transfer must preserve ignored tests: " + transfer.source);
+    const prefix = /^[\p{ID_Start}_][\p{ID_Continue}_]*(?:::[\p{ID_Start}_][\p{ID_Continue}_]*)*(?:::)?$/u;
+    const mappings = [];
+    if (transfer.oldTestPrefix !== undefined || transfer.newTestPrefix !== undefined) mappings.push(transfer);
+    if (transfer.testMappings !== undefined) {
+      if (!Array.isArray(transfer.testMappings) || transfer.testMappings.length === 0) {
+        errors.push("Additional test mappings must be a nonempty array: " + transfer.source);
+      } else {
+        mappings.push(...transfer.testMappings);
+      }
+    }
+    const seenMappings = new Set();
+    for (const mapping of mappings) {
+      if (!mapping || typeof mapping.oldTestPrefix !== "string" || typeof mapping.newTestPrefix !== "string"
+          || mapping.oldTestPrefix.trim() !== mapping.oldTestPrefix || mapping.newTestPrefix.trim() !== mapping.newTestPrefix
+          || !prefix.test(mapping.oldTestPrefix) || !prefix.test(mapping.newTestPrefix)) {
+        errors.push("Invalid test prefix mapping: " + transfer.source);
+        continue;
+      }
+      const key = mapping.oldTestPrefix + "\0" + mapping.newTestPrefix;
+      if (seenMappings.has(key)) errors.push("Duplicate test prefix mapping: " + transfer.source);
+      seenMappings.add(key);
+    }
   }
   return errors;
 }
