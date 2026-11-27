@@ -1,0 +1,703 @@
+{
+  "schemaVersion": 1,
+  "issue": 2910,
+  "recordedAt": "2026-11-27T09:16:59.270Z",
+  "status": "windows-component-validated-final-integration-pending",
+  "repository": "RefinedStone/codex-exec-loop",
+  "baseSourceSha": "2e166a40c85854754526f69bf323a7c091afd768",
+  "finalCombinedSourceSha": null,
+  "finalIntegrationVerified": false,
+  "conditions": {
+    "os": "10.0.26200",
+    "architecture": "x64",
+    "target": "x86_64-pc-windows-msvc",
+    "rustc": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.95.0\nLLVM version: 22.1.2",
+    "cargo": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)",
+    "node": "v24.13.0",
+    "features": "all",
+    "profile": "test",
+    "jobs": 2,
+    "testThreads": 1,
+    "targetDirectory": "worktree-owned target/ci-verification-native",
+    "incremental": "Cargo default",
+    "executionOrder": "three baseline samples, then three candidate samples",
+    "hostLoadControlled": false,
+    "architectureTestExecutionCoordinated": true
+  },
+  "test": "task_verification::tests::actual_git_check_binds_the_frozen_full_range_without_changing_index_head_or_refs",
+  "before": {
+    "sourceSha": "ce02eb62f163086c4bb54be41de92727c2d37126",
+    "sourceCleanAtMeasurement": true,
+    "binarySha256": "0f6da531fe34292e18dc47e0e03f417d27ccec04c86b22bc8c93f1db6977ad17",
+    "sampleCount": 3,
+    "raw": [
+      {
+        "sample": 1,
+        "startedAt": "2026-11-27T09:06:10.255Z",
+        "command": "C:/Users/dorani/.rustup/toolchains/1.95.0-x86_64-pc-windows-msvc/bin/cargo.exe",
+        "args": [
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "akra-verification-native",
+          "--all-features",
+          "--target",
+          "x86_64-pc-windows-msvc",
+          "--target-dir",
+          "target/ci-verification-native",
+          "--lib",
+          "task_verification::tests::actual_git_check_binds_the_frozen_full_range_without_changing_index_head_or_refs",
+          "--",
+          "--exact",
+          "--test-threads=1"
+        ],
+        "exitCode": 0,
+        "cargoWallMs": 1518.5325999999986,
+        "libtestSeconds": 1.33,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "sample": 2,
+        "startedAt": "2026-11-27T09:06:11.774Z",
+        "command": "C:/Users/dorani/.rustup/toolchains/1.95.0-x86_64-pc-windows-msvc/bin/cargo.exe",
+        "args": [
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "akra-verification-native",
+          "--all-features",
+          "--target",
+          "x86_64-pc-windows-msvc",
+          "--target-dir",
+          "target/ci-verification-native",
+          "--lib",
+          "task_verification::tests::actual_git_check_binds_the_frozen_full_range_without_changing_index_head_or_refs",
+          "--",
+          "--exact",
+          "--test-threads=1"
+        ],
+        "exitCode": 0,
+        "cargoWallMs": 1463.5463000000018,
+        "libtestSeconds": 1.27,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "sample": 3,
+        "startedAt": "2026-11-27T09:06:13.238Z",
+        "command": "C:/Users/dorani/.rustup/toolchains/1.95.0-x86_64-pc-windows-msvc/bin/cargo.exe",
+        "args": [
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "akra-verification-native",
+          "--all-features",
+          "--target",
+          "x86_64-pc-windows-msvc",
+          "--target-dir",
+          "target/ci-verification-native",
+          "--lib",
+          "task_verification::tests::actual_git_check_binds_the_frozen_full_range_without_changing_index_head_or_refs",
+          "--",
+          "--exact",
+          "--test-threads=1"
+        ],
+        "exitCode": 0,
+        "cargoWallMs": 1431.2469999999994,
+        "libtestSeconds": 1.25,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "libtestMedianSeconds": 1.27,
+    "libtestRangeSeconds": [
+      1.25,
+      1.33
+    ],
+    "cargoWallMedianMs": 1463.5463000000018,
+    "suite": {
+      "command": "C:/Users/dorani/.rustup/toolchains/1.95.0-x86_64-pc-windows-msvc/bin/cargo.exe",
+      "args": [
+        "test",
+        "--offline",
+        "--locked",
+        "-p",
+        "akra-verification-native",
+        "--all-features",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--target-dir",
+        "target/ci-verification-native",
+        "--",
+        "--test-threads=1"
+      ],
+      "startedAt": "2026-11-27T09:05:53.422Z",
+      "cargoWallMs": 16808.5567,
+      "results": [
+        {
+          "result": "ok",
+          "passed": 22,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 16.16
+        },
+        {
+          "result": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 0
+        }
+      ]
+    },
+    "inventoryText": "git_command::tests::generic_program_boundary_preserves_non_git_argv_and_git_caller_suffix: test\ngit_command::tests::hardening_removes_routing_config_trace_and_askpass_environment: test\ngit_command::tests::malicious_git_environment_cannot_route_a_host_mutation_or_write_trace: test\ngit_command::tests::preconfigured_git_environment_is_removed_when_parent_snapshot_omits_the_keys: test\ngit_command::tests::program_detection_is_limited_to_git_binaries: test\ngit_config::tests::executable_config_key_vocabulary_is_explicit_and_value_free: test\ngit_config::tests::verified_submodule_exception_only_excludes_core_worktree_from_the_same_limits: test\ntask_verification::tests::actual_git_check_binds_the_frozen_full_range_without_changing_index_head_or_refs: test\ntask_verification::tests::an_expired_or_cancelled_preparation_cannot_start_the_recipe: test\ntask_verification::tests::binary_and_oversized_blobs_are_not_misrepresented_as_passing_text: test\ntask_verification::tests::cancellation_after_spawn_is_an_observed_execution_with_incomplete_streams: test\ntask_verification::tests::canonical_windows_workspace_is_normalized_only_at_git_boundaries: test\ntask_verification::tests::excessive_real_git_diagnostics_are_bounded_and_cannot_pass: test\ntask_verification::tests::historical_receipt_fingerprints_do_not_poison_the_current_environment_key: test\ntask_verification::tests::malformed_or_over_limit_diff_inventory_is_rejected_without_partial_results: test\ntask_verification::tests::preparation_diagnostics_never_expose_unrecognized_error_contents: test\ntask_verification::tests::private_temporary_paths_do_not_change_environment_or_command_fingerprints: test\ntask_verification::tests::sha256_git_objects_use_the_same_fixed_recipe_with_a_distinct_environment_key: test\ntask_verification::tests::source_attributes_info_attributes_and_whitespace_config_cannot_hide_a_failure: test\ntask_verification::tests::source_changes_keep_the_environment_key_but_change_the_bound_command: test\ntask_verification::tests::source_execution_configuration_and_existing_alternates_fail_closed: test\ntask_verification::tests::symlink_and_gitlink_diff_modes_are_rejected_on_every_platform: test\n",
+    "ignoredInventoryText": ""
+  },
+  "after": {
+    "sourceSha": "79bcfcafd5a9886acecc2b609566aa7eb8f193c1",
+    "sourceCleanAtMeasurement": true,
+    "binarySha256": "84e39dc1be4d0b857ee45eb67342d7ad07ef6f08af5376b0e684979fec267dfe",
+    "sampleCount": 3,
+    "raw": [
+      {
+        "sample": 1,
+        "startedAt": "2026-11-27T09:08:56.286Z",
+        "command": "C:/Users/dorani/.rustup/toolchains/1.95.0-x86_64-pc-windows-msvc/bin/cargo.exe",
+        "args": [
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "akra-verification-native",
+          "--all-features",
+          "--target",
+          "x86_64-pc-windows-msvc",
+          "--target-dir",
+          "target/ci-verification-native",
+          "--lib",
+          "task_verification::tests::actual_git_check_binds_the_frozen_full_range_without_changing_index_head_or_refs",
+          "--",
+          "--exact",
+          "--test-threads=1"
+        ],
+        "exitCode": 0,
+        "cargoWallMs": 1368.3714,
+        "libtestSeconds": 1.18,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "sample": 2,
+        "startedAt": "2026-11-27T09:08:57.655Z",
+        "command": "C:/Users/dorani/.rustup/toolchains/1.95.0-x86_64-pc-windows-msvc/bin/cargo.exe",
+        "args": [
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "akra-verification-native",
+          "--all-features",
+          "--target",
+          "x86_64-pc-windows-msvc",
+          "--target-dir",
+          "target/ci-verification-native",
+          "--lib",
+          "task_verification::tests::actual_git_check_binds_the_frozen_full_range_without_changing_index_head_or_refs",
+          "--",
+          "--exact",
+          "--test-threads=1"
+        ],
+        "exitCode": 0,
+        "cargoWallMs": 1407.306700000001,
+        "libtestSeconds": 1.22,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "sample": 3,
+        "startedAt": "2026-11-27T09:08:59.063Z",
+        "command": "C:/Users/dorani/.rustup/toolchains/1.95.0-x86_64-pc-windows-msvc/bin/cargo.exe",
+        "args": [
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "akra-verification-native",
+          "--all-features",
+          "--target",
+          "x86_64-pc-windows-msvc",
+          "--target-dir",
+          "target/ci-verification-native",
+          "--lib",
+          "task_verification::tests::actual_git_check_binds_the_frozen_full_range_without_changing_index_head_or_refs",
+          "--",
+          "--exact",
+          "--test-threads=1"
+        ],
+        "exitCode": 0,
+        "cargoWallMs": 1381.133600000001,
+        "libtestSeconds": 1.2,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "libtestMedianSeconds": 1.2,
+    "libtestRangeSeconds": [
+      1.18,
+      1.22
+    ],
+    "cargoWallMedianMs": 1381.133600000001,
+    "suite": {
+      "command": "C:/Users/dorani/.rustup/toolchains/1.95.0-x86_64-pc-windows-msvc/bin/cargo.exe",
+      "args": [
+        "test",
+        "--offline",
+        "--locked",
+        "-p",
+        "akra-verification-native",
+        "--all-features",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--target-dir",
+        "target/ci-verification-native",
+        "--",
+        "--test-threads=1"
+      ],
+      "startedAt": "2026-11-27T09:08:40.723Z",
+      "cargoWallMs": 15538.193000000001,
+      "results": [
+        {
+          "result": "ok",
+          "passed": 23,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 15.29
+        },
+        {
+          "result": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 0
+        }
+      ]
+    },
+    "inventoryText": "git_command::tests::generic_program_boundary_preserves_non_git_argv_and_git_caller_suffix: test\ngit_command::tests::hardening_removes_routing_config_trace_and_askpass_environment: test\ngit_command::tests::malicious_git_environment_cannot_route_a_host_mutation_or_write_trace: test\ngit_command::tests::preconfigured_git_environment_is_removed_when_parent_snapshot_omits_the_keys: test\ngit_command::tests::program_detection_is_limited_to_git_binaries: test\ngit_config::tests::executable_config_key_vocabulary_is_explicit_and_value_free: test\ngit_config::tests::verified_submodule_exception_only_excludes_core_worktree_from_the_same_limits: test\ntask_verification::tests::actual_git_check_binds_the_frozen_full_range_without_changing_index_head_or_refs: test\ntask_verification::tests::an_expired_or_cancelled_preparation_cannot_start_the_recipe: test\ntask_verification::tests::binary_and_oversized_blobs_are_not_misrepresented_as_passing_text: test\ntask_verification::tests::cancellation_after_spawn_is_an_observed_execution_with_incomplete_streams: test\ntask_verification::tests::canonical_windows_workspace_is_normalized_only_at_git_boundaries: test\ntask_verification::tests::excessive_real_git_diagnostics_are_bounded_and_cannot_pass: test\ntask_verification::tests::fixture_configuration_is_local_and_preserves_the_fixed_policy: test\ntask_verification::tests::historical_receipt_fingerprints_do_not_poison_the_current_environment_key: test\ntask_verification::tests::malformed_or_over_limit_diff_inventory_is_rejected_without_partial_results: test\ntask_verification::tests::preparation_diagnostics_never_expose_unrecognized_error_contents: test\ntask_verification::tests::private_temporary_paths_do_not_change_environment_or_command_fingerprints: test\ntask_verification::tests::sha256_git_objects_use_the_same_fixed_recipe_with_a_distinct_environment_key: test\ntask_verification::tests::source_attributes_info_attributes_and_whitespace_config_cannot_hide_a_failure: test\ntask_verification::tests::source_changes_keep_the_environment_key_but_change_the_bound_command: test\ntask_verification::tests::source_execution_configuration_and_existing_alternates_fail_closed: test\ntask_verification::tests::symlink_and_gitlink_diff_modes_are_rejected_on_every_platform: test\n",
+    "ignoredInventoryText": ""
+  },
+  "observedMedianReductionSeconds": 0.07000000000000006,
+  "observedMedianReductionPercent": 5.511811023622052,
+  "cargoWallObservedMedianReductionPercent": 5.631027867037802,
+  "overallCIPerformanceChange": null,
+  "p90": null,
+  "statisticalSignificanceClaimed": false,
+  "fixture": {
+    "removedGitConfigProcessesPerFixture": 4,
+    "verification": "actual git config --local --list",
+    "addedTest": "task_verification::tests::fixture_configuration_is_local_and_preserves_the_fixed_policy",
+    "productionPolicyChanged": false
+  },
+  "firstBuild": {
+    "sourceSha": "d11838741da6e6c9697e7258f7737368bfa5e719",
+    "startedAt": "2026-11-27T08:58:28.102Z",
+    "command": "C:/Users/dorani/.rustup/toolchains/1.95.0-x86_64-pc-windows-msvc/bin/cargo.exe",
+    "args": [
+      "test",
+      "--offline",
+      "--locked",
+      "-p",
+      "akra-verification-native",
+      "--all-features",
+      "--target",
+      "x86_64-pc-windows-msvc",
+      "--target-dir",
+      "target/ci-verification-native",
+      "--no-run",
+      "--timings",
+      "--message-format=json-render-diagnostics"
+    ],
+    "elapsedMs": 18730.7126,
+    "exitCode": 0,
+    "emptyDedicatedTarget": true,
+    "existingRegistryDownloads": true,
+    "workspacePackagesBuilt": [
+      "akra-native",
+      "akra-verification",
+      "akra-verification-native"
+    ],
+    "rootLibtestBuilt": false,
+    "testBodiesExecuted": 0,
+    "finalCandidateColdMeasurement": false,
+    "frontendCodegenLinkSplitAvailable": false
+  },
+  "initialFixtureFailure": {
+    "sourceSha": "d11838741da6e6c9697e7258f7737368bfa5e719",
+    "passed": 20,
+    "failed": 2,
+    "ignored": 0,
+    "cause": "Unix-only absolute-path assumptions in two existing Git environment test fixtures on Windows",
+    "productionGuard": "Path::is_absolute preserved",
+    "fix": "platform-specific absolute fixture paths plus relative-path rejection assertions",
+    "resolvedTestGroup": "git_command::tests::",
+    "resolvedPassed": 5
+  },
+  "inventory": {
+    "schemaVersion": 1,
+    "baseSourceSha": "2e166a40c85854754526f69bf323a7c091afd768",
+    "afterSourceSha": "79bcfcafd5a9886acecc2b609566aa7eb8f193c1",
+    "platform": "windows",
+    "originalCount": 24,
+    "moved": [
+      {
+        "oldName": "adapter::outbound::git::task_verification::tests::preparation_diagnostics_never_expose_unrecognized_error_contents",
+        "newName": "task_verification::tests::preparation_diagnostics_never_expose_unrecognized_error_contents",
+        "ignored": false
+      },
+      {
+        "oldName": "adapter::outbound::git::task_verification::tests::actual_git_check_binds_the_frozen_full_range_without_changing_index_head_or_refs",
+        "newName": "task_verification::tests::actual_git_check_binds_the_frozen_full_range_without_changing_index_head_or_refs",
+        "ignored": false
+      },
+      {
+        "oldName": "adapter::outbound::git::task_verification::tests::source_attributes_info_attributes_and_whitespace_config_cannot_hide_a_failure",
+        "newName": "task_verification::tests::source_attributes_info_attributes_and_whitespace_config_cannot_hide_a_failure",
+        "ignored": false
+      },
+      {
+        "oldName": "adapter::outbound::git::task_verification::tests::sha256_git_objects_use_the_same_fixed_recipe_with_a_distinct_environment_key",
+        "newName": "task_verification::tests::sha256_git_objects_use_the_same_fixed_recipe_with_a_distinct_environment_key",
+        "ignored": false
+      },
+      {
+        "oldName": "adapter::outbound::git::task_verification::tests::private_temporary_paths_do_not_change_environment_or_command_fingerprints",
+        "newName": "task_verification::tests::private_temporary_paths_do_not_change_environment_or_command_fingerprints",
+        "ignored": false
+      },
+      {
+        "oldName": "adapter::outbound::git::task_verification::tests::historical_receipt_fingerprints_do_not_poison_the_current_environment_key",
+        "newName": "task_verification::tests::historical_receipt_fingerprints_do_not_poison_the_current_environment_key",
+        "ignored": false
+      },
+      {
+        "oldName": "adapter::outbound::git::task_verification::tests::source_changes_keep_the_environment_key_but_change_the_bound_command",
+        "newName": "task_verification::tests::source_changes_keep_the_environment_key_but_change_the_bound_command",
+        "ignored": false
+      },
+      {
+        "oldName": "adapter::outbound::git::task_verification::tests::binary_and_oversized_blobs_are_not_misrepresented_as_passing_text",
+        "newName": "task_verification::tests::binary_and_oversized_blobs_are_not_misrepresented_as_passing_text",
+        "ignored": false
+      },
+      {
+        "oldName": "adapter::outbound::git::task_verification::tests::symlink_and_gitlink_diff_modes_are_rejected_on_every_platform",
+        "newName": "task_verification::tests::symlink_and_gitlink_diff_modes_are_rejected_on_every_platform",
+        "ignored": false
+      },
+      {
+        "oldName": "adapter::outbound::git::task_verification::tests::source_execution_configuration_and_existing_alternates_fail_closed",
+        "newName": "task_verification::tests::source_execution_configuration_and_existing_alternates_fail_closed",
+        "ignored": false
+      },
+      {
+        "oldName": "adapter::outbound::git::task_verification::tests::cancellation_after_spawn_is_an_observed_execution_with_incomplete_streams",
+        "newName": "task_verification::tests::cancellation_after_spawn_is_an_observed_execution_with_incomplete_streams",
+        "ignored": false
+      },
+      {
+        "oldName": "adapter::outbound::git::task_verification::tests::an_expired_or_cancelled_preparation_cannot_start_the_recipe",
+        "newName": "task_verification::tests::an_expired_or_cancelled_preparation_cannot_start_the_recipe",
+        "ignored": false
+      },
+      {
+        "oldName": "adapter::outbound::git::task_verification::tests::excessive_real_git_diagnostics_are_bounded_and_cannot_pass",
+        "newName": "task_verification::tests::excessive_real_git_diagnostics_are_bounded_and_cannot_pass",
+        "ignored": false
+      },
+      {
+        "oldName": "adapter::outbound::git::task_verification::tests::malformed_or_over_limit_diff_inventory_is_rejected_without_partial_results",
+        "newName": "task_verification::tests::malformed_or_over_limit_diff_inventory_is_rejected_without_partial_results",
+        "ignored": false
+      },
+      {
+        "oldName": "adapter::outbound::git::task_verification::tests::canonical_windows_workspace_is_normalized_only_at_git_boundaries",
+        "newName": "task_verification::tests::canonical_windows_workspace_is_normalized_only_at_git_boundaries",
+        "ignored": false
+      },
+      {
+        "oldName": "git_subprocess::tests::program_detection_is_limited_to_git_binaries",
+        "newName": "git_command::tests::program_detection_is_limited_to_git_binaries",
+        "ignored": false
+      },
+      {
+        "oldName": "git_subprocess::tests::generic_program_boundary_preserves_non_git_argv_and_git_caller_suffix",
+        "newName": "git_command::tests::generic_program_boundary_preserves_non_git_argv_and_git_caller_suffix",
+        "ignored": false
+      },
+      {
+        "oldName": "git_subprocess::tests::hardening_removes_routing_config_trace_and_askpass_environment",
+        "newName": "git_command::tests::hardening_removes_routing_config_trace_and_askpass_environment",
+        "ignored": false
+      },
+      {
+        "oldName": "git_subprocess::tests::preconfigured_git_environment_is_removed_when_parent_snapshot_omits_the_keys",
+        "newName": "git_command::tests::preconfigured_git_environment_is_removed_when_parent_snapshot_omits_the_keys",
+        "ignored": false
+      },
+      {
+        "oldName": "git_subprocess::tests::malicious_git_environment_cannot_route_a_host_mutation_or_write_trace",
+        "newName": "git_command::tests::malicious_git_environment_cannot_route_a_host_mutation_or_write_trace",
+        "ignored": false
+      },
+      {
+        "oldName": "git_execution_guard::tests::executable_config_key_vocabulary_is_explicit_and_value_free",
+        "newName": "git_config::tests::executable_config_key_vocabulary_is_explicit_and_value_free",
+        "ignored": false
+      }
+    ],
+    "retained": [
+      "adapter::outbound::git::task_verification::tests::a_real_dirty_snapshot_is_checked_and_the_source_index_is_preserved",
+      "git_execution_guard::tests::explicit_git_directory_is_the_execution_config_audit_context",
+      "git_execution_guard::tests::effective_worktree_config_is_audited_without_reading_or_executing_the_value"
+    ],
+    "additions": [
+      "git_config::tests::verified_submodule_exception_only_excludes_core_worktree_from_the_same_limits",
+      "task_verification::tests::fixture_configuration_is_local_and_preserves_the_fixed_policy"
+    ],
+    "sourceRecords": [
+      {
+        "file": "src/adapter/outbound/git/task_verification/tests.rs",
+        "sha256": "57b616f23f9470bca968cdc848040b968e351a9fe0392be0617de419cd254fa8",
+        "originalNames": [
+          "adapter::outbound::git::task_verification::tests::preparation_diagnostics_never_expose_unrecognized_error_contents",
+          "adapter::outbound::git::task_verification::tests::actual_git_check_binds_the_frozen_full_range_without_changing_index_head_or_refs",
+          "adapter::outbound::git::task_verification::tests::source_attributes_info_attributes_and_whitespace_config_cannot_hide_a_failure",
+          "adapter::outbound::git::task_verification::tests::a_real_dirty_snapshot_is_checked_and_the_source_index_is_preserved",
+          "adapter::outbound::git::task_verification::tests::sha256_git_objects_use_the_same_fixed_recipe_with_a_distinct_environment_key",
+          "adapter::outbound::git::task_verification::tests::private_temporary_paths_do_not_change_environment_or_command_fingerprints",
+          "adapter::outbound::git::task_verification::tests::historical_receipt_fingerprints_do_not_poison_the_current_environment_key",
+          "adapter::outbound::git::task_verification::tests::source_changes_keep_the_environment_key_but_change_the_bound_command",
+          "adapter::outbound::git::task_verification::tests::binary_and_oversized_blobs_are_not_misrepresented_as_passing_text",
+          "adapter::outbound::git::task_verification::tests::symlink_and_gitlink_diff_modes_are_rejected_on_every_platform",
+          "adapter::outbound::git::task_verification::tests::source_execution_configuration_and_existing_alternates_fail_closed",
+          "adapter::outbound::git::task_verification::tests::cancellation_after_spawn_is_an_observed_execution_with_incomplete_streams",
+          "adapter::outbound::git::task_verification::tests::an_expired_or_cancelled_preparation_cannot_start_the_recipe",
+          "adapter::outbound::git::task_verification::tests::excessive_real_git_diagnostics_are_bounded_and_cannot_pass",
+          "adapter::outbound::git::task_verification::tests::malformed_or_over_limit_diff_inventory_is_rejected_without_partial_results",
+          "adapter::outbound::git::task_verification::tests::canonical_windows_workspace_is_normalized_only_at_git_boundaries"
+        ]
+      },
+      {
+        "file": "src/git_subprocess.rs",
+        "sha256": "1525e9d8725e3d248c14674e25029338acb60be4543588306763218e50de58d9",
+        "originalNames": [
+          "git_subprocess::tests::program_detection_is_limited_to_git_binaries",
+          "git_subprocess::tests::generic_program_boundary_preserves_non_git_argv_and_git_caller_suffix",
+          "git_subprocess::tests::hardening_removes_routing_config_trace_and_askpass_environment",
+          "git_subprocess::tests::preconfigured_git_environment_is_removed_when_parent_snapshot_omits_the_keys",
+          "git_subprocess::tests::malicious_git_environment_cannot_route_a_host_mutation_or_write_trace"
+        ]
+      },
+      {
+        "file": "src/git_execution_guard.rs",
+        "sha256": "a0074a07806b75aa513429848cb3d73a24517af43e28c938b386891eb7191502",
+        "originalNames": [
+          "git_execution_guard::tests::explicit_git_directory_is_the_execution_config_audit_context",
+          "git_execution_guard::tests::executable_config_key_vocabulary_is_explicit_and_value_free",
+          "git_execution_guard::tests::effective_worktree_config_is_audited_without_reading_or_executing_the_value"
+        ]
+      }
+    ],
+    "newCrateTests": [
+      "git_command::tests::generic_program_boundary_preserves_non_git_argv_and_git_caller_suffix",
+      "git_command::tests::hardening_removes_routing_config_trace_and_askpass_environment",
+      "git_command::tests::malicious_git_environment_cannot_route_a_host_mutation_or_write_trace",
+      "git_command::tests::preconfigured_git_environment_is_removed_when_parent_snapshot_omits_the_keys",
+      "git_command::tests::program_detection_is_limited_to_git_binaries",
+      "git_config::tests::executable_config_key_vocabulary_is_explicit_and_value_free",
+      "git_config::tests::verified_submodule_exception_only_excludes_core_worktree_from_the_same_limits",
+      "task_verification::tests::actual_git_check_binds_the_frozen_full_range_without_changing_index_head_or_refs",
+      "task_verification::tests::an_expired_or_cancelled_preparation_cannot_start_the_recipe",
+      "task_verification::tests::binary_and_oversized_blobs_are_not_misrepresented_as_passing_text",
+      "task_verification::tests::cancellation_after_spawn_is_an_observed_execution_with_incomplete_streams",
+      "task_verification::tests::canonical_windows_workspace_is_normalized_only_at_git_boundaries",
+      "task_verification::tests::excessive_real_git_diagnostics_are_bounded_and_cannot_pass",
+      "task_verification::tests::fixture_configuration_is_local_and_preserves_the_fixed_policy",
+      "task_verification::tests::historical_receipt_fingerprints_do_not_poison_the_current_environment_key",
+      "task_verification::tests::malformed_or_over_limit_diff_inventory_is_rejected_without_partial_results",
+      "task_verification::tests::preparation_diagnostics_never_expose_unrecognized_error_contents",
+      "task_verification::tests::private_temporary_paths_do_not_change_environment_or_command_fingerprints",
+      "task_verification::tests::sha256_git_objects_use_the_same_fixed_recipe_with_a_distinct_environment_key",
+      "task_verification::tests::source_attributes_info_attributes_and_whitespace_config_cannot_hide_a_failure",
+      "task_verification::tests::source_changes_keep_the_environment_key_but_change_the_bound_command",
+      "task_verification::tests::source_execution_configuration_and_existing_alternates_fail_closed",
+      "task_verification::tests::symlink_and_gitlink_diff_modes_are_rejected_on_every_platform"
+    ],
+    "ignoredTests": [],
+    "baselineCount": 22,
+    "afterCount": 23,
+    "sourceUnionPreserved": true,
+    "retainedRootExecutionVerified": false,
+    "linuxAndMacosInventoryExecuted": false,
+    "sourceBasedExpected": {
+      "windows": {
+        "original": 24,
+        "moved": 21,
+        "retained": 3,
+        "newCrate": 23
+      },
+      "linuxAndMacos": {
+        "original": 23,
+        "moved": 20,
+        "retained": 3,
+        "newCrate": 22
+      }
+    }
+  },
+  "validation": {
+    "metadata": {
+      "locked": true,
+      "offline": true,
+      "allFeatures": true,
+      "exitCode": 0
+    },
+    "crateBoundaries": {
+      "exitCode": 0,
+      "activeMembers": 5,
+      "previousTransfersPreserved": 44,
+      "newTransfers": 8
+    },
+    "node": {
+      "passed": 36,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "command": "C:\\nvm\\v24.13.0\\node.exe",
+      "args": [
+        "--test",
+        "scripts/crate-boundaries.test.mjs",
+        "scripts/native-rust-contracts.test.mjs",
+        "scripts/ci-contract-targets.test.mjs"
+      ]
+    },
+    "commands": [
+      {
+        "exe": "C:/Users/dorani/.rustup/toolchains/1.95.0-x86_64-pc-windows-msvc/bin/rustc.exe",
+        "args": [
+          "-Vv"
+        ],
+        "startedAt": "2026-11-27T09:11:27.043Z",
+        "elapsedMs": 23.667299999999997,
+        "exitCode": 0
+      },
+      {
+        "exe": "C:/Users/dorani/.rustup/toolchains/1.95.0-x86_64-pc-windows-msvc/bin/cargo.exe",
+        "args": [
+          "-V"
+        ],
+        "startedAt": "2026-11-27T09:11:27.114Z",
+        "elapsedMs": 14.5719,
+        "exitCode": 0
+      },
+      {
+        "exe": "C:/Users/dorani/.rustup/toolchains/1.95.0-x86_64-pc-windows-msvc/bin/cargo.exe",
+        "args": [
+          "clippy",
+          "--offline",
+          "--locked",
+          "-p",
+          "akra-verification-native",
+          "--all-targets",
+          "--all-features",
+          "--target",
+          "x86_64-pc-windows-msvc",
+          "--target-dir",
+          "target/ci-verification-native",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "startedAt": "2026-11-27T09:11:27.168Z",
+        "elapsedMs": 6207.959,
+        "exitCode": 0
+      },
+      {
+        "exe": "C:\\nvm\\v24.13.0\\node.exe",
+        "args": [
+          "--test",
+          "scripts/crate-boundaries.test.mjs",
+          "scripts/native-rust-contracts.test.mjs",
+          "scripts/ci-contract-targets.test.mjs"
+        ],
+        "startedAt": "2026-11-27T09:11:33.416Z",
+        "elapsedMs": 140.8139000000001,
+        "exitCode": 0
+      },
+      {
+        "exe": "C:/Users/dorani/.rustup/toolchains/1.95.0-x86_64-pc-windows-msvc/bin/cargo.exe",
+        "args": [
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "startedAt": "2026-11-27T09:11:33.594Z",
+        "elapsedMs": 5846.1087,
+        "exitCode": 0
+      },
+      {
+        "exe": "git",
+        "args": [
+          "diff",
+          "--check"
+        ],
+        "startedAt": "2026-11-27T09:11:39.483Z",
+        "elapsedMs": 47.19890000000123,
+        "exitCode": 0
+      }
+    ],
+    "windowsCandidate": {
+      "passed": 23,
+      "failed": 0,
+      "ignored": 0,
+      "doctests": 0
+    }
+  },
+  "selection": {
+    "kind": "explicit standalone package check",
+    "package": "akra-verification-native",
+    "testTargets": [
+      "lib"
+    ],
+    "doctestPathExecuted": true,
+    "normalWorkspaceDependencies": [
+      "akra-native",
+      "akra-verification"
+    ],
+    "rootConsumerCoverage": "full",
+    "automaticConsumerSkippingIntroduced": false
+  },
+  "limitations": [
+    "N=3 grouped local observations, not a randomized controlled or hosted-CI benchmark.",
+    "Full suites differ (22 versus 23 tests), so no equivalent-suite improvement percentage is inferred.",
+    "Initial 18.73-second cold preparation uses d1183874 before fixture portability correction, not the final candidate.",
+    "Root retained test bodies, root all-targets/full gate, and Linux/macOS native validation remain for final combined-source acceptance.",
+    "Common Port shim architecture guard is handled in the parent foundation, not duplicated in this branch."
+  ],
+  "rawEvidenceSha256": {
+    "ci2910-baseline-build.json": "ba11eb19442362d6f39e78fff3b1e01597df78cc0345c798b9b373132590183a",
+    "ci2910-baseline-tests.json": "784c2d31f7a427581ac6c7218845384f1f99744f1474f969f7332616c1957bf7",
+    "ci2910-after-tests.json": "48f28a78491e7c6f816cddb4c726e652964d5ee745b5c7eacaadeb597b6800e4",
+    "ci2910-inventory-check.json": "0afa4a4d7ff3b909a2fb38b861496a9eab229dbd686d45d34087bc768bcd711b",
+    "ci2910-validation.json": "83083a5bd0e1fca8d05c43c57ee46dd33b056d601a4a23e45f5d64e506493218"
+  }
+}
