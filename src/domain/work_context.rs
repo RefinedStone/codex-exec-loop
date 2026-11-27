@@ -6,7 +6,16 @@
  * 새 외부 서비스는 `ExternalResourceRecognizer` 구현 하나를 `external_resource_recognizers` 에 더하면 된다.
  * 장부, 수집, Gateway, Desktop 은 종류 이름(`kind`)만 다루므로 바꾸지 않는다.
  */
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+/// A deliberate repository-level selection override.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextPreference {
+    Automatic,
+    Pin,
+    Exclude,
+}
 
 /// 장부에 남기는 제목 힌트의 최대 길이이다.
 const TITLE_HINT_MAX_CHARS: usize = 120;

@@ -427,6 +427,49 @@ fn watch_kernel_values_once(
         })
 }
 
+/// The context ledger is Gateway-owned and does not require an attached repository kernel.
+pub(crate) fn request_context(method: &str, params: Value) -> Result<Value> {
+    if !matches!(
+        method,
+        "akra/context/select" | "akra/context/setPreference" | "akra/context/refreshScope"
+    ) {
+        bail!("unsupported context CLI request");
+    }
+    let endpoint =
+        crate::gateway_endpoint::client_endpoint().context("context Gateway unavailable")?;
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(async {
+            let (mut socket, _) = tokio::time::timeout(CONNECT_TIMEOUT, async {
+                let stream = connect(&endpoint).await?;
+                Ok::<_, anyhow::Error>(
+                    tokio_tungstenite::client_async("ws://localhost/rpc", stream).await?,
+                )
+            })
+            .await
+            .context("context Gateway connection timed out")?
+            .context("context Gateway unavailable")?;
+            let result = tokio::time::timeout(REQUEST_TIMEOUT, async {
+                context_over_socket(&mut socket, method, params).await
+            })
+            .await
+            .context("context Gateway request timed out")?;
+            // Do not turn a received result into a timeout while closing the socket.
+            drop(socket);
+            result
+        })
+}
+
+async fn context_over_socket<S: AsyncRead + AsyncWrite + Unpin>(
+    socket: &mut WebSocketStream<S>,
+    method: &str,
+    params: Value,
+) -> Result<Value> {
+    send(socket, 1, method, params).await?;
+    answer(response(socket, 1, &mut false).await?)
+}
+
 async fn send<S: AsyncRead + AsyncWrite + Unpin>(
     socket: &mut WebSocketStream<S>,
     id: i64,

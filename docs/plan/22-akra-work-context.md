@@ -171,4 +171,14 @@ recognize(주소의 호스트와 경로) -> 문서(kind, key, url, title_hint) �
 
 - `akra/context/refreshScope { cwd, scope }`: 기존 확인 주기와 실패 예산 내에서 연결된 문서의 버전을 갱신한다.
 - `akra/context/markScopeRead { cwd, scope, kind, key, observedVersion }`: 실제 표시한 현재 버전만 그 범위의 읽음으로 기록한다. 누락·낡은 버전은 거절하며 다른 범위의 읽음은 바꾸지 않는다.
-- 기존 스레드 계약과 원격 호스트 차단은 유지한다. task 존재 검사, path prefix 선정 이유와 pin/exclude는 #2823의 후속 범위다.
+- 기존 스레드 계약과 원격 호스트 차단은 유지한다. 아래 두 번째 조각에서 task 존재 검사와 선정 이유, 명시적 pin/exclude를 연결했다.
+
+
+### A03 범위 선택과 CLI (#2823, #2824)
+
+- 기존 `list`/attach/refreshScope/markScopeRead는 정확한 범위의 장부를 관리한다. 작업 범위는 현재 planning authority에 실제 ID가 있을 때만 허용한다. 경로는 현재 Git worktree root 기준의 정규화된 구간이며 저장소 밖, .git, 모호한 Windows 경로, symlink/reparse point를 거절한다. 삭제된 경로의 장부는 보존하고 rename은 새 경로로 명시적으로 연결한다. 경로 대소문자는 Git 경로의 표기대로 비교한다.
+- `akra/context/select {cwd, taskId?, paths?}`는 본문·모델 호출 없이 선택 후보의 URI/버전과 `selected`, `reason`, `matchedScope`를 반환한다. 작업 링크, 가장 구체적인 경로 prefix(완전한 경로 구간), 넓은 저장소 링크 순으로 중복을 제거한다. task/path 초점이 있으면 저장소에만 연결된 문서는 repository_only로 제외한다. 다른 prefix의 문서는 후보가 아니다.
+- `akra/context/setPreference {cwd, url, preference}`는 저장소 전체에 적용하는 explicit pin/exclude/automatic을 SQLite에서 원자적으로 교체한다. 고정은 최우선 선택, 제외는 자동 선택보다 우선, automatic은 override를 없앤다. 처음 고정한 문서는 명시적으로 저장소에도 연결하여 버전을 확인할 수 있고, 고정 해제는 발견 이력을 삭제하지 않는다. 로컬 운영자 요청이며 검증된 사람 승인이나 실행 권한을 새로 부여하지 않는다. 원격 호스트에는 로컬 장부를 공개하지 않는다.
+- 경로 32개/조상 256개 상한을 둔다. task/path 선택과 선호도 조회는 장부의 마지막 확인 버전을 읽으며 외부 서비스를 호출하지 않는다. 실제 갱신은 정확한 범위의 refreshScope에 맡긴다.
+- `akra context list --task-id T-1 --path src/a.rs --json`, `akra context show --kind github --key 'a/b#2' --task-id T-1 --json`, `akra context changes --task-id T-1 --json`: 같은 선택 계약을 사용한다. show는 하나의 메타데이터/원본 URI를 반환하고 본문은 기존 허용된 provider read로 선택해서 읽는다. changes는 선택된 후보 중 장부에서 확인한 버전 차이만 표시한다. `refresh`는 한 정확한 범위를 갱신하며 `preference pin|exclude|automatic --url ... --confirm true --json`은 명시적 선택 변경이다. --workspace로 다른 checkout을 지정할 수 있다. Gateway가 없으면 JSON 오류/exit 1이며 직접 장부를 열지 않는다. 기존 생성 skill에 읽기 명령 안내 한 줄만 추가한다.
+- #2825의 불변 handoff manifest, 실제 전달 기록, 발견/읽음 구분 강화는 여전히 별도다. 버전 확인을 문서 본문 읽기나 모델 전달의 증거로 보지 않는다.

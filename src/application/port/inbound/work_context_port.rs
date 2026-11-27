@@ -1,3 +1,4 @@
+use crate::domain::work_context::ContextPreference;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
@@ -24,7 +25,7 @@ pub struct ContextResource {
 }
 
 /// 스레드가 아닌 범위이다 (A03). 모두 `cwd` 가 속한 저장소 안의 범위이다.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ContextScope {
     Repository,
@@ -54,7 +55,36 @@ pub struct AttachContextRequest {
     pub source: String,
 }
 
+/// Context selection is read-only and independent of discovery and read receipts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextSelectionRequest {
+    pub cwd: String,
+    pub task_id: Option<String>,
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextSelectionEntry {
+    #[serde(flatten)]
+    pub resource: ContextResource,
+    pub selected: bool,
+    pub reason: &'static str,
+    pub matched_scope: Option<ContextScope>,
+}
+
 pub trait WorkContextPort: Send + Sync {
+    fn select_resources(
+        &self,
+        request: &ContextSelectionRequest,
+    ) -> Result<Vec<ContextSelectionEntry>>;
+    fn set_repository_preference(
+        &self,
+        cwd: &str,
+        url: &str,
+        preference: ContextPreference,
+    ) -> Result<()>;
+
     /// 스레드의 새 기록에서 외부 문서를 찾아 장부에 적고, 그 스레드의 문서 전부를 돌려준다.
     fn thread_resources(&self, thread_id: &str) -> Result<Vec<ContextResource>>;
 
