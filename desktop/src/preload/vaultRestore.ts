@@ -7,14 +7,14 @@ import { type VaultRestoreViewState, VAULT_RESTORE_CHANNELS } from "../shared/va
 const bridge: VaultRestoreBridge = {
   ready: () => ipcRenderer.send(VAULT_RESTORE_CHANNELS.ready),
   onState(listener) {
-    const handler = (_event: IpcRendererEvent, state: VaultRestoreViewState, unlockGeneration: number) => listener(state, unlockGeneration);
+    const handler = (_event: IpcRendererEvent, state: VaultRestoreViewState, viewGeneration: number) => listener(state, viewGeneration);
     ipcRenderer.on(VAULT_RESTORE_CHANNELS.state, handler);
     return () => ipcRenderer.off(VAULT_RESTORE_CHANNELS.state, handler);
   },
   unlock: (generation) => ipcRenderer.send(VAULT_RESTORE_CHANNELS.unlock, generation),
   lock: () => ipcRenderer.send(VAULT_RESTORE_CHANNELS.lock),
-  review: () => ipcRenderer.send(VAULT_RESTORE_CHANNELS.review),
-  reconnect: (mappings) => ipcRenderer.send(VAULT_RESTORE_CHANNELS.reconnect, mappings),
+  review: (generation) => ipcRenderer.send(VAULT_RESTORE_CHANNELS.review, generation),
+  reconnect: (generation, mappings) => ipcRenderer.send(VAULT_RESTORE_CHANNELS.reconnect, generation, mappings),
 };
 
 const surface: AkraVaultRestoreBridge = { vaultRestore: bridge };

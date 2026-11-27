@@ -28,7 +28,7 @@ interface Entry {
   started: boolean;
   minimized: boolean;
   hidden: boolean;
-  unlockGeneration: number;
+  viewGeneration: number;
   unlockOffered: boolean;
 }
 
@@ -57,13 +57,19 @@ export class VaultRestoreWindows {
     });
     ipcMain.on(VAULT_RESTORE_CHANNELS.unlock, (event, generation: unknown) => {
       const entry = this.entryOf(event);
-      if (!entry || !entry.unlockOffered || generation !== entry.unlockGeneration) return;
+      if (!entry || !entry.unlockOffered || generation !== entry.viewGeneration) return;
       entry.unlockOffered = false;
       void entry.session.unlock();
     });
     ipcMain.on(VAULT_RESTORE_CHANNELS.lock, (event) => this.entryOf(event)?.session.lock("user"));
-    ipcMain.on(VAULT_RESTORE_CHANNELS.review, (event) => void this.entryOf(event)?.session.requestReview());
-    ipcMain.on(VAULT_RESTORE_CHANNELS.reconnect, (event, mappings: unknown) => void this.entryOf(event)?.session.reconnect(mappings));
+    ipcMain.on(VAULT_RESTORE_CHANNELS.review, (event, generation: unknown) => {
+      const entry = this.entryOf(event);
+      if (entry && generation === entry.viewGeneration) void entry.session.requestReview();
+    });
+    ipcMain.on(VAULT_RESTORE_CHANNELS.reconnect, (event, generation: unknown, mappings: unknown) => {
+      const entry = this.entryOf(event);
+      if (entry && generation === entry.viewGeneration) void entry.session.reconnect(mappings);
+    });
   }
 
   /** 복원본 창의 main frame 이 보낸 요청만 받는다. 일반 창, 브라우저 패널, iframe 의 요청은 버린다. */
@@ -119,16 +125,16 @@ export class VaultRestoreWindows {
       profileHold: () => !entry.targetActive ? "source_unavailable"
         : entry.minimized || entry.hidden ? "window_not_visible" : this.powerHold() ?? this.deps.profileHold(),
       emit: (state) => {
-        // Each emitted state supersedes all previously rendered unlock buttons.
-        entry.unlockGeneration += 1;
+        // Each emitted state supersedes previously rendered unlock, review and reconnect buttons.
+        entry.viewGeneration += 1;
         entry.unlockOffered = state.phase === "locked" || state.phase === "held";
         if (!contents.isDestroyed()) {
-          try { contents.send(VAULT_RESTORE_CHANNELS.state, state, entry.unlockGeneration); } catch { /* 종료된 renderer에 늦은 응답을 보내지 않는다. */ }
+          try { contents.send(VAULT_RESTORE_CHANNELS.state, state, entry.viewGeneration); } catch { /* 종료된 renderer에 늦은 응답을 보내지 않는다. */ }
         }
       },
       sessionMs: VIEWING_SESSION_MS,
     });
-    entry = { window, session, openerId, targetKey, targetActive: true, rendererAvailable: true, started: false, minimized: false, hidden: false, unlockGeneration: 0, unlockOffered: false };
+    entry = { window, session, openerId, targetKey, targetActive: true, rendererAvailable: true, started: false, minimized: false, hidden: false, viewGeneration: 0, unlockOffered: false };
     this.entries.set(contentsId, entry);
     lockDownNavigation(contents);
     const invalidateRenderer = () => {

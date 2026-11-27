@@ -272,6 +272,55 @@ describe("dedicated Vault window lifetime", () => {
     expect(f.source).toHaveBeenCalledTimes(2);
   });
 
+  it("rejects a queued review or reconnect from a previous viewing session", async () => {
+    const f = fixture();
+    const mapping = { marker: "[[akra:mask:1]]", field: "body" as const, position: 7 };
+    const configure = (index: number, hash: string) => {
+      const { channel, prepared } = f.created[index]!;
+      channel.restore.mockResolvedValue({ kind: "held", reason: "marker_moved", canReconnect: true });
+      channel.review.mockResolvedValue({
+        kind: "review",
+        review: {
+          reviewedHash: hash, publishedTitle: "title", publishedBody: "edited [[akra:mask:1]]",
+          markers: [{ marker: mapping.marker, previous: { field: "body", position: 6 },
+            candidates: [{ field: mapping.field, position: mapping.position, context: "edited" }] }],
+        },
+      });
+      prepared.resolve({ kind: "prepared" });
+      return channel;
+    };
+
+    send(f.window, VAULT_RESTORE_CHANNELS.ready);
+    const first = configure(0, "old-hash");
+    await vi.waitFor(() => expect(f.window.webContents.send.mock.lastCall?.[1]).toMatchObject({ phase: "held" }));
+    const oldHeld = latestGeneration(f.window);
+    send(f.window, VAULT_RESTORE_CHANNELS.review, oldHeld);
+    await vi.waitFor(() => expect(f.window.webContents.send.mock.lastCall?.[1]).toMatchObject({ phase: "review" }));
+    expect(first.review).toHaveBeenCalledTimes(1);
+    const oldReview = latestGeneration(f.window);
+
+    f.windows.lockAll("os_lock");
+    f.windows.releasePowerHold("os_lock");
+    send(f.window, VAULT_RESTORE_CHANNELS.unlock);
+    const second = configure(1, "new-hash");
+    await vi.waitFor(() => expect(f.window.webContents.send.mock.lastCall?.[1]).toMatchObject({ phase: "held" }));
+    const newHeld = latestGeneration(f.window);
+    send(f.window, VAULT_RESTORE_CHANNELS.review, oldHeld);
+    send(f.window, VAULT_RESTORE_CHANNELS.review);
+    expect(second.review).not.toHaveBeenCalled();
+    send(f.window, VAULT_RESTORE_CHANNELS.review, newHeld);
+    await vi.waitFor(() => expect(f.window.webContents.send.mock.lastCall?.[1]).toMatchObject({ phase: "review" }));
+    expect(second.review).toHaveBeenCalledTimes(1);
+    const newReview = latestGeneration(f.window);
+    send(f.window, VAULT_RESTORE_CHANNELS.reconnect, oldReview, [mapping]);
+    send(f.window, VAULT_RESTORE_CHANNELS.reconnect, [mapping]);
+    expect(second.reconnect).not.toHaveBeenCalled();
+    send(f.window, VAULT_RESTORE_CHANNELS.reconnect, newReview, [mapping]);
+    send(f.window, VAULT_RESTORE_CHANNELS.reconnect, newReview, [mapping]);
+    expect(second.reconnect).toHaveBeenCalledTimes(1);
+    expect(second.reconnect).toHaveBeenCalledWith("new-hash", [mapping]);
+  });
+
   it("ignores the general window and nested frames on the private channels", () => {
     const f = fixture();
     send(f.opener, VAULT_RESTORE_CHANNELS.ready);
