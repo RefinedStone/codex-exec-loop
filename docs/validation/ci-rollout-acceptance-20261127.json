@@ -1,0 +1,621 @@
+{
+  "schemaVersion": 1,
+  "reportStatus": "draft-incomplete",
+  "recordedAt": "2026-11-27T08:47:49Z",
+  "repository": "RefinedStone/codex-exec-loop",
+  "issue": 2911,
+  "relatedIssues": [
+    2690,
+    2864,
+    2865,
+    2866,
+    2867,
+    2868,
+    2902,
+    2903,
+    2904,
+    2905,
+    2906,
+    2907,
+    2908,
+    2909,
+    2910,
+    2912
+  ],
+  "baseBranch": "prerelease",
+  "baseSourceSha": "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
+  "finalCombinedSourceSha": null,
+  "planHash": null,
+  "acceptance": {
+    "complete": false,
+    "verdict": "blocked",
+    "overallCIImprovement": null,
+    "localIterationVerdict": "bounded-single-package-observations-only",
+    "prGateVerdict": "not-accepted-on-final-combined-source",
+    "postmergeVerdict": "full-retained-no-speedup-claim",
+    "blockingReasons": [
+      "최종 조합 소스 SHA와 그 SHA의 검증 계획 해시가 아직 없다.",
+      "전체 workspace/OS/features별 unit·bin·integration·doctest·ignored helper·architecture·IPC/플러그인 시험 inventory 합집합을 최종 소스에서 대조하지 못했다.",
+      "새 로컬/Actions 선택 실행과 실패 작업 재실행의 최종 제품 조합 인수가 완료되지 않았다.",
+      "원격 Windows 세션 중단으로 native #2908과 verification-native #2910을 게시·통합하지 못했다.",
+      "공통 Port shim architecture 검사 및 기존 재시작 시험의 개별 timeout 등 공개 CI 실패가 최종 조합에서 해결됐다는 근거가 없다.",
+      "실제 원격의 변경 없는 crate 재빌드 Dirty 원인과 trusted sealed cache 복원 효과가 확정되지 않았다.",
+      "전체 PR/CI/postmerge wall·queue·runner 점유·메모리·캐시 전송 비용의 같은 조건 전후 비교가 없다."
+    ],
+    "criteria": [
+      {
+        "id": "inventory-preservation",
+        "status": "unverified-final",
+        "complete": false
+      },
+      {
+        "id": "explainable-selection-and-counterexamples",
+        "status": "fixtures-and-source-review-only",
+        "complete": false
+      },
+      {
+        "id": "unknown-consumers-and-full-fallback",
+        "status": "implemented-in-proposed-planner-final-integration-pending",
+        "complete": false
+      },
+      {
+        "id": "comparable-edit-build-test-wall",
+        "status": "partial-n1-different-scopes",
+        "complete": false
+      },
+      {
+        "id": "no-skips-or-timeout-relaxation",
+        "status": "component-evidence-only-final-inventory-pending",
+        "complete": false
+      },
+      {
+        "id": "local-pr-postmerge-separated",
+        "status": "reported-no-overall-improvement-claim",
+        "complete": false
+      },
+      {
+        "id": "postmerge-and-fallback-agree",
+        "status": "full-retained-actions-rollout-not-accepted",
+        "complete": false
+      },
+      {
+        "id": "final-sha-plan-success",
+        "status": "blocked",
+        "complete": false
+      },
+      {
+        "id": "limitations-recorded",
+        "status": "reported-other-criteria-incomplete",
+        "complete": false
+      }
+    ]
+  },
+  "rollout": {
+    "currentStage": "기준 자료 수집과 선택 계획/실행기 준비; 최종 전환 인수 전",
+    "localSelective": "proposed-draft-not-finally-accepted",
+    "prSelective": "proposed-draft-not-finally-accepted",
+    "postmerge": "full",
+    "finalIntegrationAndRelease": "full",
+    "fullFallbackConditions": [
+      "미분류 또는 미등록 입력/consumer",
+      "공통 계약·manifest·lockfile·toolchain 변경",
+      "불완전하거나 불명확한 base/head graph",
+      "root consumer 또는 불완전한 consumer 시험 소유권",
+      "compile-only/지원하지 않는 target·feature·격리 조건",
+      "필수 계약 행 누락, 빈 선택, matrix 한도 초과",
+      "명시적 full 또는 현재 push/postmerge"
+    ],
+    "recovery": {
+      "actions": "Native PR Checks workflow_dispatch scope=full",
+      "local": "node scripts/agent-plan.mjs --run --full",
+      "windowsFull": "powershell -File scripts/check_native_pr.ps1 -Mode Full",
+      "posixFull": "bash scripts/check_native_pr.sh --full",
+      "sameShaAndPlanFailedOnly": "같은 workflow run/SHA/plan에서만 이전 성공 행을 검증해 재사용; 다른 SHA/plan으로 승격 금지",
+      "changedSourceOrPlan": "새 SHA/plan의 필수 결과 집합을 새로 인수",
+      "operationalChangeAppliedByThisReport": false,
+      "evidence": "https://github.com/RefinedStone/codex-exec-loop/blob/31f28cbd7dc5c60361f55b6c6eae31038f39904e/docs/reference/ci-workflow-plan.md"
+    },
+    "rulesetChanges": false,
+    "bypassChanges": false,
+    "requiredContextChanges": false,
+    "stableContexts": [
+      "Fast Gate",
+      "CI Gate",
+      "Post-Merge Gate"
+    ],
+    "excludedAutomaticFollowups": [
+      "nextest 기본 전환",
+      "self-hosted runner 도입",
+      "release 보호 설정 변경"
+    ]
+  },
+  "measurements": [
+    {
+      "id": "windows-representative-native-test",
+      "kind": "local-test-execution",
+      "issue": 2864,
+      "pr": 2934,
+      "beforeSeconds": 21.52,
+      "afterSeconds": 18.46,
+      "observedReductionSeconds": 3.06,
+      "observedReductionPercent": 14.219330855018587,
+      "samplesBefore": 1,
+      "samplesAfter": 1,
+      "median": null,
+      "p90": null,
+      "test": "application::service::parallel_mode::orchestrator_loop::tests::automatic_verification::automatic_verification_dispatch_epoch_closure_stops_before_run_and_refresh",
+      "conditions": {
+        "os": "Windows",
+        "target": "x86_64-pc-windows-msvc",
+        "rust": "1.95.0",
+        "features": "all",
+        "profile": "test",
+        "testThreads": 1,
+        "instrumentation": "same test-only timings in baseline and candidate",
+        "load": "existing developer desktop processes; not controlled idle"
+      },
+      "baselineSourceSha": "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
+      "measuredCandidateCommitSha": null,
+      "publicationSha": "6e7b44a50bbb6b829d79634efaddae3b8ad0ae07",
+      "sourceStateNote": "문서의 기준/후보 계측 표본이다. 현재 재기반 publication SHA 자체의 새 전체 성능 측정으로 보지 않는다.",
+      "preservedCounters": {
+        "gitPreparationBefore": 510,
+        "gitPreparationAfter": 510,
+        "commandOutputBefore": 190,
+        "commandOutputAfter": 190
+      },
+      "reproduction": "$env:AKRA_NATIVE_TEST_TIMINGS = \"1\"\ncargo test --locked --lib --all-features --target x86_64-pc-windows-msvc application::service::parallel_mode::orchestrator_loop::tests::automatic_verification::automatic_verification_dispatch_epoch_closure_stops_before_run_and_refresh -- --exact --nocapture --test-threads=1\nRemove-Item Env:AKRA_NATIVE_TEST_TIMINGS",
+      "evidence": "https://github.com/RefinedStone/codex-exec-loop/blob/6e7b44a50bbb6b829d79634efaddae3b8ad0ae07/docs/validation/ci-native-process-wakeup-20261127.md",
+      "claimScope": "대표 시험 1개 실행 구간의 N=1 관찰; Windows 전체 CI 개선율 아님",
+      "reproductionShell": "PowerShell"
+    },
+    {
+      "id": "linux-architecture",
+      "kind": "hosted-ci-test-execution",
+      "issue": 2865,
+      "pr": 2933,
+      "beforeSeconds": 127.81,
+      "afterSeconds": 76.35,
+      "observedReductionSeconds": 51.46,
+      "observedReductionPercent": 40.26289022768172,
+      "samplesBefore": 1,
+      "samplesAfter": 1,
+      "median": null,
+      "p90": null,
+      "inventoryBefore": {
+        "passed": 144,
+        "failed": 0,
+        "ignored": 0
+      },
+      "inventoryAfter": {
+        "passed": 144,
+        "failed": 0,
+        "ignored": 0
+      },
+      "beforeSourceSha": "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
+      "afterPRHeadSha": "74a33850ee310f20417510e5aa19031749951653",
+      "afterCheckoutSha": "49a04f9cf590f8564eb08f8a6b3461ce47173c73",
+      "beforeRun": 45936932223,
+      "beforeJob": 140302241613,
+      "afterRun": 45953138161,
+      "afterJob": 140353445633,
+      "beforeEvidence": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45936932223/job/140302241613",
+      "afterEvidence": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45953138161/job/140353445633",
+      "claimScope": "같은 144개 architecture 시험의 두 hosted 실행 관찰; 통제된 반복 벤치마크나 전체 CI 개선율 아님"
+    },
+    {
+      "id": "linux-root-lib",
+      "kind": "hosted-ci-test-execution",
+      "issue": 2865,
+      "pr": 2933,
+      "beforeSeconds": 843.95,
+      "afterSeconds": 870.59,
+      "observedIncreaseSeconds": 26.64,
+      "observedIncreasePercent": 3.1565851057527086,
+      "samplesBefore": 1,
+      "samplesAfter": 1,
+      "median": null,
+      "p90": null,
+      "inventoryBefore": {
+        "passed": 6540,
+        "failed": 0,
+        "ignored": 27
+      },
+      "inventoryAfter": {
+        "passed": 6540,
+        "failed": 0,
+        "ignored": 27
+      },
+      "beforeSourceSha": "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
+      "afterPRHeadSha": "74a33850ee310f20417510e5aa19031749951653",
+      "afterCheckoutSha": "49a04f9cf590f8564eb08f8a6b3461ce47173c73",
+      "beforeRun": 45936932223,
+      "beforeJob": 140302241613,
+      "afterRun": 45953138161,
+      "afterJob": 140353445633,
+      "beforeEvidence": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45936932223/job/140302241613",
+      "afterEvidence": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45953138161/job/140353445633",
+      "claimScope": "architecture 개선을 전체 lib/CI 개선으로 확대할 수 없음을 보여주는 같은 실행의 관찰"
+    }
+  ],
+  "localBuildBaseline": {
+    "issue": 2867,
+    "pr": 2936,
+    "sourceSha": "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
+    "publicationSha": "fbdfbc1aa89421837e9c3a03b922ca2d6cfe9e9d",
+    "command": "cargo test --locked --offline --lib --no-run --timings -v --message-format=json-render-diagnostics",
+    "conditions": {
+      "os": "Windows 10.0.26200",
+      "rust": "1.95.0",
+      "features": "default",
+      "profile": "test",
+      "incremental": 1,
+      "jobs": 8,
+      "registry": "existing downloads",
+      "targetTriple": "x86_64-pc-windows-msvc",
+      "targetDirectory": "dedicated target; cold starts empty"
+    },
+    "samplesPerCondition": 1,
+    "testBodiesExecuted": 0,
+    "records": [
+      {
+        "scenario": "cold",
+        "seconds": 162.6318
+      },
+      {
+        "scenario": "unchanged",
+        "seconds": 0.4765
+      },
+      {
+        "scenario": "small-domain-comment-edit",
+        "seconds": 33.4256
+      },
+      {
+        "scenario": "small-git-adapter-comment-edit",
+        "seconds": 33.4296
+      }
+    ],
+    "inventory": {
+      "listed": 6418,
+      "ignored": 24,
+      "scope": "Windows default root libtest only; list collection is not test execution"
+    },
+    "compileLinkSplitAvailable": false,
+    "evidence": "https://github.com/RefinedStone/codex-exec-loop/blob/fbdfbc1aa89421837e9c3a03b922ca2d6cfe9e9d/docs/validation/ci-local-build-baseline-2026-11-27.md",
+    "structuredEvidence": "https://github.com/RefinedStone/codex-exec-loop/blob/fbdfbc1aa89421837e9c3a03b922ca2d6cfe9e9d/docs/validation/ci-local-build-baseline-2026-11-27.json"
+  },
+  "differentScopeComparison": {
+    "issue": 2903,
+    "pr": 2937,
+    "publicationSha": "4983131b3a519504562494c86d339ce30f9cacbb",
+    "recordedSourceSha": "c2031a72eb31d1048e0ac98070de5313d869854a",
+    "recordedSourceState": "uncommitted issue-core extraction",
+    "samplesPerCondition": 1,
+    "rootCommand": "cargo test --locked --offline --lib --no-run --timings -v --message-format=json-render-diagnostics",
+    "memberCommand": "cargo test --locked --offline -p akra-issue-core --lib --no-run --timings -v --message-format=json-render-diagnostics",
+    "records": [
+      {
+        "scenario": "unchanged",
+        "rootSeconds": 0.4765,
+        "memberSeconds": 0.1964
+      },
+      {
+        "scenario": "same-small-domain-comment-edit",
+        "rootSeconds": 33.4256,
+        "memberSeconds": 1.05514
+      }
+    ],
+    "validationScopeEqual": false,
+    "overallImprovementPercent": null,
+    "interpretation": "독립 crate의 반복 개발 비용 관찰이다. root 소비자 검증을 포함하지 않아 전체 CI 또는 동등 검증 개선율로 계산하지 않는다.",
+    "evidence": "https://github.com/RefinedStone/codex-exec-loop/blob/4983131b3a519504562494c86d339ce30f9cacbb/docs/validation/ci-issue-core-extraction-20261127.md",
+    "structuredEvidence": "https://github.com/RefinedStone/codex-exec-loop/blob/4983131b3a519504562494c86d339ce30f9cacbb/docs/validation/ci-issue-core-extraction-20261127.json"
+  },
+  "inventory": {
+    "finalCombinedVerified": false,
+    "finalWorkspaceByOS": {
+      "linux": null,
+      "windows": null,
+      "macos": null
+    },
+    "finalDefaultAndAllFeaturesVerified": false,
+    "finalDoctestsVerified": false,
+    "finalIgnoredHelpersVerified": false,
+    "finalArchitectureVerified": false,
+    "finalIpcAndPluginContractsVerified": false,
+    "partialEvidence": [
+      {
+        "issue": 2903,
+        "scope": "issue-core",
+        "movedTests": 53,
+        "newCrateTests": 53,
+        "movedIgnored": 0,
+        "compileFailDoctests": 2,
+        "retainedRootExpected": 6365,
+        "retainedRootExpectedNotFinalVerified": true,
+        "evidencePR": 2937
+      },
+      {
+        "issue": 2909,
+        "scope": "verification independent crate",
+        "windowsCIPassed": 24,
+        "macosCIPassed": 24,
+        "windowsSeconds": 0.44,
+        "macosSeconds": 0.45,
+        "evidencePR": 2938,
+        "finalCombinedVerified": false
+      },
+      {
+        "issue": 2909,
+        "scope": "published older root Linux lib",
+        "passed": 6470,
+        "ignored": 27,
+        "architecturePassed": 143,
+        "architectureFailed": 1,
+        "evidenceRun": 45957694809,
+        "finalCombinedVerified": false
+      }
+    ],
+    "preserveWithoutCountingAsFinal": [
+      "doctest와 compile-fail",
+      "ignored child-process/confirmation helper",
+      "architecture",
+      "IPC/플러그인",
+      "재시작·취소·Unknown 결과",
+      "lease/authority/직렬화",
+      "root 큰 suite 잔여"
+    ]
+  },
+  "ciFindings": [
+    {
+      "id": "prior-windows-60-minute-cancel",
+      "run": 45936932223,
+      "job": 140302241610,
+      "classification": "job-time-budget",
+      "sourceSha": "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
+      "startedAt": "2026-11-27T03:55:45Z",
+      "cancelledAt": "2026-11-27T04:55:51Z",
+      "evidence": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45936932223/job/140302241610"
+    },
+    {
+      "id": "pr2933-restart-mailbox",
+      "pr": 2933,
+      "run": 45953138161,
+      "job": 140353445607,
+      "classification": "individual-test-timeout-not-job-60-minutes",
+      "elapsedMs": 5523,
+      "stage": "host_mailbox",
+      "test": "composition::repository_kernel::restart_tests::delays::restart_phase_delays_preserve_one_durable_work_and_permit",
+      "passed": 22,
+      "failed": 1,
+      "finalResolutionVerified": false,
+      "evidence": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45953138161/job/140353445607"
+    },
+    {
+      "id": "port-shim-architecture",
+      "pr": 2938,
+      "run": 45957694809,
+      "job": 140370017716,
+      "classification": "compatibility-guard-not-updated",
+      "affected": {
+        "inheritedIssueCoreShims": 2,
+        "addedVerificationShims": 2
+      },
+      "baseRun": 45956401035,
+      "baseJob": 140364982858,
+      "finalResolutionVerified": false,
+      "evidence": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45957694809/job/140370017716",
+      "baseEvidence": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45956401035/job/140364982858",
+      "proposedFixPR": 2941,
+      "proposedFixSha": "1f00c46ab5f3d7595d2c71f01ac95f43ef87c545",
+      "proposedFixEvidence": "https://github.com/RefinedStone/codex-exec-loop/commit/1f00c46ab5f3d7595d2c71f01ac95f43ef87c545",
+      "newRegressionTests": 4,
+      "newRegressionTestsExecuted": false,
+      "rustCompileAndFormatValidated": false,
+      "toBeRestackedOnCommonBase": true
+    },
+    {
+      "id": "old-verification-prefix",
+      "pr": 2938,
+      "run": 45957694809,
+      "jobs": {
+        "windows": 140370019000,
+        "macos": 140370019005
+      },
+      "classification": "moved-tests-with-old-runner",
+      "filter": "domain::planning::verification::",
+      "publishedHeadSha": "a3dcfcad0a7922baad794f74bc6ab99487133b0d",
+      "testedCheckoutSha": "1d65c5ede13cad36e1aaec933e6699c00a0922a1",
+      "localRebasedSha": "2e166a40c85854754526f69bf323a7c091afd768",
+      "localRebasedShaPublished": false,
+      "finalResolutionVerified": false,
+      "evidence": [
+        "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45957694809/job/140370019000",
+        "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45957694809/job/140370019005"
+      ]
+    },
+    {
+      "id": "pr2941-format-check",
+      "pr": 2941,
+      "run": 45967360068,
+      "job": 140399519798,
+      "headSha": "1f00c46ab5f3d7595d2c71f01ac95f43ef87c545",
+      "classification": "rust-format-difference",
+      "command": "cargo fmt --all -- --check",
+      "conclusion": "failure",
+      "observedAt": "2026-11-27T08:47:49Z",
+      "laterFormatFixValidated": false,
+      "finalResolutionVerified": false,
+      "evidence": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45967360068/job/140399519798"
+    }
+  ],
+  "cache": {
+    "issue": 2866,
+    "pr": 2935,
+    "publicationSha": "dc67c7dd775a0c3ca5596b69edef33f58fd8beef",
+    "fixture": {
+      "conditions": 8,
+      "passed": 8,
+      "scope": "independent dependency-free Cargo fixture",
+      "productPerformanceSample": false
+    },
+    "originalRemoteDirtyCauseVerified": false,
+    "originalRemoteRun": 45563935880,
+    "trustedSealedSnapshotRemoteEffectVerified": false,
+    "selectedPRSaveAllowed": false,
+    "trustedSaveEvents": [
+      "push:main",
+      "push:prerelease"
+    ],
+    "noTrustedTargetProducer": [
+      {
+        "conditions": "selected Linux explicit target, default/all",
+        "currentFullProducer": "implicit host target",
+        "repeatColdPossible": true
+      },
+      {
+        "conditions": "selected Windows/macOS default features",
+        "currentFullProducer": "portable all features",
+        "repeatColdPossible": true
+      }
+    ],
+    "registryCacheShared": true,
+    "compatibilityBoundaryRelaxed": false,
+    "evidence": "https://github.com/RefinedStone/codex-exec-loop/blob/dc67c7dd775a0c3ca5596b69edef33f58fd8beef/docs/validation/ci-cache-inputs-2026-11-27.md",
+    "structuredEvidence": "https://github.com/RefinedStone/codex-exec-loop/blob/dc67c7dd775a0c3ca5596b69edef33f58fd8beef/docs/validation/ci-cache-inputs-2026-11-27.json"
+  },
+  "deliverySnapshot": [
+    {
+      "issue": 2864,
+      "pr": 2934,
+      "headSha": "6e7b44a50bbb6b829d79634efaddae3b8ad0ae07",
+      "status": "published-component-evidence"
+    },
+    {
+      "issue": 2865,
+      "pr": 2933,
+      "headSha": "74a33850ee310f20417510e5aa19031749951653",
+      "status": "published-component-evidence"
+    },
+    {
+      "issue": 2866,
+      "pr": 2935,
+      "headSha": "dc67c7dd775a0c3ca5596b69edef33f58fd8beef",
+      "status": "published-fixture-remote-acceptance-pending"
+    },
+    {
+      "issue": 2867,
+      "pr": 2936,
+      "headSha": "fbdfbc1aa89421837e9c3a03b922ca2d6cfe9e9d",
+      "status": "published-baseline-only"
+    },
+    {
+      "issue": 2903,
+      "pr": 2937,
+      "headSha": "4983131b3a519504562494c86d339ce30f9cacbb",
+      "status": "published-partial-validation"
+    },
+    {
+      "issue": 2904,
+      "pr": 2939,
+      "headSha": "fe25700c4f2dfd11049838d89c7940d350d1f174",
+      "status": "published-pure-planner"
+    },
+    {
+      "issue": 2905,
+      "pr": 2940,
+      "headSha": "d619440675581b8ea3f9b08dd948e2899ef6309e",
+      "status": "published-runner-fixture-validated"
+    },
+    {
+      "issue": 2906,
+      "pr": 2942,
+      "headSha": "a5998beb18293a22bdf4ffc5bd762c5c11d09ad2",
+      "status": "published-local-draft-node-validated-product-integration-pending",
+      "draft": true,
+      "nodeTestsPassed": 66,
+      "cargoAndPowerShellValidated": false,
+      "observedRun": 45967771084
+    },
+    {
+      "issue": 2907,
+      "pr": 2943,
+      "headSha": "31f28cbd7dc5c60361f55b6c6eae31038f39904e",
+      "status": "published-actions-draft-node-validated-runtime-integration-pending",
+      "draft": true,
+      "basePR": 2942,
+      "combinedNodeTestsPassed": 110,
+      "matrixTestsIncluded": 16,
+      "actualActionsValidated": false,
+      "observedRun": 45968016900
+    },
+    {
+      "issue": 2908,
+      "pr": null,
+      "published": false,
+      "localCheckpointSha": "01e8c2b285541c8a2ba1ab8c3be899ab979b06f7",
+      "status": "windows-only-not-integrated",
+      "finalValidationAccepted": false
+    },
+    {
+      "issue": 2909,
+      "pr": 2938,
+      "headSha": "a3dcfcad0a7922baad794f74bc6ab99487133b0d",
+      "localRebasedSha": "2e166a40c85854754526f69bf323a7c091afd768",
+      "localRebasedShaPublished": false,
+      "status": "published-old-head-rebased-locally"
+    },
+    {
+      "issue": 2910,
+      "pr": null,
+      "published": false,
+      "localCheckpointSha": "19359d5c3c0f49e27efa91e2d2d36a21ed8f1cb9",
+      "rebaseCompletionVerified": false,
+      "status": "windows-only-build-and-rebase-state-pending",
+      "finalValidationAccepted": false
+    },
+    {
+      "issue": 2912,
+      "pr": 2941,
+      "draft": true,
+      "headSha": "1f00c46ab5f3d7595d2c71f01ac95f43ef87c545",
+      "status": "published-preparation-and-separate-port-guard-rust-validation-pending",
+      "automationCommitSha": "ba642a2f13882d4dd3feab8e2c87d1d3a7cf8fc4",
+      "commonPortGuardCommitSha": "1f00c46ab5f3d7595d2c71f01ac95f43ef87c545",
+      "commonPortGuardToBeRestacked": true,
+      "observedRun": 45967360068,
+      "observedFormatConclusion": "failure"
+    }
+  ],
+  "unknownCosts": {
+    "finalCompileSeconds": null,
+    "finalLinkSeconds": null,
+    "finalTestSeconds": null,
+    "cacheRestoreSeconds": null,
+    "cacheSaveSeconds": null,
+    "queueSeconds": null,
+    "prGateWallSeconds": null,
+    "ciGateWallSeconds": null,
+    "postmergeGateWallSeconds": null,
+    "runnerTotalOccupancySeconds": null,
+    "peakMemoryBytes": null,
+    "finalTargetBytes": null
+  },
+  "requiredNextEvidence": [
+    "최종 조합 SHA와 immutable planHash를 고정하고 실제 실행 SHA/계획과 일치시킨다.",
+    "동일 OS/runner/toolchain/lock/features/profile/jobs/incremental 조건에서 cold, unchanged, 작은 issue-core, native/adapter, 공통 계약 수정의 범위를 비교한다.",
+    "전체 inventory와 소유권 이동/추가/잔류, doctest/ignored/helper/architecture/IPC·플러그인을 OS별 대조한다.",
+    "이미 존재하는 로그와 artifact를 먼저 사용하고 남은 구체적 불확실성에 필요한 표본만 수집한다.",
+    "컴파일/링크/시험/캐시/queue/job/gate/runner 점유를 가능한 범위에서 분리하며 표본 수·범위를 기록한다.",
+    "원격 Dirty 사유 및 반복 cold namespace 한계를 확인한다. 효과가 없으면 그대로 기록한다.",
+    "같은 SHA/계획의 실패한 작업만 재실행하는 실제 Actions 경로를 확인한다.",
+    "postmerge는 full을 유지하며 선택 전환은 별도 최종 인수 뒤 판단한다."
+  ],
+  "reportValidation": {
+    "jsonParsed": true,
+    "consistencyChecked": true,
+    "diffWhitespaceChecked": true,
+    "productCodeChanged": false,
+    "remoteWindowsRetried": false
+  }
+}
