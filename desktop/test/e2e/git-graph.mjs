@@ -1,10 +1,12 @@
 // 화면 시험 (plan 27 G1, G2): 빌드한 앱을 가짜 Gateway 에 붙여 "커밋 그래프" 패널을 확인한다. 실제 codex, 턴, git 은
-// 쓰지 않는다. 스레드를 열고 패널을 열면 그 스레드의 폴더로 그래프를 읽고, 라벨과 선을 그리고, 끝에 가까워지면 다음
+// 모델 호출은 하지 않는다. 마지막 회귀 시험만 임시 git 저장소의 실제 변경 목록을 읽는다. 스레드를 열고 패널을 열면 그 스레드의 폴더로 그래프를 읽고, 라벨과 선을 그리고, 끝에 가까워지면 다음
 // 쪽을 읽는다. 저장소가 바뀌면 누르지 않아도 다시 읽고, 줄을 고르면 상세를 보이고, 읽지 않은 쪽까지 찾는다 (G2).
 // 고른 커밋에서 작업의 계획을 보고, 실행하고, 되돌린다 (G3). 가짜 Gateway 는 저장소를 고치지 않는다.
 // 패널을 최대화하면 ref 목록, 그래프, 상세가 함께 보이고, 상태 띠가 끝나지 않은 작업을 한 줄로 쓴다 (#2851).
 // 창은 숨긴 채로 돌린다. `AKRA_QA_SCREENSHOT=<png>` 이면 패널을 찍는다.
-import { writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -139,9 +141,21 @@ let onStaleFirstPage = () => {};
 const graphRequests = [];
 const commitRequests = [];
 let refsRequests = 0;
+// IPC의 실제 git status도 읽을 수 있도록 녹화의 cwd를 격리된 빈 저장소로 바꾼다.
+const fixtureRoot = mkdtempSync(join(tmpdir(), "akra-graph-ui-"));
+const workspace = join(fixtureRoot, "repo");
+mkdirSync(workspace);
+execFileSync("git", ["init", "-q"], { cwd: workspace, windowsHide: true });
+const recordings = [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING].map((source, index) => {
+  const target = join(fixtureRoot, `recording-${index}.jsonl`);
+  writeFileSync(target, readFileSync(source, "utf8").replaceAll("/work/example-app", workspace.replaceAll("\\", "/")));
+  return target;
+});
+let unborn = false;
 const endpoint = fake.uniqueTestEndpoint();
-const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING], {
+const gateway = await fake.startFakeGateway(endpoint, recordings, {
   gitGraph(params) {
+    if (unborn) return { repository: true, stale: false, head: null, refsDigest: "unborn", refs: [], worktrees: [], rows: [], next: null };
     if (!params.cursor && (initialStalePages > 0 || holdFirstPagesStale)) {
       initialStalePages = Math.max(0, initialStalePages - 1);
       staleFirstPages += 1;
@@ -153,7 +167,7 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST
   },
   gitRefs() {
     refsRequests += 1;
-    return { repository: true, refsDigest: repositoryChanged ? "d2" : "d1", ...worktreeProgress };
+    return { repository: true, refsDigest: unborn ? "unborn" : repositoryChanged ? "d2" : "d1", ...worktreeProgress };
   },
   gitCommit(params) {
     commitRequests.push(params.commit);
@@ -185,7 +199,7 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST
     return { status: "done", record };
   },
 });
-const env = { ...process.env, AKRA_GATEWAY_ENDPOINT: endpoint, AKRA_DESKTOP_HIDDEN: "1" };
+const env = { ...process.env, AKRA_GATEWAY_ENDPOINT: endpoint, AKRA_DESKTOP_HIDDEN: "1", AKRA_DESKTOP_USER_DATA: join(fixtureRoot, "user-data") };
 delete env.ELECTRON_RUN_AS_NODE;
 
 const failures = [];
@@ -388,6 +402,25 @@ try {
   worktreeProgress = { operationInProgress: null, conflictedFiles: 0 };
   await strip.waitFor({ state: "detached", timeout: 10_000 });
   check("the status strip leaves when the work is finished", (await strip.count()) === 0);
+  // #2851 review: a real unborn repository with two changed files still has a clickable graph row.
+  unborn = true;
+  writeFileSync(join(workspace, "first.txt"), "first\n");
+  writeFileSync(join(workspace, "second.txt"), "second\n");
+  await page.getByTestId("review-toggle").click();
+  const workingTree = page.getByTestId("working-tree");
+  await workingTree.locator(".review-toolbar").getByRole("button", { name: "새로 고침", exact: true }).click();
+  await workingTree.getByTestId("working-tree-summary").filter({ hasText: "파일 2개" }).waitFor({ timeout: 15_000 });
+  await page.getByTestId("git-graph-toggle").click();
+  await page.getByTestId("git-graph-count").filter({ hasText: "0개" }).waitFor({ timeout: 15_000 });
+  const uncommitted = page.getByTestId("git-graph-uncommitted");
+  await uncommitted.waitFor({ timeout: 10_000 });
+  check("an unborn repository shows the uncommitted row and no commit rows",
+    (await uncommitted.innerText()).includes("파일 2개")
+      && (await page.getByTestId("git-graph-row").count()) === 0
+      && await page.getByText("이 저장소에는 아직 커밋이 없습니다.", { exact: true }).isVisible());
+  await uncommitted.click();
+  await workingTree.getByTestId("working-tree-summary").filter({ hasText: "파일 2개" }).waitFor({ timeout: 10_000 });
+  check("the unborn repository row opens the changes panel", (await workingTree.getByTestId("git-file").count()) === 2);
   check("the panel never starts a turn", !gateway.receivedMethods.includes("turn/start"));
 } catch (error) {
   check(`flow finished without error (${String(error).split("\n")[0]})`, false);
@@ -397,5 +430,6 @@ try {
   for (const window of app.windows()) await window.close();
   await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 10_000))]);
   await gateway.close();
+  rmSync(fixtureRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 250 });
 }
 process.exit(failures.length === 0 ? 0 : 1);
