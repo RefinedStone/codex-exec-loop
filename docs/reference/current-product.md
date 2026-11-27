@@ -802,7 +802,11 @@ Akra Desktop (`desktop/`) runs from source as a development build; it has no pac
   on the first page, `worktrees` (`path`, `head`, `branch` from `git worktree list`). `refs` includes
   backup refs (`refs/akra/backup/*`, kind `backup`), the log includes the commits they reach, and a row
   reached only from a backup ref has `backupOnly: true`. Nothing writes a backup ref yet (plan 27 G3).
-  `akra/git/refs` with `{ cwd }` returns `{ repository, refsDigest }` without reading commits.
+  `akra/git/refs` with `{ cwd }` returns `{ repository, refsDigest }` without reading commits. Since #2851
+  it also returns `operationInProgress` (`merge`, `rebase`, `cherry-pick`, `revert`, or `bisect` in this
+  worktree, from the marker files in its git folder, else `null`) and `conflictedFiles` (paths with
+  unmerged index entries, `git ls-files --unmerged`). Neither reads worktree files, and neither is part
+  of the digest.
   `akra/git/commit` with `{ cwd, commit }` returns `{ commit }`: the full message, author, committer,
   parents, and the diff against the first parent (`git show --first-parent --no-ext-diff --no-textconv`),
   or `commit: null` for an unknown sha. `commit` must be a full sha (40 or 64 hexadecimal characters). A diff over
@@ -1363,7 +1367,16 @@ The Gateway records the external documents that a thread mentions, without a mod
   the other rows, and "다음" reads up to 10 further pages of 1,000 rows when the loaded rows have no
   further match. The commit that a worktree has checked out carries a badge with the newest thread whose
   folder is in that worktree; the badge opens the thread. A backup ref has a dashed label, and a commit
-  reached only from a backup ref is dim. The panel has no path or branch filter and no maximised layout.
+  reached only from a backup ref is dim. The panel has no path or branch filter.
+  Since #2851 the panel can be maximised (the button next to "패널 닫기"). The maximised panel adds a ref
+  list on the left (local, remote, tag, backup, and worktree groups; a click selects that commit); the
+  graph and the commit detail below it stay as in the narrow panel, which is unchanged. Above the graph
+  a status strip writes, in one line, an unfinished git operation, the number of conflicted files, and a
+  HEAD without a branch; it shows only when one of them is true and follows the 3-second `akra/git/refs`
+  poll. When the "변경" panel has read changed files for the same folder, the top row is "커밋하지 않은
+  변경 · 파일 N개" and opens that panel; that count is refreshed when the "변경" panel reads, not by the
+  poll. While a plan is open, the graph draws the branch (or `HEAD`) it moves as a dashed label and a
+  dashed ring at the commit it moves to. There is no stash group (the Gateway does not read stashes).
   Since plan 27 G3 the detail of a selected commit has operation buttons: reset the checked-out branch
   to this commit, check out a local branch that is on this commit, check out the commit without a
   branch, and move another local branch here. A button reads a plan from `akra/git/plan` and shows it
