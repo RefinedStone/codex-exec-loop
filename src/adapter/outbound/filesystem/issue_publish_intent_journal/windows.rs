@@ -211,12 +211,19 @@ pub(super) fn save_record(runtime: &Path, record: &IssuePublishIntentRecord) -> 
         Some(old) => *old = record.clone(),
         None => records.push(record.clone()),
     }
+    let removed = super::retention::trim(&mut records);
     serialized_size(&records)?;
     transaction.execute(
         "INSERT INTO issue_publish_intents (intent_id, record) VALUES (?1, ?2)
          ON CONFLICT (intent_id) DO UPDATE SET record = excluded.record",
         params![record.intent_id, serde_json::to_string(record)?],
     )?;
+    for id in removed {
+        transaction.execute(
+            "DELETE FROM issue_publish_intents WHERE intent_id = ?1",
+            [id],
+        )?;
+    }
     guard.verify_identity()?;
     reject_legacy(runtime)?;
     // No publication can start until this durable Sent transaction has returned success.
