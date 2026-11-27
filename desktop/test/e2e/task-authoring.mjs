@@ -92,7 +92,10 @@ try {
   await page.getByTestId("connection-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 30_000 });
   await page.getByTestId("thread-entry").first().click();
   const selectionButton = page.getByTestId("draft-task-from-selection");
-  await selectionButton.waitFor();
+  const conversation = page.getByTestId("conversation");
+  await conversation.waitFor();
+  assert.equal(await selectionButton.count(), 0, "unselected conversation has no task action");
+  const before = await conversation.boundingBox();
   const selectedText = await page.locator(".user-message, .agent-message").first().evaluate((element) => {
     const range = document.createRange();
     range.selectNodeContents(element);
@@ -101,6 +104,10 @@ try {
     selection.addRange(range);
     return selection.toString().trim();
   });
+  assert.equal(await selectionButton.count(), 0, "selection alone reserves no space");
+  assert.deepEqual(await conversation.boundingBox(), before);
+  await page.locator(".user-message, .agent-message").first().click({ button: "right" });
+  await selectionButton.waitFor();
   await selectionButton.click();
   await page.getByTestId("task-editor").waitFor();
   assert.equal(await page.locator("#task-editor-description").inputValue(), selectedText);
@@ -111,7 +118,6 @@ try {
   await page.getByTestId("task-editor-save").click();
   await page.getByTestId("task-editor-recover").waitFor({ timeout: 30_000 });
   await page.getByTestId("connection-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 30_000 });
-  await selectionButton.waitFor();
   // The recovery button is explicit; reconnect itself must not replay a mutation.
   assert.equal(requests.filter((r) => r.params.command?.type === "create_task").length, 1);
   await page.getByTestId("task-editor-recover").click();
