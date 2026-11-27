@@ -1,0 +1,395 @@
+{
+  "sha": "3110a9e9cfb3eaa83bf32a06af640e4c207dffba",
+  "platform": "win32",
+  "release": "10.0.26200",
+  "node": "v24.13.0",
+  "scenario": {
+    "width": 1200,
+    "height": 800,
+    "zoom": 1,
+    "panel": false,
+    "scale": null
+  },
+  "display": {
+    "electron": "45.2.3",
+    "monitorDips": {
+      "width": 1920,
+      "height": 1080
+    },
+    "displayScale": 1,
+    "contentDips": [
+      1200,
+      800
+    ]
+  },
+  "checks": {
+    "emptyContextMenuHasNoTaskAction": true,
+    "keyboardActionFocused": true,
+    "copyAndQuotePresent": true,
+    "dialogOwnsFocus": true,
+    "exactMultilineDraft": true,
+    "sourceThreadAndTurn": true,
+    "geometryUnchanged": false,
+    "noPersistentAction": true,
+    "pendingAndAttachedAlign": true,
+    "overflowStaysInCode": false,
+    "menuEscapeRestoresFocus": true,
+    "editorEscapeRestoresFocus": false,
+    "panelAndDraftPreserved": true,
+    "noTaskMutationOrModelRequests": true
+  },
+  "stages": {
+    "pending": {
+      "viewport": [
+        1200,
+        800
+      ],
+      "dpr": 1,
+      "zoom": "1",
+      "conversation": {
+        "x": 272,
+        "y": 44,
+        "width": 928,
+        "height": 561.609375
+      },
+      "column": {
+        "x": 346,
+        "y": 68,
+        "width": 780,
+        "height": 467
+      },
+      "composer": {
+        "x": 346,
+        "y": 694,
+        "width": 780,
+        "height": 90
+      },
+      "scrollTop": 0,
+      "scrollLeft": 0,
+      "verticalExtent": [
+        547,
+        547
+      ],
+      "horizontalExtent": [
+        898,
+        1934
+      ],
+      "codeExtent": [
+        1875,
+        1875
+      ],
+      "panel": null,
+      "tab": null,
+      "draft": "Unsaved Windows acceptance fixture",
+      "focus": "conversation",
+      "action": false,
+      "legacyArea": false
+    },
+    "before": {
+      "viewport": [
+        1200,
+        800
+      ],
+      "dpr": 1,
+      "zoom": "1",
+      "conversation": {
+        "x": 272,
+        "y": 44,
+        "width": 928,
+        "height": 561.609375
+      },
+      "column": {
+        "x": 346,
+        "y": 68,
+        "width": 780,
+        "height": 467
+      },
+      "composer": {
+        "x": 346,
+        "y": 694,
+        "width": 780,
+        "height": 90
+      },
+      "scrollTop": 0,
+      "scrollLeft": 0,
+      "verticalExtent": [
+        547,
+        547
+      ],
+      "horizontalExtent": [
+        898,
+        1934
+      ],
+      "codeExtent": [
+        1875,
+        1875
+      ],
+      "panel": null,
+      "tab": null,
+      "draft": "Unsaved Windows acceptance fixture",
+      "focus": "conversation",
+      "action": false,
+      "legacyArea": false
+    },
+    "selected": {
+      "viewport": [
+        1200,
+        800
+      ],
+      "dpr": 1,
+      "zoom": "1",
+      "conversation": {
+        "x": 272,
+        "y": 44,
+        "width": 928,
+        "height": 561.609375
+      },
+      "column": {
+        "x": 346,
+        "y": 68,
+        "width": 780,
+        "height": 467
+      },
+      "composer": {
+        "x": 346,
+        "y": 694,
+        "width": 780,
+        "height": 90
+      },
+      "scrollTop": 0,
+      "scrollLeft": 0,
+      "verticalExtent": [
+        547,
+        547
+      ],
+      "horizontalExtent": [
+        898,
+        1934
+      ],
+      "codeExtent": [
+        1875,
+        1875
+      ],
+      "panel": null,
+      "tab": null,
+      "draft": "Unsaved Windows acceptance fixture",
+      "focus": "conversation",
+      "action": false,
+      "legacyArea": false
+    },
+    "changed": {
+      "viewport": [
+        1200,
+        800
+      ],
+      "dpr": 1,
+      "zoom": "1",
+      "conversation": {
+        "x": 272,
+        "y": 44,
+        "width": 928,
+        "height": 561.609375
+      },
+      "column": {
+        "x": 346,
+        "y": 68,
+        "width": 780,
+        "height": 467
+      },
+      "composer": {
+        "x": 346,
+        "y": 694,
+        "width": 780,
+        "height": 90
+      },
+      "scrollTop": 0,
+      "scrollLeft": 0,
+      "verticalExtent": [
+        547,
+        547
+      ],
+      "horizontalExtent": [
+        898,
+        1934
+      ],
+      "codeExtent": [
+        1875,
+        1875
+      ],
+      "panel": null,
+      "tab": null,
+      "draft": "Unsaved Windows acceptance fixture",
+      "focus": "conversation",
+      "action": false,
+      "legacyArea": false
+    },
+    "cleared": {
+      "viewport": [
+        1200,
+        800
+      ],
+      "dpr": 1,
+      "zoom": "1",
+      "conversation": {
+        "x": 272,
+        "y": 44,
+        "width": 928,
+        "height": 561.609375
+      },
+      "column": {
+        "x": 346,
+        "y": 68,
+        "width": 780,
+        "height": 467
+      },
+      "composer": {
+        "x": 346,
+        "y": 694,
+        "width": 780,
+        "height": 90
+      },
+      "scrollTop": 0,
+      "scrollLeft": 0,
+      "verticalExtent": [
+        547,
+        547
+      ],
+      "horizontalExtent": [
+        898,
+        1934
+      ],
+      "codeExtent": [
+        1875,
+        1875
+      ],
+      "panel": null,
+      "tab": null,
+      "draft": "Unsaved Windows acceptance fixture",
+      "focus": "conversation",
+      "action": false,
+      "legacyArea": false
+    },
+    "menuEscape": {
+      "viewport": [
+        1200,
+        800
+      ],
+      "dpr": 1,
+      "zoom": "1",
+      "conversation": {
+        "x": 272,
+        "y": 44,
+        "width": 928,
+        "height": 561.609375
+      },
+      "column": {
+        "x": 287,
+        "y": 68,
+        "width": 780,
+        "height": 467
+      },
+      "composer": {
+        "x": 346,
+        "y": 694,
+        "width": 780,
+        "height": 90
+      },
+      "scrollTop": 0,
+      "scrollLeft": 59,
+      "verticalExtent": [
+        547,
+        547
+      ],
+      "horizontalExtent": [
+        898,
+        1934
+      ],
+      "codeExtent": [
+        1875,
+        1875
+      ],
+      "panel": null,
+      "tab": null,
+      "draft": "Unsaved Windows acceptance fixture",
+      "focus": "conversation",
+      "action": false,
+      "legacyArea": false
+    },
+    "after": {
+      "viewport": [
+        1200,
+        800
+      ],
+      "dpr": 1,
+      "zoom": "1",
+      "conversation": {
+        "x": 272,
+        "y": 44,
+        "width": 928,
+        "height": 561.609375
+      },
+      "column": {
+        "x": 287,
+        "y": 68,
+        "width": 780,
+        "height": 467
+      },
+      "composer": {
+        "x": 346,
+        "y": 694,
+        "width": 780,
+        "height": 90
+      },
+      "scrollTop": 0,
+      "scrollLeft": 59,
+      "verticalExtent": [
+        547,
+        547
+      ],
+      "horizontalExtent": [
+        898,
+        1934
+      ],
+      "codeExtent": [
+        1875,
+        1875
+      ],
+      "panel": null,
+      "tab": null,
+      "draft": "Unsaved Windows acceptance fixture",
+      "focus": "BODY",
+      "action": false,
+      "legacyArea": false
+    }
+  },
+  "frames": {
+    "before": {
+      "file": "regular-before.png",
+      "pixels": {
+        "width": 1200,
+        "height": 800
+      }
+    },
+    "menu": {
+      "file": "regular-menu.png",
+      "pixels": {
+        "width": 1200,
+        "height": 800
+      }
+    },
+    "editor": {
+      "file": "regular-editor.png",
+      "pixels": {
+        "width": 1200,
+        "height": 800
+      }
+    },
+    "after": {
+      "file": "regular-after.png",
+      "pixels": {
+        "width": 1200,
+        "height": 800
+      }
+    }
+  }
+}
