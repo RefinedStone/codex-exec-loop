@@ -561,7 +561,7 @@ mod tests {
         workspace.cleanup().unwrap();
         profile.cleanup().unwrap();
         let local = crate::private_fs::windows_local_app_data_path().unwrap();
-        assert!(!local.join("Temp").join(&identity.name).exists());
+        assert!(!workspace.path.exists());
         assert!(!local.join("Packages").join(&identity.name).exists());
     }
 }
