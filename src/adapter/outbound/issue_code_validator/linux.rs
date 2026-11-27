@@ -246,6 +246,9 @@ pub(super) fn run(
     request: &IssueCodeValidatorRunRequest,
     cancellation: &IssueCodeValidatorCancellation,
 ) -> Outcome {
+    if cancellation.is_cancelled() {
+        return Outcome::NotRun(NotRun::Cancelled);
+    }
     let Some(program) = program() else {
         return Outcome::NotRun(NotRun::IsolationUnavailable);
     };
@@ -271,6 +274,9 @@ fn collect(
     timeout: Duration,
     cancellation: &IssueCodeValidatorCancellation,
 ) -> Outcome {
+    if cancellation.is_cancelled() {
+        return Outcome::NotRun(NotRun::Cancelled);
+    }
     let Ok(mut child) = crate::subprocess::spawn(command) else {
         return Outcome::NotRun(NotRun::IsolationUnavailable);
     };
@@ -289,14 +295,14 @@ fn collect(
         let deadline = Instant::now() + timeout;
         loop {
             drain(&mut output, &mut captured)?;
+            if cancellation.is_cancelled() {
+                return Ok(Err(NotRun::Cancelled));
+            }
             if let Some(status) = child.try_wait()? {
                 return Ok(Ok(status));
             }
             if Instant::now() >= deadline {
                 return Ok(Err(NotRun::TimedOut));
-            }
-            if cancellation.is_cancelled() {
-                return Ok(Err(NotRun::Cancelled));
             }
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -340,7 +346,7 @@ fn classify(status: Option<i32>, output: &[u8]) -> Outcome {
     match status {
         Some(0) => Outcome::Passed,
         Some(1) => Outcome::Rejected {
-            message: String::from_utf8_lossy(message).trim().to_string(),
+            message: super::bounded_rejection_message(message, MESSAGE_LIMIT),
         },
         _ => Outcome::NotRun(NotRun::Crashed),
     }

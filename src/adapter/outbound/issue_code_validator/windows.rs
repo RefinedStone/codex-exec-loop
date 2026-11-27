@@ -27,6 +27,9 @@ pub(super) fn run(
     request: &IssueCodeValidatorRunRequest,
     cancellation: &IssueCodeValidatorCancellation,
 ) -> Outcome {
+    if cancellation.is_cancelled() {
+        return Outcome::NotRun(NotRun::Cancelled);
+    }
     if !cfg!(target_arch = "x86_64") {
         return Outcome::NotRun(NotRun::IsolationUnavailable);
     }

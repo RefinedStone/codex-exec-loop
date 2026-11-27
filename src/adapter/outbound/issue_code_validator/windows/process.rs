@@ -52,6 +52,9 @@ pub(super) fn run(
     timeout: Duration,
     cancellation: &IssueCodeValidatorCancellation,
 ) -> io::Result<Outcome> {
+    if cancellation.is_cancelled() {
+        return Ok(Outcome::NotRun(NotRun::Cancelled));
+    }
     let stdout = Pipe::new()?;
     let stderr = Pipe::new()?;
     let stdin = inherited_copy(workspace.input()?.as_raw_handle())?;
@@ -61,7 +64,9 @@ pub(super) fn run(
     drop(stdout.child);
     drop(stderr.child);
     let result = (|| {
-        verify_and_resume(identity, &child, &job)?;
+        if !verify_and_resume(identity, &child, &job, cancellation)? {
+            return Ok(Outcome::NotRun(NotRun::Cancelled));
+        }
         wait_bounded(
             &child,
             &job,
@@ -468,6 +473,9 @@ fn wait_bounded(
     loop {
         drain(stdout, &mut message, true)?;
         drain(stderr, &mut discarded, false)?;
+        if cancellation.is_cancelled() {
+            return Ok(Outcome::NotRun(NotRun::Cancelled));
+        }
         // SAFETY: querying our process wait state does not execute child code.
         match unsafe { WaitForSingleObject(child.process.raw(), 0) } {
             WAIT_OBJECT_0 => {
@@ -483,7 +491,7 @@ fn wait_bounded(
                 return Ok(match code {
                     0 => Outcome::Passed,
                     1 => Outcome::Rejected {
-                        message: bounded_message(&message),
+                        message: super::super::bounded_rejection_message(&message, MESSAGE_LIMIT),
                     },
                     _ => Outcome::NotRun(NotRun::Crashed),
                 });
@@ -494,34 +502,29 @@ fn wait_bounded(
         if Instant::now() >= deadline {
             return Ok(Outcome::NotRun(NotRun::TimedOut));
         }
-        if cancellation.is_cancelled() {
-            return Ok(Outcome::NotRun(NotRun::Cancelled));
-        }
         std::thread::sleep(Duration::from_millis(5));
     }
 }
 
-fn bounded_message(bytes: &[u8]) -> String {
-    let mut value = String::from_utf8_lossy(bytes).trim().to_owned();
-    let mut end = value.len().min(MESSAGE_LIMIT);
-    while !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    value.truncate(end);
-    value
-}
-
-fn verify_and_resume(identity: &Identity, child: &Child, job: &Job) -> io::Result<()> {
+fn verify_and_resume(
+    identity: &Identity,
+    child: &Child,
+    job: &Job,
+    cancellation: &IssueCodeValidatorCancellation,
+) -> io::Result<bool> {
     identity.verify_process(child.process.raw())?;
     job.verify_member(child.process.raw())?;
     verify_mitigation(child.process.raw(), ProcessChildProcessPolicy)?;
     verify_mitigation(child.process.raw(), ProcessSystemCallDisablePolicy)?;
+    if cancellation.is_cancelled() {
+        return Ok(false);
+    }
     // No instruction in the approved image runs before all required postconditions.
     // SAFETY: this thread was created suspended and has not previously been resumed.
     if unsafe { ResumeThread(child.thread.raw()) } != 1 {
         return Err(io::Error::other("validator thread could not be resumed"));
     }
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -548,7 +551,10 @@ mod tests {
         drop(stdout.child);
         drop(stderr.child);
         assert_eq!(job.active().unwrap(), 1);
-        assert!(verify_and_resume(&wrong_identity, &child, &job).is_err());
+        let cancellation = IssueCodeValidatorCancellation::new();
+        assert!(verify_and_resume(&wrong_identity, &child, &job, &cancellation).is_err());
+        assert!(cancellation.cancel());
+        assert!(!verify_and_resume(&identity, &child, &job, &cancellation).unwrap());
         job.quiesce(child.process.raw()).unwrap();
         assert_eq!(job.active().unwrap(), 0);
         let mut output = Vec::new();

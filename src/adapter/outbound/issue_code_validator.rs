@@ -1,6 +1,6 @@
 use crate::application::port::outbound::issue_code_validator_runner_port::{
-    IssueCodeValidatorCancellation, IssueCodeValidatorRunOutcome, IssueCodeValidatorRunRequest,
-    IssueCodeValidatorRunnerPort,
+    IssueCodeValidatorCancellation, IssueCodeValidatorNotRun, IssueCodeValidatorRunOutcome,
+    IssueCodeValidatorRunRequest, IssueCodeValidatorRunnerPort,
 };
 
 /*
@@ -33,6 +33,9 @@ impl IssueCodeValidatorRunnerPort for SandboxedIssueCodeValidatorRunnerAdapter {
         request: IssueCodeValidatorRunRequest,
         cancellation: &IssueCodeValidatorCancellation,
     ) -> IssueCodeValidatorRunOutcome {
+        if cancellation.is_cancelled() {
+            return IssueCodeValidatorRunOutcome::NotRun(IssueCodeValidatorNotRun::Cancelled);
+        }
         #[cfg(target_os = "macos")]
         {
             macos::run(&request, cancellation)
@@ -47,11 +50,64 @@ impl IssueCodeValidatorRunnerPort for SandboxedIssueCodeValidatorRunnerAdapter {
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
         {
-            use crate::application::port::outbound::issue_code_validator_runner_port::IssueCodeValidatorNotRun;
-
             let _ = (request, cancellation);
             IssueCodeValidatorRunOutcome::NotRun(IssueCodeValidatorNotRun::IsolationUnavailable)
         }
+    }
+}
+
+/// Bound the final UTF-8 message, not just the captured raw bytes.
+#[cfg(any(test, target_os = "macos", target_os = "linux", windows))]
+fn bounded_rejection_message(bytes: &[u8], limit: usize) -> String {
+    let mut value = String::from_utf8_lossy(&bytes[..bytes.len().min(limit)])
+        .trim()
+        .to_owned();
+    let mut end = value.len().min(limit);
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value.truncate(end);
+    value
+}
+
+#[cfg(test)]
+mod common_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn validator_cancelled_before_admission_never_reads_an_executable() {
+        let cancellation = IssueCodeValidatorCancellation::new();
+        assert!(cancellation.cancel());
+        let result = SandboxedIssueCodeValidatorRunnerAdapter::new().run(
+            IssueCodeValidatorRunRequest {
+                command: String::new(),
+                sha256: String::new(),
+                timeout: Duration::from_secs(30),
+                input_json: "{}".into(),
+            },
+            &cancellation,
+        );
+        assert_eq!(
+            result,
+            IssueCodeValidatorRunOutcome::NotRun(IssueCodeValidatorNotRun::Cancelled)
+        );
+    }
+
+    #[test]
+    fn validator_rejection_message_bounds_lossy_utf8_on_character_boundary() {
+        let limit = 4096;
+        let malformed = bounded_rejection_message(&vec![0xff; limit], limit);
+        assert_eq!(malformed.len(), limit - 1);
+        assert!(malformed.chars().all(|ch| ch == '\u{fffd}'));
+        let mut split = vec![b'x'; limit - 1];
+        split.extend_from_slice("한".as_bytes());
+        assert_eq!(
+            bounded_rejection_message(&split, limit),
+            "x".repeat(limit - 1)
+        );
+        assert_eq!(bounded_rejection_message(b"  reject  ", limit), "reject");
+        assert_eq!(bounded_rejection_message(b"x", 0), "");
     }
 }
 
@@ -114,6 +170,9 @@ mod macos {
         cancellation: &IssueCodeValidatorCancellation,
     ) -> IssueCodeValidatorRunOutcome {
         let not_run = IssueCodeValidatorRunOutcome::NotRun;
+        if cancellation.is_cancelled() {
+            return not_run(IssueCodeValidatorNotRun::Cancelled);
+        }
         let Ok(content) = fs::read(&request.command) else {
             return not_run(IssueCodeValidatorNotRun::Missing);
         };
@@ -161,6 +220,11 @@ mod macos {
         let input = workspace.join("input.json");
         fs::write(&input, &request.input_json)?;
 
+        if cancellation.is_cancelled() {
+            return Ok(IssueCodeValidatorRunOutcome::NotRun(
+                IssueCodeValidatorNotRun::Cancelled,
+            ));
+        }
         let mut child = Command::new(SANDBOX_EXEC)
             .arg("-D")
             .arg(format!("WORKSPACE={}", workspace.display()))
@@ -196,14 +260,14 @@ mod macos {
                 let deadline = Instant::now() + request.timeout;
                 loop {
                     drain_stdout(&mut stdout, &mut message)?;
+                    if cancellation.is_cancelled() {
+                        return Ok(Err(IssueCodeValidatorNotRun::Cancelled));
+                    }
                     if let Some(status) = child.try_wait()? {
                         return Ok(Ok(status));
                     }
                     if Instant::now() >= deadline {
                         return Ok(Err(IssueCodeValidatorNotRun::TimedOut));
-                    }
-                    if cancellation.is_cancelled() {
-                        return Ok(Err(IssueCodeValidatorNotRun::Cancelled));
                     }
                     thread::sleep(Duration::from_millis(20));
                 }
@@ -221,7 +285,7 @@ mod macos {
         Ok(match status.code() {
             Some(0) => IssueCodeValidatorRunOutcome::Passed,
             Some(1) => IssueCodeValidatorRunOutcome::Rejected {
-                message: String::from_utf8_lossy(&message).trim().to_string(),
+                message: super::bounded_rejection_message(&message, MESSAGE_LIMIT_BYTES),
             },
             _ => IssueCodeValidatorRunOutcome::NotRun(IssueCodeValidatorNotRun::Crashed),
         })
