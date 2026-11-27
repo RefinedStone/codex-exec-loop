@@ -40,7 +40,7 @@ function section(title: string, text: string, testId: string): HTMLElement[] {
 }
 
 /** 표식마다 지금 공유본의 자리를 고르는 양식이다. 기본은 "연결하지 않음" 이다: 사용자가 고른 것만 연결한다. */
-function reviewForm(review: VaultReconnectReview): HTMLElement[] {
+function reviewForm(review: VaultReconnectReview, generation: number): HTMLElement[] {
   const choices = new Map<string, VaultApprovedMapping | null>();
   const fieldsets = review.markers.map((marker, index) => {
     const fieldset = element("fieldset");
@@ -67,7 +67,7 @@ function reviewForm(review: VaultReconnectReview): HTMLElement[] {
   });
   const confirm = button("고른 표식 재연결", "vault-reconnect-confirm", () => {
     confirm.disabled = true;
-    bridge.reconnect([...choices.values()].filter((mapping) => mapping !== null));
+    bridge.reconnect(generation, [...choices.values()].filter((mapping) => mapping !== null));
   });
   return [
     ...section("지금 공유본 · 제목", review.publishedTitle, "vault-review-title"),
@@ -77,11 +77,11 @@ function reviewForm(review: VaultReconnectReview): HTMLElement[] {
   ];
 }
 
-function render(state: VaultRestoreViewState, unlockGeneration = -1): void {
+function render(state: VaultRestoreViewState, viewGeneration = -1): void {
   const view = vaultRestoreView(state);
   const actions = element("div");
   actions.className = "actions";
-  const run: Record<VaultRestoreAction, () => void> = { unlock: () => bridge.unlock(unlockGeneration), lock: bridge.lock, review: bridge.review };
+  const run: Record<VaultRestoreAction, () => void> = { unlock: () => bridge.unlock(viewGeneration), lock: bridge.lock, review: () => bridge.review(viewGeneration) };
   actions.append(...view.actions.map((action) => button(ACTION_LABEL[action], `vault-restore-${action}`, run[action])));
   const heading = element("h1", view.heading, "vault-restore-heading");
   const nodes: HTMLElement[] = [heading, element("p", view.detail, "vault-restore-detail")];
@@ -91,7 +91,7 @@ function render(state: VaultRestoreViewState, unlockGeneration = -1): void {
     until.className = "muted";
     nodes.push(until);
   }
-  if (state.phase === "review") nodes.push(...reviewForm(state.review));
+  if (state.phase === "review") nodes.push(...reviewForm(state.review, viewGeneration));
   nodes.push(actions);
   root!.dataset.phase = state.phase;
   root!.replaceChildren(...nodes);
