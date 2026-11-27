@@ -1,5 +1,5 @@
 use super::*;
-use crate::domain::planning::{TaskAcceptanceChannel, TaskAcceptanceCriterion};
+use crate::acceptance::{TaskAcceptanceChannel, TaskAcceptanceCriterion};
 
 fn criterion(id: &str) -> TaskAcceptanceCriterion {
     TaskAcceptanceCriterion {
