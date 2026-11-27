@@ -25,6 +25,7 @@ use crate::domain::issue_automation::collection::{
     IssueCollectionFailure, IssueCollectionMode, IssueCollectionPage, IssueCollectionProjection,
     IssueCollectionQuery, StoredIssueCollection,
 };
+use crate::domain::issue_automation::decision::StoredIssueDecision;
 use crate::domain::issue_automation::source::{
     IssueDiscoverySelection, IssueSourceContent, IssueSourceDisclosure, IssueSourceFailure,
     IssueSourceRead, IssueSourceRepository,
@@ -433,6 +434,23 @@ impl IssueCollectionService {
         self.store
             .query_collection_issues(&self.workspace_dir, query)
             .map_err(ledger_unavailable)
+    }
+
+    /// Read stored decision authority once in a consistent catalog snapshot.
+    /// Attention does not need policy assessment or page-by-page triage.
+    pub fn open_decisions(&self) -> Result<Vec<StoredIssueDecision>> {
+        let mut decisions = Vec::new();
+        self.store
+            .scan_collection_issues(&self.workspace_dir, None, &mut |item| {
+                decisions.extend(item.open_decisions);
+                anyhow::ensure!(
+                    decisions.len() <= 10_000,
+                    "issue attention exceeds the bounded read; no partial list returned"
+                );
+                Ok(())
+            })
+            .map_err(ledger_unavailable)?;
+        Ok(decisions)
     }
 
     /// 준비 조회는 기본 Observe를 저장하지 않는다. 실제 이전 mode/epoch/revision만 묶는다.

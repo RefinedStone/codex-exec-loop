@@ -54,9 +54,7 @@ use crate::composition::kernel_host::{
 use crate::composition::native_client_runtime::{KernelClientCommand, StoredCommandEnd};
 use crate::composition::production::{delegation_runtime, delegation_store};
 use crate::composition::repository_kernel::RepositoryKernelRegistry;
-use crate::domain::issue_automation::collection::{
-    IssueCollectionQuery, MAX_ISSUE_COLLECTION_PAGE_SIZE,
-};
+use crate::domain::issue_automation::collection::IssueCollectionQuery;
 use crate::domain::kernel_event::KernelCommandDescriptor;
 
 pub(super) const KERNEL_METHOD_PREFIX: &str = "akra/kernel/";
@@ -782,48 +780,16 @@ impl KernelSession {
             operation,
         );
         let answer = if let KernelQueryAnswer::Attention { mut items } = answer {
-            // The issue catalog is the authoritative source of open decisions.
-            // Read every page from one catalog revision, or refuse an incomplete
-            // projection. Never turn a failed read into an empty attention list.
+            // One catalog transaction reads the stored decision authority without
+            // re-assessing the entire catalog for every pagination request.
             let commands = attached.commands.clone();
-            let decisions = blocking(move || {
-                let mut after = None;
-                let mut revision = None;
-                let mut decisions = Vec::new();
-                for _ in 0..100 {
-                    let page = commands
-                        .issues(
-                            IssueCollectionQuery {
-                                binding_id: None,
-                                after: after.clone(),
-                                limit: MAX_ISSUE_COLLECTION_PAGE_SIZE,
-                            },
-                            KERNEL_CALL_TIMEOUT,
-                        )
-                        .map_err(|error| error.to_string())??;
-                    if revision.is_some_and(|known| known != page.revision) {
-                        return Err("issue catalog changed while reading attention".to_string());
-                    }
-                    revision = Some(page.revision);
-                    for entry in &page.items {
-                        decisions.extend(entry.open_decisions.iter().filter_map(
-                            crate::adapter::inbound::kernel_protocol::issue_decision_attention,
-                        ));
-                    }
-                    match page.next_after {
-                        None => return Ok(decisions),
-                        Some(next) if after.as_ref() != Some(&next) => after = Some(next),
-                        Some(_) => return Err("issue attention cursor did not advance".to_string()),
-                    }
-                }
-                Err(
-                    "issue attention catalog exceeds the bounded read; no partial list returned"
-                        .to_string(),
-                )
-            })
-            .await?
-            .map_err(unavailable)?;
-            items.extend(decisions);
+            let decisions =
+                read_kernel_log(move || commands.open_issue_decisions(KERNEL_CALL_TIMEOUT)).await?;
+            items.extend(
+                decisions
+                    .iter()
+                    .filter_map(crate::adapter::inbound::kernel_protocol::issue_decision_attention),
+            );
             KernelQueryAnswer::Attention { items }
         } else if let KernelQueryAnswer::Planning(planning) = answer {
             let workspace = attached.issue_workspace.clone();
