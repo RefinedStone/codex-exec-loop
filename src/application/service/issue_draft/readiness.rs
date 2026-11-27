@@ -10,8 +10,6 @@ use crate::domain::issue_automation::policy::{
 use crate::domain::issue_automation::triage::{
     IssueReadinessInput, IssueTriageReadiness, IssueTriageReasonCode, inspect_issue_readiness,
 };
-use crate::domain::issue_masking::plan_issue_masking;
-use crate::domain::issue_secret_spans::secret_spans;
 
 pub(super) fn inspect(
     policy_service: Option<&IssueAutomationPolicyService>,
@@ -51,36 +49,17 @@ pub(super) fn inspect(
     labels.sort();
     labels.dedup();
 
-    let mut spans = Vec::new();
-    for span in &text.spans {
-        let Some(span) = sensitive_span(text, span) else {
-            return blocked(IssueDraftReadinessBlocker::InvalidSpan);
-        };
-        spans.push(span);
-    }
-    // The handoff boundary finds these even when the user has not selected a span.
-    // Keep its independent confirmation requirement; Publish consent is not an AI policy override.
-    spans.extend(secret_spans(IssueTextField::Title, &text.title));
-    spans.extend(secret_spans(IssueTextField::Body, &text.body));
-    let plan = match plan_issue_masking(
-        &text.title,
-        &text.body,
-        &spans,
-        conventions
-            .policy
-            .disclosure_for(IssueDisclosureTarget::AiHandoff),
+    let shared_copy = match super::ai_copy::masked(
+        conventions,
+        text,
+        super::ai_copy::AiCopyPurpose::ReadinessPreview,
     ) {
-        Ok(plan) => plan,
-        Err(IssueMaskingBlocked::NeedsUserConfirmation { .. }) => {
-            return blocked(IssueDraftReadinessBlocker::DisclosureConfirmationRequired);
-        }
-        Err(IssueMaskingBlocked::InvalidSpan { .. }) => {
-            return blocked(IssueDraftReadinessBlocker::InvalidSpan);
-        }
+        Ok(shared_copy) => shared_copy,
+        Err(reason) => return blocked(reason),
     };
     let result = match inspect_issue_readiness(IssueReadinessInput {
         provider: crate::domain::issue_work::IssueProvider::GitHub,
-        shared_copy: &plan.shared_copy,
+        shared_copy: &shared_copy,
         requirements: &requirements,
         policy: &resolved.policy,
         labels: &labels,
@@ -144,10 +123,7 @@ pub(super) fn inspect(
                 .collect(),
             policy_version: resolved.version,
             disclosure_policy_version: conventions.policy_version.clone(),
-            shared_copy_hash: IssueFieldHash::of_fields(
-                &plan.shared_copy.title,
-                &plan.shared_copy.body,
-            ),
+            shared_copy_hash: IssueFieldHash::of_fields(&shared_copy.title, &shared_copy.body),
         }),
     }
 }

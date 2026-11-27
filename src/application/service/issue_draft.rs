@@ -1,3 +1,4 @@
+mod ai_copy;
 mod creation;
 mod readiness;
 
@@ -214,6 +215,16 @@ impl IssueDraftPort for IssueDraftService {
         anyhow::ensure!(
             approval == current,
             "issue draft approval no longer matches"
+        );
+        let ai_copy = ai_copy::masked(
+            &conventions,
+            &request.text,
+            ai_copy::AiCopyPurpose::ReviewSubmission,
+        )
+        .map_err(|_| anyhow::anyhow!("AI handoff disclosure is not approved"))?;
+        anyhow::ensure!(
+            ai_copy == *passed.shared_copy(),
+            "AI handoff requires a different masked copy; update the draft preview before review"
         );
         let model = super::issue_review::model_request(&passed);
         Ok(PreparedIssueDraftReview {
@@ -1149,6 +1160,26 @@ mod tests {
             }]
         );
         assert!(!publishable);
+    }
+
+    #[test]
+    fn review_refuses_an_approved_publication_with_an_unmarked_ai_secret() {
+        let fixture = fixture(false);
+        let mut text = text_with_span(Some(IssueSensitiveSpanClass::Secret));
+        text.body.push_str("\npassword=synthetic-only-for-test");
+        let draft = IssueDraftPreviewRequest {
+            target: target(),
+            text,
+            expected_labels: Vec::new(),
+        };
+        let (copy, approval, publishable) = ready(fixture.service.preview(draft.clone()).unwrap());
+        assert!(publishable && copy.body.contains("synthetic-only-for-test"));
+        assert!(
+            fixture
+                .service
+                .prepare_review_draft(draft, approval)
+                .is_err()
+        );
     }
 
     #[test]
