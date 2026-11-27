@@ -310,12 +310,15 @@ runtime 기록을 sequence로 합치고 중복을 없애며, 기록 시각이 �
 IA4-5 ([#2555](https://github.com/RefinedStone/codex-exec-loop/issues/2555))의 결합 회귀는 실제
 collection·decision·coordinator·feedback·execution 서비스, 파일 기반 SQLite, slot worktree와
 로컬 bare Git remote를 연결한다. source/provider 응답, worker 완료와 검증된 사람 확인 capability는
-fixture가 제공한다. Linux에서 결합 회귀 7개가 모두 통과했으며 실제 모델 확인은 미실행이다.
+fixture가 제공한다. 초기 Linux 실행에서 결합 회귀 7개가 모두 통과했으며 실제 모델 확인은 미실행이다.
 
-실제 private publication lease는 Unix 전용이며 non-Unix 구현은 요청을 거절한다. 따라서
-Windows native의 실제 이슈 publication 경로는 현재 미지원이다. 결합 suite는 `#[cfg(unix)]`로
-제한한다. WSL Ubuntu의 Linux 내부 독립 clone에서 결합 시험 7개와 관련 SQLite·수명 회귀를
-통과했으며 명령·환경·결과는 검증 문서에 기록한다.
+현재 publication은 Unix/Windows별 실제 lease를 사용하며 Windows는 private SQLite 일지에
+저장한다. non-Unix PrivateRuntimeLease의 미지원 fallback을 Windows 게시 전체로 설명하지 않는다.
+결합 suite는 Unix와 Windows에서 컴파일하고, 현재 9개 시나리오를 Windows native gate 두 곳에
+등록한다. Windows fixture는 실제 owner-private ACL을 설정·검증하며 planning 초기화에도 실제
+SQLite authority API를 사용한다. 미지원 direct filesystem fixture로 대체하지 않는다.
+[검증 기록](../../validation/issue-automation-propose-flow.md)에서 원래 Linux 실행과 현재 Windows
+native 결과, 아직 실행하지 않은 실제 모델·외부 GitHub 흐름을 구분한다.
 
 등록 전 실패와 등록 commit 뒤 ACK 유실, 댓글 효과 뒤 ACK 유실·첫 readback 실패를 주입하고
 같은 영속 경로에 서비스를 새로 조립한다. task 신원 보존, 합성 이벤트 10,001개 추가 후 실제

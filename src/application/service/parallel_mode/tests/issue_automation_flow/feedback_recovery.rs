@@ -103,7 +103,13 @@ fn issue_automation_flow_feedback_reconciles_lost_comment_ack_after_sqlite_resta
     let publication_before = services.publication.load(&services.workspace).unwrap();
     assert!(publication_before.is_empty());
     let runtime = runtime_directory(&services.workspace);
+    #[cfg(unix)]
     assert!(runtime.join("issue-publish-intents.lock").is_file());
+    #[cfg(windows)]
+    {
+        assert!(runtime.join("issue-publication-lease.db").is_file());
+        assert!(!runtime.join("issue-publish-intents.lock").exists());
+    }
     let old_feedback = Arc::downgrade(&services.feedback);
     let old_store = Arc::downgrade(&services.store);
     let old_publication = Arc::downgrade(&services.publication);

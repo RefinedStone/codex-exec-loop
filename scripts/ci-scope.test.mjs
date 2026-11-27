@@ -504,3 +504,15 @@ test("the CLI gates read the Desktop shard result and reject a missing result", 
     }
   }
 });
+
+test("Windows gates retain Propose and native validator contracts", () => {
+  for (const script of ["check_windows_portable.sh", "check_native_pr.ps1"]) {
+    const source = readFileSync(new URL("./" + script, import.meta.url), "utf8");
+    for (const filter of [
+      "application::service::parallel_mode::tests::issue_automation_flow::",
+      "adapter::outbound::issue_code_validator::windows::",
+    ]) {
+      assert.equal(source.split(filter).length - 1, 1, script + " must include " + filter + " once");
+    }
+  }
+});

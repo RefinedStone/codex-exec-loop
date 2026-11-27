@@ -46,7 +46,18 @@ Rust 회귀는 실제 helper 구현·private IPC·Gateway 검증·SQLite를 한 
 
 현재 후속 기준 `48b6d49a344890fa53fc2c046694e55484b00156`의 [IssuePublishIntentJournalAdapter](../../src/adapter/outbound/filesystem/issue_publish_intent_journal.rs)는 Windows에서 별도 `windows::PublicationLease`와 private SQLite transaction을 사용한다. 따라서 현재 제품 전체에 Windows publication이 없다고 설명하면 안 된다. 이 변경만으로 실제 Propose 전체 흐름이 검증된 것은 아니다.
 
-[parallel_mode tests 등록부](../../src/application/service/parallel_mode/tests.rs)의 이 결합 suite는 현재도 `#[cfg(unix)]`이므로 Unix에서 검증한다. 이번 live 시험은 승인된 Linux 고정 실행본·시험 base를 유지하며 Windows 실행으로 바꾸지 않는다.
+#2857에서 [parallel_mode tests 등록부](../../src/application/service/parallel_mode/tests.rs)를
+Unix/Windows 양쪽으로 열고, policy fixture에 Windows의 실제 owner-private ACL 설정·검증을
+추가했다. ACK 유실 회귀도 Unix의 lock 파일과 Windows의 SQLite reservation 파일을 각각
+확인하며, Windows에 금지된 legacy lock 파일이 생기지 않는지 단언한다. 현재 9개 시나리오는
+PowerShell Full/Rust 및 Windows CI Bash inventory에 포함된다.
+원래의 Unix 전용 제한 이유였던 publication lease는 Windows 전용 구현으로 이미 대체됐다.
+`issue-decisions.md`가 기록한 별도 direct planning filesystem 시험의 실패는 이 suite의
+제품 경계를 뜻하지 않는다. 이 fixture는 실제 SQLite authority API로 문서를 초기화한다.
+
+실제 live 시험은 기존 Linux 고정 실행본·시험 base 계획을 유지한다. Windows의 자동 결합 회귀는
+사람 확인 capability·worker 완료·외부 provider를 대체하므로 실제 native Start, 모델 턴 또는
+외부 GitHub 쓰기를 수행한 증거가 아니다.
 
 다음 WSL Ubuntu 준비 상태는 확인했다. 이는 실행 호스트 준비 정보이며 결합 시험의 통과 기록은 아니다.
 
@@ -410,3 +421,39 @@ Linux의 첫 실행에는 Windows PATH 54개가 상속돼 파일 검증이 오�
 동결한 Linux Desktop을 같은 Linux 사용자와 시험 전용 `AKRA_HOME`·`AKRA_DESKTOP_USER_DATA`로 다시 실행했다. launch 인수에 sandbox 해제·remote debugging 옵션을 추가하지 않았으며, Windows의 WSLg 창을 직접 캡처해 화면 표시를 확인했다. 실행한 Electron 프로세스들이 정확한 시험 profile의 파일을 열고 있는 것도 확인했다. Native Start 응답이나 실행 풀 활성화는 수행하지 않았다.
 
 화면에는 생성 프로토콜 기준 `codex 0.159.0`과 연결 Gateway의 `codex-cli 0.146.0` 사이 버전 경고가 표시됐다. 창 표시를 실제 모델 호환성 검증으로 해석하지 않으며, live 실행 전 이 경고의 영향과 정식 native Start 경로를 확인해야 한다. 이 준비 과정에서 모델 요청이나 시험 PR·댓글 작성은 하지 않았다.
+
+## Windows native 결합 회귀 재검증 (#2857, 2026-11-27)
+
+기준은 `prerelease@fa72e69a868826e6b61ec0f935260d1e5b9344a8`와 이 PR의 Windows fixture·inventory
+변경이다. 실행 환경은 Windows `10.0.26200` x64, Rust `1.95.0-x86_64-pc-windows-msvc`,
+`--all-features --target x86_64-pc-windows-msvc`다. production 서비스와 Windows publication
+journal/lease는 이 변경에서 수정하지 않았다.
+
+- 최초 `scripts/check_native_pr.ps1 -Mode Full` 실행에서 Desktop typecheck, **1428 passed /
+  8 skipped**, build 및 기존 Windows validator **12 passed / 0 failed / 0 ignored**가 통과했다.
+- Propose 첫 실행은 **8 passed / 1 failed / 0 ignored**, 338.18초였다. ACK 유실 회귀가 Unix의
+  `issue-publish-intents.lock`을 Windows에도 요구한 fixture 오류였다. 실제 Windows reservation은
+  `issue-publication-lease.db`다. 따라서 이 최초 Full 실행을 통과라고 표시하지 않는다.
+- Windows에서는 실제 SQLite lease 파일 존재와 금지된 legacy lock 파일 부재를 확인하도록 고쳤다.
+  Unix의 기존 lock 파일 단언은 유지했다. 이후 Windows Propose는 **9 passed / 0 failed /
+  0 ignored**, 294.92초로 모두 통과했다. 임시 저장소의 실제 Git/SQLite, task 등록·원격 효과 뒤
+  ACK 유실·서비스 재조립·readback·permit·전달 차단 계약을 그대로 사용했다.
+- 재검증은 `scripts/run_native_rust_contracts.mjs`로 Full inventory에서 Propose 이후의 동일 selector를
+  실행한다. 변경하지 않은 Node 시험과 먼저 통과한 native 그룹을 전체 반복하지 않는다.
+  재개한 64개 selector가 모두 통과했고, 이어서 Clippy `--locked --all-targets --all-features -- -D warnings`도
+  exit 0(1분 45초)으로 완료했다. 최초 Full의 성공 범위와 이 재개 결과를 합쳐 확인했으며,
+  최초 Full 명령 자체의 실패 기록을 성공으로 바꾸지 않는다.
+
+Propose 9개만 재현하려면 다음을 실행한다.
+
+```powershell
+cargo test --locked --all-features --lib --target x86_64-pc-windows-msvc application::service::parallel_mode::tests::issue_automation_flow:: -- --nocapture
+```
+
+두 process-death 시나리오의 의도적인 panic 출력은 테스트가 붙잡는 장애 주입이다. 이 자동 회귀를
+물리적 프로세스 강제 종료·전원 단절의 증거로 확대하지 않는다. 실제 모델 호출, native Start,
+외부 GitHub PR·댓글 작성은 이 검증에서 하지 않았다. #2555의 실제 제품 흐름과 #2704/#2724의
+실제 OS 승인·Credential Manager·Electron 원문 창 검증을 이 결과로 닫지 않는다.
+
+338.18초와 294.92초는 이 호스트의 서로 다른 실행 결과이며 성능 개선 비율이 아니다. Windows의
+이 결합 suite에 수분이 소요되는 관측은 #2864의 시험별 시간 분석 대상으로 남긴다.

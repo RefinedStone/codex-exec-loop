@@ -835,9 +835,11 @@ worker 완료와 사람 확인 capability를 fixture로 제공한다. 등록·�
 중복 방지를 검사한다. 결합 시험 7개와 관련 SQLite·수명 회귀가 통과했으며 실행 SHA와 결과는
 연결한 검증 문서에 기록한다. 등록 ACK 유실 뒤 실행 관찰이 누락하던 Submitted fact도 같은
 transaction에서 복구하도록 수정했다.
-실제 private publication lease가 Unix 전용이므로 Windows native의 실제 publication 경로는
-미지원이며 결합 suite는 `#[cfg(unix)]`로 제한한다. WSL Ubuntu의 Linux 내부 독립 clone에서
-자동 회귀를 통과했다.
+현재 publication은 Windows의 private SQLite/PublicationLease를 지원한다. #2857에서
+오래된 Unix-only suite 등록과 policy fixture의 Unix 권한 설정을 정리하여 현재 9개 결합
+시나리오를 Windows native gate에도 등록한다. 실제 private ACL·SQLite planning authority·
+publication journal·Git을 그대로 사용한다. 원래 WSL Linux 실행과 현재 Windows native 결과는
+[검증 기록](../validation/issue-automation-propose-flow.md)에서 실행 SHA별로 구분한다.
 OS process kill과 실제 모델·GitHub 확인은 이 가짜 흐름의 증거에 포함하지 않는다.
 live는 Linux의 동일 사용자·`AKRA_HOME` 아래 Desktop·Gateway·helper와 실제 native 확인 GUI를
 사용하는 구성이 필요하다. WSLg GUI와 GitHub·모델 인증은 아직 확인하지 않았다.
