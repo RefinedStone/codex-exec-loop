@@ -19,6 +19,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 
 const MAX_PAYLOAD: usize = 1_048_576;
+/// Inputs may carry one base64 attachment (the blog figure allows a 2 MiB PNG).
+const MAX_INPUT: usize = 4 << 20;
 const MAX_JOBS: usize = 128;
 const MAX_RECEIPTS: usize = 512;
 const MAX_ACTIVE_JOBS: usize = 8;
@@ -220,7 +222,7 @@ impl ExtensionService {
     ) -> Result<Value> {
         self.check_context(&context)?;
         ensure!(
-            serde_json::to_vec(&input)?.len() <= MAX_PAYLOAD,
+            serde_json::to_vec(&input)?.len() <= MAX_INPUT,
             "extension input is too large"
         );
         let entry = self.registry.get(extension)?;
