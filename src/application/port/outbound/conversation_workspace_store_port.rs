@@ -18,6 +18,8 @@ pub trait ConversationWorkspaceTransaction {
 }
 
 pub trait ConversationWorkspaceStorePort: Send + Sync {
+    fn inventory(&self, cwd: &str, after: Option<&str>)
+    -> Result<Vec<ConversationWorkspaceRecord>>;
     fn begin(&self, cwd: &str) -> Result<Box<dyn ConversationWorkspaceTransaction + '_>>;
     fn get(&self, cwd: &str, request_id: &str) -> Result<Option<ConversationWorkspaceRecord>>;
 }

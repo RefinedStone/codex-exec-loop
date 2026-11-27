@@ -71,3 +71,30 @@ impl PrepareConversationWorkspaceRequest {
         Ok(())
     }
 }
+
+/// A read-only inventory, never a deletion authorization.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationWorkspaceInventoryQuery {
+    pub cwd: String,
+    #[serde(default)]
+    pub after: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationWorkspaceInventoryEntry {
+    pub record: ConversationWorkspaceRecord,
+    pub current_head: Option<String>,
+    pub reasons: Vec<String>,
+    pub cleanup_allowed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationWorkspaceInventoryPage {
+    pub items: Vec<ConversationWorkspaceInventoryEntry>,
+    pub next_after: Option<String>,
+}
+
+pub const WORKSPACE_INVENTORY_LIMIT: usize = 50;

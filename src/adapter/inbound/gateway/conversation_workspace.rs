@@ -8,11 +8,13 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::application::port::inbound::conversation_workspace_port::ConversationWorkspacePort;
 use crate::domain::conversation_workspace::{
-    ConversationWorkspaceQuery, PrepareConversationWorkspaceRequest,
+    ConversationWorkspaceInventoryQuery, ConversationWorkspaceQuery,
+    PrepareConversationWorkspaceRequest,
 };
 
 pub(super) const PREFIX: &str = "akra/conversationWorkspace/";
 const PREPARE: &str = "akra/conversationWorkspace/prepare";
+const INVENTORY: &str = "akra/conversationWorkspace/inventory";
 const GET: &str = "akra/conversationWorkspace/get";
 
 #[derive(Deserialize)]
@@ -43,6 +45,11 @@ fn respond(service: &dyn ConversationWorkspacePort, id: Value, method: &str, tex
             service
                 .prepare(request)
                 .and_then(|record| Ok(serde_json::to_value(record)?))
+        }),
+        INVENTORY => params::<ConversationWorkspaceInventoryQuery>(text).map(|query| {
+            service
+                .inventory(query)
+                .and_then(|page| Ok(serde_json::to_value(page)?))
         }),
         GET => params::<ConversationWorkspaceQuery>(text).map(|query| {
             service

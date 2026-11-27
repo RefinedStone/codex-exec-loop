@@ -10,8 +10,10 @@ use crate::application::port::outbound::conversation_workspace_store_port::{
 use crate::application::port::outbound::git_history_port::GitHistoryPort;
 use crate::application::port::outbound::git_workspace_port::GitWorkspacePort;
 use crate::domain::conversation_workspace::{
-    ConversationWorkspaceQuery, ConversationWorkspaceRecord, ConversationWorkspaceState,
-    PrepareConversationWorkspaceRequest, request_key, validate_request_id,
+    ConversationWorkspaceInventoryEntry, ConversationWorkspaceInventoryPage,
+    ConversationWorkspaceInventoryQuery, ConversationWorkspaceQuery, ConversationWorkspaceRecord,
+    ConversationWorkspaceState, PrepareConversationWorkspaceRequest, WORKSPACE_INVENTORY_LIMIT,
+    request_key, validate_request_id,
 };
 use crate::domain::git_graph::GitGraphRefKind;
 use crate::domain::git_operation::same_git_worktree_path;
@@ -182,6 +184,83 @@ impl ConversationWorkspacePort for ConversationWorkspaceService {
                 "created_workspace_identity_unconfirmed",
             ),
         }
+    }
+
+    fn inventory(
+        &self,
+        query: ConversationWorkspaceInventoryQuery,
+    ) -> Result<ConversationWorkspaceInventoryPage> {
+        ensure!(
+            std::path::Path::new(&query.cwd).is_absolute(),
+            "cwd must be absolute"
+        );
+        if let Some(after) = &query.after {
+            validate_request_id(after)?;
+        }
+        let mut records = self.store.inventory(&query.cwd, query.after.as_deref())?;
+        let has_more = records.len() > WORKSPACE_INVENTORY_LIMIT;
+        records.truncate(WORKSPACE_INVENTORY_LIMIT);
+        let next_after = if has_more {
+            records.last().map(|r| r.request_id.clone())
+        } else {
+            None
+        };
+        let mut items = Vec::with_capacity(records.len());
+        for record in records {
+            // A durable allocation is not durable thread ownership. Do not infer orphanhood
+            // or safety from a clean tracked-file status or absent local subscription.
+            let mut reasons = vec![
+                "thread_ownership_unconfirmed".to_string(),
+                "remote_retention_unconfirmed".to_string(),
+            ];
+            if record.state != ConversationWorkspaceState::Prepared {
+                reasons.push("preparation_not_confirmed".into());
+            }
+            let current_head = match self
+                .git
+                .inspect_conversation_worktree(&record.repository_dir, &record.workspace_dir)
+            {
+                Ok(None) => {
+                    reasons.push("workspace_missing".into());
+                    None
+                }
+                Err(_) => {
+                    reasons.push("workspace_identity_unconfirmed".into());
+                    None
+                }
+                Ok(Some(actual)) => {
+                    if actual.branch.as_deref() != Some(record.branch.as_str()) {
+                        reasons.push("branch_changed".into());
+                    }
+                    if actual.head != record.base_commit {
+                        reasons.push("head_changed".into());
+                    }
+                    match self.git.read_condition(&record.workspace_dir) {
+                        Ok(condition) if condition.refusal.is_none() => {
+                            if condition.tracked_changes {
+                                reasons.push("tracked_changes".into());
+                            }
+                            if condition.operation_in_progress.is_some()
+                                || condition.busy_branches.contains(&record.branch)
+                            {
+                                reasons.push("git_operation_in_progress".into());
+                            }
+                            // The condition port deliberately does not examine untracked files.
+                            reasons.push("untracked_files_unconfirmed".into());
+                        }
+                        _ => reasons.push("workspace_status_unconfirmed".into()),
+                    }
+                    Some(actual.head)
+                }
+            };
+            items.push(ConversationWorkspaceInventoryEntry {
+                record,
+                current_head,
+                reasons,
+                cleanup_allowed: false,
+            });
+        }
+        Ok(ConversationWorkspaceInventoryPage { items, next_after })
     }
 
     fn get(
