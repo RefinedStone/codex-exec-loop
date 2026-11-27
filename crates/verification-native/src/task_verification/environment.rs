@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
-use crate::trusted_executable::PinnedNativeExecutable;
+use akra_native::trusted_executable::PinnedNativeExecutable;
 
 pub(super) const RECIPE_VERSION: &str = "git-diff-check-v1";
 pub(super) const HEAD: &[u8] = b"ref: refs/heads/akra-verification-unborn\n";
@@ -53,7 +53,7 @@ impl HostEnvironment {
                 bail!("Windows SystemRoot must be absolute");
             }
             let path = std::fs::canonicalize(path)?;
-            let pin = crate::private_sqlite::PinnedPrivateDirectory::pin_ancestors(&path)?;
+            let pin = akra_native::private_path::PinnedPrivateDirectory::pin_ancestors(&path)?;
             pin.verify()?;
             platform_variables.push(("SystemRoot".into(), git_path(&path)?));
         }
@@ -113,14 +113,14 @@ impl HostEnvironment {
                 MAX_BLOB_BYTES,
                 MAX_TOTAL_BYTES,
                 DEADLINE_SECONDS,
-                crate::domain::planning::verification::MAX_TASK_VERIFICATION_STREAM_BYTES,
+                akra_verification::verification::MAX_TASK_VERIFICATION_STREAM_BYTES,
             ),
         ))?))
     }
 }
 
 pub(super) fn resolve_binary(context: &Path) -> Result<PinnedNativeExecutable> {
-    let path = crate::trusted_executable::resolve_native_from_current_path("git", context)?;
+    let path = akra_native::trusted_executable::resolve_native_from_current_path("git", context)?;
     PinnedNativeExecutable::inspect(&path, context)
 }
 
@@ -152,7 +152,7 @@ pub(super) fn base_command(
     git_dir: &Path,
     worktree: &Path,
 ) -> Result<Command> {
-    let mut command = crate::git_subprocess::command_with_program(
+    let mut command = crate::git_command::command_with_program(
         binary.path().as_os_str(),
         std::iter::empty::<&str>(),
     );
@@ -202,7 +202,7 @@ pub(super) fn command_fingerprint(
     source: &str,
 ) -> Result<String> {
     // Placeholders are data for hashing only; this command is never spawned.
-    let mut command = crate::git_subprocess::command_with_program(
+    let mut command = crate::git_command::command_with_program(
         binary.path().as_os_str(),
         std::iter::empty::<&str>(),
     );
@@ -222,7 +222,7 @@ pub(super) fn command_fingerprint(
 pub(super) fn git_path(path: &Path) -> Result<OsString> {
     #[cfg(windows)]
     {
-        crate::trusted_executable::windows_process_argument_path(path)
+        akra_native::trusted_executable::windows_process_argument_path(path)
     }
     #[cfg(not(windows))]
     {
