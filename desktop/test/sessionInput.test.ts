@@ -899,6 +899,46 @@ describe("forking a conversation (#2625)", () => {
     await settle();
   }
 
+  it.each(["resume", "writer-elsewhere", "read-only"])("recovers a listed fork's origin when opening through %s after a fresh session", async (mode) => {
+    const h = harness(mode === "read-only");
+    const listed = { id: "child", title: "Newer title", updatedAt: 2, branch: null, failed: true };
+    h.state.folders = [{ cwd: "/w", threads: [listed] }];
+    h.emitState("connected");
+    const opening = h.session.openThread("child");
+    await flush();
+    if (mode === "writer-elsewhere") {
+      h.receive({ jsonrpc: "2.0", id: lastId(h.sent, "thread/resume"), error: { code: -32603, message: "thread child already has an active writer" } });
+      await flush();
+    }
+    h.replyTo(mode === "resume" ? "thread/resume" : "thread/read", {
+      thread: thread("child", { forkedFromId: "source", turns: [turn("inherited")] }),
+    });
+    await opening;
+    expect(h.state.folders?.[0]?.threads).toEqual([{ ...listed, forkedFromId: "source" }]);
+    // A later list response has no lineage; it must not clear the recovered origin or overwrite newer UI state.
+    h.state.folders = mergeWorkspaceFolders(h.state.folders ?? [], [{ cwd: "/w", threads: [{ ...listed, title: "Stale title", failed: false }] }]);
+    expect(h.state.folders?.[0]?.threads).toEqual([{ ...listed, forkedFromId: "source" }]);
+    expect(listed).not.toHaveProperty("forkedFromId");
+    expect(h.sent.some((request) => request.method === "thread/fork" || request.method?.startsWith("turn/"))).toBe(false);
+    h.session.stop();
+  });
+
+  it("does not recover lineage from a thread-open response after navigating away", async () => {
+    const h = harness();
+    h.state.folders = [{ cwd: "/w", threads: [{ id: "child", title: "Child", updatedAt: 1, branch: null, failed: false }] }];
+    h.emitState("connected");
+    const stale = h.session.openThread("child");
+    const staleRequest = lastId(h.sent, "thread/resume");
+    const current = h.session.openThread("other");
+    h.receive({ jsonrpc: "2.0", id: staleRequest, result: { thread: thread("child", { forkedFromId: "source", turns: [turn("old")] }) } });
+    await stale;
+    h.replyTo("thread/resume", { thread: thread("other", { turns: [turn("current")] }) });
+    await current;
+    expect(h.state.openThreadId).toBe("other");
+    expect(h.state.folders?.[0]?.threads[0]).not.toHaveProperty("forkedFromId");
+    h.session.stop();
+  });
+
   it("forks a locked thread through its newest finished turn and opens the fork without touching the source", async () => {
     const h = await openLocked();
     const claim = vi.fn(() => true);

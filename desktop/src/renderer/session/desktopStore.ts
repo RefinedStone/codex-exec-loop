@@ -147,10 +147,22 @@ export function sortFolders(folders: WorkspaceFolder[]): WorkspaceFolder[] {
   return folders.sort((left, right) => latest(right) - latest(left));
 }
 
-/** 이미 보이는 스레드는 그대로 두고, 처음 보는 스레드만 더한다. 이 창에서 만든 새 스레드도 지우지 않는다. */
+/** 기존 제목·상태는 유지하고, 새 스레드와 서버에서 확인한 누락된 분기 계보만 더한다. */
 export function mergeWorkspaceFolders(current: readonly WorkspaceFolder[], incoming: readonly WorkspaceFolder[]): WorkspaceFolder[] {
   const known = new Set(current.flatMap((folder) => folder.threads.map((thread) => thread.id)));
-  const byCwd = new Map(current.map((folder) => [folder.cwd, { cwd: folder.cwd, threads: [...folder.threads] }]));
+  const forkOrigins = new Map<string, string>();
+  for (const folder of incoming) {
+    for (const thread of folder.threads) {
+      if (thread.forkedFromId) forkOrigins.set(thread.id, thread.forkedFromId);
+    }
+  }
+  const byCwd = new Map(current.map((folder) => [folder.cwd, {
+    cwd: folder.cwd,
+    threads: folder.threads.map((thread) => {
+      const origin = forkOrigins.get(thread.id);
+      return !thread.forkedFromId && origin ? { ...thread, forkedFromId: origin } : thread;
+    }),
+  }]));
   for (const folder of incoming) {
     for (const thread of folder.threads) {
       if (known.has(thread.id)) continue;
