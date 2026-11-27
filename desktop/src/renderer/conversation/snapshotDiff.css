@@ -1,0 +1,13 @@
+.snapshot-toolbar { flex-wrap: wrap; gap: 6px; }
+.snapshot-toolbar label { display: inline-flex; align-items: center; gap: 4px; }
+.snapshot-toolbar input[type="number"] { width: 64px; min-width: 0; }
+.snapshot-toolbar input:not([type]) { min-width: 120px; max-width: 100%; flex: 1 1 160px; }
+.snapshot-diff { min-width: 0; max-width: 100%; }
+.snapshot-diff .diff-lines { min-width: 0; max-width: 100%; }
+.snapshot-context { margin: 8px 0; border: 1px solid var(--line); padding: 8px; min-width: 0; }
+.snapshot-context pre { overflow: auto; max-height: 400px; font: inherit; font-family: var(--font-mono, monospace); }
+.snapshot-context pre > div { display: flex; white-space: pre; min-height: 1.5em; }
+.snapshot-context [data-selected="true"] { background: color-mix(in srgb, currentColor 12%, transparent); }
+.snapshot-line-number { display: inline-block; flex: 0 0 5em; opacity: .65; text-align: right; padding-right: 1em; user-select: none; }
+.working-tree-navigation { position: sticky; top: 0; z-index: 2; background: var(--bg); border-bottom: 1px solid var(--line); }
+.working-tree-files { grid-template-columns: minmax(0, 1fr); }

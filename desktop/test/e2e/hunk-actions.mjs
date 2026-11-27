@@ -39,7 +39,7 @@ const endpoint = fake.uniqueTestEndpoint();
 const gateway = await fake.startFakeGateway(endpoint, recordings);
 const env = { ...process.env, AKRA_GATEWAY_ENDPOINT: endpoint, AKRA_DESKTOP_HIDDEN: "1", AKRA_DESKTOP_USER_DATA: join(root, "user-data") };
 delete env.ELECTRON_RUN_AS_NODE;
-const app = await electron.launch({ executablePath: createRequire(import.meta.url)("electron"), args: [desktopDir], env });
+const app = await electron.launch({ executablePath: process.env.AKRA_ELECTRON_EXECUTABLE ?? createRequire(import.meta.url)("electron"), args: [desktopDir], env });
 try {
   await app.evaluate(({ dialog }) => {
     let confirmations = 0;
@@ -51,6 +51,7 @@ try {
   await page.getByTestId("review-toggle").click();
   const entry = page.getByTestId("git-file").filter({ hasText: "example.txt" });
   await entry.locator("summary").first().click();
+  await entry.getByText("스테이지 전 부분 변경 작업", { exact: true }).click();
   await page.getByTestId("git-hunk-stage").first().waitFor();
   assert.equal(await page.getByTestId("git-hunk").count(), 2);
   // 덩어리는 문법 색과 좌우 비교가 있는 표시로 그린다 (P-12). 기본은 좌우 비교이고, 버튼이 한 줄 보기로 바꾼다.
@@ -78,6 +79,7 @@ try {
   assert.ok(staged.includes("+stage this hunk"));
   assert.ok(!staged.includes("+discard this hunk"));
   await entry.locator("summary").first().click();
+  await entry.getByText("스테이지 전 부분 변경 작업", { exact: true }).click();
   await page.getByTestId("git-hunk-discard").waitFor();
   assert.equal(await page.getByTestId("git-hunk").count(), 1);
   // 클릭 전에 비활성화와 재활성화를 구독한다. 재활성화가 취소 응답의 완료이다.

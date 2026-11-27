@@ -65,10 +65,10 @@ export function HunkChanges({
           <DiffBody file={diffFileFromChange({ path, kind: { type: "update", move_path: null }, diff: hunk.text })} />
         </section>
       ))}
-      <details className="diff-file">
+      {children && <details className="diff-file">
         <summary>전체 변경 (스테이지 포함)</summary>
         {children}
-      </details>
+      </details>}
     </div>
   );
 }
