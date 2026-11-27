@@ -307,6 +307,7 @@ try {
             "--test",
             "scripts/ci-scope.test.mjs",
             "scripts/agent-plan.test.mjs",
+            "scripts/native-rust-contracts.test.mjs",
             "scripts/npm-audit-gate.test.mjs"
         )
     }
