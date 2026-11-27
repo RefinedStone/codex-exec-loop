@@ -622,14 +622,15 @@ export class DesktopSession {
     if (this.readOnly) throw new Error("격리 공간은 로컬 호스트에서만 만들 수 있습니다.");
     this.assertWritable();
     const generation = this.conversationGeneration;
-    return this.isolatedWorkspace.start(cwd, async workspace => {
+    return this.isolatedWorkspace.start(cwd, async (workspace, markStartRequested) => {
       if (generation !== this.conversationGeneration) throw new Error("대화 위치가 바뀌었습니다. 준비된 공간은 보존됩니다.");
-      return this.startThread(workspace.workspaceDir, workspace, generation);
+      return this.startThread(workspace.workspaceDir, workspace, generation, markStartRequested);
     });
   }
 
-  async startThread(cwd: string, expected?: PreparedWorkspace, generation?: number): Promise<string> {
+  async startThread(cwd: string, expected?: PreparedWorkspace, generation?: number, markStartRequested?: () => void): Promise<string> {
     this.assertWritable();
+    markStartRequested?.();
     const response = await this.client.request<ThreadStartResponse>("thread/start", { cwd });
     if (expected && (!response.thread.id || !samePath(response.thread.cwd, expected.workspaceDir)
       || (response.thread.gitInfo?.branch != null && response.thread.gitInfo.branch !== expected.branch)
