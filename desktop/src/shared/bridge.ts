@@ -538,9 +538,9 @@ export function isDotId(dotId: unknown): dotId is string {
 export interface VaultRestoreBridge {
   /** 수신 함수를 등록했다고 알린다. 처음이면 main 이 확인을 시작한다. 다시 오면 (화면을 다시 불러옴) 잠근다. */
   ready(): void;
-  onState(listener: (state: VaultRestoreViewState) => void): () => void;
-  /** 다시 사용자 확인을 거쳐 연다. */
-  unlock(): void;
+  onState(listener: (state: VaultRestoreViewState, unlockGeneration: number) => void): () => void;
+  /** 현재 화면의 세대에 묶어 다시 사용자 확인을 거쳐 연다. */
+  unlock(unlockGeneration: number): void;
   lock(): void;
   /** 재연결 검토의 값을 읽는다. */
   review(): void;
