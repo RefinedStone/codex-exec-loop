@@ -27,6 +27,8 @@ const CONTEXT_MARK_READ_METHOD: &str = "akra/context/markRead";
 const CONTEXT_ATTACH_METHOD: &str = "akra/context/attach";
 /// params `{ cwd, scope }` -> result `{ resources: [ContextResource] }`. 장부의 값만 읽는다.
 const CONTEXT_LIST_METHOD: &str = "akra/context/list";
+const CONTEXT_REFRESH_SCOPE_METHOD: &str = "akra/context/refreshScope";
+const CONTEXT_MARK_SCOPE_READ_METHOD: &str = "akra/context/markScopeRead";
 /// `attach` 에 `source` 가 없으면 사람이 이은 것으로 본다.
 const DEFAULT_ATTACH_SOURCE: &str = "user";
 const JSON_RPC_METHOD_NOT_FOUND: i64 = -32601;
@@ -57,6 +59,16 @@ struct MarkReadParams {
 struct ScopeParams {
     cwd: String,
     scope: ContextScope,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MarkScopeReadParams {
+    cwd: String,
+    scope: ContextScope,
+    kind: String,
+    key: String,
+    observed_version: String,
 }
 
 #[derive(Deserialize)]
@@ -141,7 +153,7 @@ fn respond(context: &dyn WorkContextPort, id: Value, method: &str, text: &str) -
                     .unwrap_or_else(|| DEFAULT_ATTACH_SOURCE.to_string()),
             })
         }
-        CONTEXT_LIST_METHOD => {
+        CONTEXT_LIST_METHOD | CONTEXT_REFRESH_SCOPE_METHOD => {
             let Some(params) = params::<ScopeParams>(text) else {
                 return error_response(
                     id,
@@ -149,10 +161,33 @@ fn respond(context: &dyn WorkContextPort, id: Value, method: &str, text: &str) -
                     "`cwd` and `scope` are required",
                 );
             };
-            context.scope_resources(&ContextScopeRequest {
+            let request = ContextScopeRequest {
                 cwd: params.cwd,
                 scope: params.scope,
-            })
+            };
+            if method == CONTEXT_REFRESH_SCOPE_METHOD {
+                context.refresh_scope_resources(&request)
+            } else {
+                context.scope_resources(&request)
+            }
+        }
+        CONTEXT_MARK_SCOPE_READ_METHOD => {
+            let Some(params) = params::<MarkScopeReadParams>(text) else {
+                return error_response(
+                    id,
+                    JSON_RPC_INVALID_PARAMS,
+                    "`cwd`, `scope`, `kind`, `key`, and `observedVersion` are required",
+                );
+            };
+            context.mark_scope_resource_read(
+                &ContextScopeRequest {
+                    cwd: params.cwd,
+                    scope: params.scope,
+                },
+                &params.kind,
+                &params.key,
+                &params.observed_version,
+            )
         }
         _ => {
             return error_response(
@@ -243,6 +278,29 @@ mod tests {
             let mut listed = resource(true);
             listed.title = format!("{}:{:?}", request.cwd, request.scope);
             Ok(vec![listed])
+        }
+
+        fn refresh_scope_resources(
+            &self,
+            request: &ContextScopeRequest,
+        ) -> Result<Vec<ContextResource>> {
+            self.scope_resources(request)
+        }
+
+        fn mark_scope_resource_read(
+            &self,
+            request: &ContextScopeRequest,
+            kind: &str,
+            key: &str,
+            observed_version: &str,
+        ) -> Result<Vec<ContextResource>> {
+            if (kind, key, observed_version) != ("jira", "acme.atlassian.net/ABC-1", "v2") {
+                anyhow::bail!("stale or missing document");
+            }
+            let mut read = self.scope_resources(request)?;
+            read[0].changed = false;
+            read[0].confirmed_version = Some(observed_version.to_string());
+            Ok(read)
         }
     }
 
@@ -340,6 +398,30 @@ mod tests {
                 JSON_RPC_INVALID_PARAMS
             );
         }
+    }
+
+    #[test]
+    fn scoped_refresh_and_mark_read_require_explicit_version_and_scope() {
+        let scope = json!({ "kind": "task", "taskId": "T-1" });
+        let result = answer(
+            CONTEXT_REFRESH_SCOPE_METHOD,
+            json!({ "cwd": "/repo", "scope": scope }),
+        );
+        assert_eq!(result["result"]["resources"][0]["changed"], true);
+        let mut params = json!({ "cwd": "/repo", "scope": scope, "kind": "jira", "key": "acme.atlassian.net/ABC-1", "observedVersion": "v1" });
+        assert_eq!(
+            answer(CONTEXT_MARK_SCOPE_READ_METHOD, params.clone())["error"]["code"],
+            WORK_CONTEXT_ERROR
+        );
+        params["observedVersion"] = json!("v2");
+        let read = answer(CONTEXT_MARK_SCOPE_READ_METHOD, params.clone());
+        assert_eq!(read["result"]["resources"][0]["confirmedVersion"], "v2");
+        assert_eq!(read["result"]["resources"][0]["changed"], false);
+        params.as_object_mut().unwrap().remove("observedVersion");
+        assert_eq!(
+            answer(CONTEXT_MARK_SCOPE_READ_METHOD, params)["error"]["code"],
+            JSON_RPC_INVALID_PARAMS
+        );
     }
 
     #[test]
