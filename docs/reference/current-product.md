@@ -148,8 +148,8 @@ notice).
 
 `save_parallel_agent_profiles` replaces the parallel agent profiles (`profiles`) in the primary
 checkout of the repository; an empty list restores the built-in profiles. The admin profile form
-(`/admin/controls/agent-profiles`) sends it; a failure answers the controls page with its cause
-and a 500. The command fails on Windows, where custom profile files are not written.
+(`/admin/controls/agent-profiles`) sends it and reads the profiles from the same primary
+checkout; a failure answers the controls page with its cause and a 500. The command fails on Windows, where custom profile files are not written.
 
 The planning reset of the other entrances also goes to the repository kernel. `akra reset`, the
 admin reset (`/api/planning/reset`, `/admin/controls/reset`), and the Telegram `/reset` commands
