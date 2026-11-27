@@ -1,8 +1,8 @@
 use super::*;
-use crate::domain::planning::evidence::{TaskEvidenceError, criteria_sha256};
-use crate::domain::planning::{
+use crate::acceptance::{
     TaskAcceptanceChannel, TaskAcceptanceCriterion, normalize_task_acceptance,
 };
+use crate::evidence::{TaskEvidenceError, criteria_sha256};
 use sha2::{Digest, Sha256};
 
 fn receipt() -> TaskVerificationReceipt {

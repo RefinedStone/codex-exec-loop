@@ -54,10 +54,8 @@
     {
       "name": "akra-verification",
       "manifest": "crates/verification/Cargo.toml",
-      "state": "planned",
-      "workspaceDependencies": [
-        "akra-issue-core"
-      ],
+      "state": "active",
+      "workspaceDependencies": [],
       "consumerCoverage": "full",
       "sourcePrefixes": [
         "crates/verification/"
@@ -928,6 +926,237 @@
         ],
         "retained": []
       }
+    },
+    {
+      "source": "src/domain/planning/acceptance.rs",
+      "destination": "crates/verification/src/acceptance.rs",
+      "owner": "akra-verification",
+      "kind": "production",
+      "oldTestPrefix": "domain::planning::acceptance::",
+      "newTestPrefix": "acceptance::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/domain/planning/evidence.rs",
+      "destination": "crates/verification/src/evidence.rs",
+      "owner": "akra-verification",
+      "kind": "production",
+      "oldTestPrefix": "domain::planning::evidence::",
+      "newTestPrefix": "evidence::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/domain/planning/evidence/tests.rs",
+      "destination": "crates/verification/src/evidence/tests.rs",
+      "owner": "akra-verification",
+      "kind": "unit-tests",
+      "oldTestPrefix": "domain::planning::evidence::",
+      "newTestPrefix": "evidence::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/domain/planning/evidence/validation.rs",
+      "destination": "crates/verification/src/evidence/validation.rs",
+      "owner": "akra-verification",
+      "kind": "production",
+      "oldTestPrefix": "domain::planning::evidence::",
+      "newTestPrefix": "evidence::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/domain/planning/verification.rs",
+      "destination": "crates/verification/src/verification.rs",
+      "owner": "akra-verification",
+      "kind": "production",
+      "oldTestPrefix": "domain::planning::verification::",
+      "newTestPrefix": "verification::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/domain/planning/verification/tests.rs",
+      "destination": "crates/verification/src/verification/tests.rs",
+      "owner": "akra-verification",
+      "kind": "unit-tests",
+      "oldTestPrefix": "domain::planning::verification::",
+      "newTestPrefix": "verification::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/domain/planning/verification/validation.rs",
+      "destination": "crates/verification/src/verification/validation.rs",
+      "owner": "akra-verification",
+      "kind": "production",
+      "oldTestPrefix": "domain::planning::verification::",
+      "newTestPrefix": "verification::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/domain/planning/delivery_evidence.rs",
+      "destination": "crates/verification/src/delivery_evidence.rs",
+      "owner": "akra-verification",
+      "kind": "production",
+      "oldTestPrefix": "domain::planning::delivery_evidence::",
+      "newTestPrefix": "delivery_evidence::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/domain/planning/delivery_evidence/tests.rs",
+      "destination": "crates/verification/src/delivery_evidence/tests.rs",
+      "owner": "akra-verification",
+      "kind": "unit-tests",
+      "oldTestPrefix": "domain::planning::delivery_evidence::",
+      "newTestPrefix": "delivery_evidence::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/domain/planning/delivery_evidence/validation.rs",
+      "destination": "crates/verification/src/delivery_evidence/validation.rs",
+      "owner": "akra-verification",
+      "kind": "production",
+      "oldTestPrefix": "domain::planning::delivery_evidence::",
+      "newTestPrefix": "delivery_evidence::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/domain/planning/acceptance/tests.rs",
+      "destination": "crates/verification/src/acceptance/tests.rs",
+      "owner": "akra-verification",
+      "kind": "split-unit-tests",
+      "oldTestPrefix": "domain::planning::acceptance::tests::",
+      "newTestPrefix": "acceptance::tests::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve",
+      "movedTests": [
+        "criteria_trim_and_sort_by_id_without_changing_meaning",
+        "criteria_reject_blank_fields_and_duplicate_normalized_ids",
+        "criterion_wire_requires_every_field_and_rejects_unknown_fields_or_channels"
+      ],
+      "retainedTests": [
+        "legacy_tasks_default_to_empty_criteria_and_revision_zero",
+        "current_task_round_trip_preserves_criteria_and_host_revision",
+        "criteria_need_a_host_revision_but_cleared_criteria_keep_their_history",
+        "task_versions_accept_legacy_and_current_without_changing_directions"
+      ]
+    },
+    {
+      "source": "src/application/port/outbound/task_evidence_artifact_port.rs",
+      "destination": "crates/verification/src/ports/task_evidence_artifact_port.rs",
+      "owner": "akra-verification",
+      "kind": "production",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/application/port/outbound/task_verification_runner_port.rs",
+      "destination": "crates/verification/src/ports/task_verification_runner_port.rs",
+      "owner": "akra-verification",
+      "kind": "production",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/application/service/task_verification/continuation.rs",
+      "destination": "crates/verification/src/continuation.rs",
+      "owner": "akra-verification",
+      "kind": "trait-only",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve",
+      "retainedRoot": "PostTurnContinuationPermit implementation and with_verification_commit serialization helper"
+    },
+    {
+      "source": "src/application/service/task_verification/execution.rs",
+      "destination": "crates/verification/src/service/capture.rs",
+      "owner": "akra-verification",
+      "kind": "service-extraction",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve",
+      "retainedRoot": "Execution orchestration, reservation/lease/authority checks, binding, and the existing integration capture tests",
+      "addedTestPrefix": "service::capture::tests::"
     }
   ],
   "nativeCandidates": [
@@ -1226,8 +1455,8 @@
     },
     {
       "name": "verification-owner-run-token",
-      "owner": "akra-verification",
-      "boundary": "retain private construction, redacted Debug and no external deserialization"
+      "owner": "akra-ade",
+      "boundary": "Retained in the root repository port: private construction, redacted Debug and no external deserialization. Independent verification facts and capture do not create owner/run authority."
     },
     {
       "name": "PinnedNativeExecutable",

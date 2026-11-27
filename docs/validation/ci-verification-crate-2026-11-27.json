@@ -1,0 +1,151 @@
+{
+  "schemaVersion": 1,
+  "issue": 2909,
+  "baseSha": "4983131b3a519504562494c86d339ce30f9cacbb",
+  "platform": "windows",
+  "target": "x86_64-pc-windows-msvc",
+  "package": "akra-verification",
+  "packageTarget": {
+    "kind": "lib",
+    "name": "akra_verification"
+  },
+  "toolchain": "1.95.0-x86_64-pc-windows-msvc",
+  "features": "all",
+  "cargoBuildJobs": 2,
+  "unitTests": {
+    "passed": 24,
+    "failed": 0,
+    "ignored": 0,
+    "elapsedSeconds": 0.27
+  },
+  "doctests": 0,
+  "testProfileCompileSeconds": 11.49,
+  "commandWallSeconds": 12.286,
+  "measurement": "One local run with a fresh dedicated target and an existing Cargo registry cache; not a Linux/macOS CI or before/after speed comparison.",
+  "tests": [
+    "acceptance::tests::criteria_reject_blank_fields_and_duplicate_normalized_ids",
+    "acceptance::tests::criteria_require_a_revision_and_preserve_empty_history",
+    "acceptance::tests::criteria_trim_and_sort_by_id_without_changing_meaning",
+    "acceptance::tests::criterion_wire_requires_every_field_and_rejects_unknown_fields_or_channels",
+    "delivery_evidence::tests::automatic_policy_reasons_remain_denials_in_observe_and_public_round_trip",
+    "delivery_evidence::tests::empty_essential_criteria_are_never_vacuously_satisfied",
+    "delivery_evidence::tests::evidence_binding_requires_an_exact_generation_and_closed_json",
+    "delivery_evidence::tests::mode_defaults_to_observe_and_only_accepts_the_two_exact_settings",
+    "delivery_evidence::tests::observations_dedupe_only_when_the_entire_assessment_basis_is_unchanged",
+    "evidence::tests::evidence_artifact_requires_nonempty_bounded_host_hash_and_closed_shape",
+    "evidence::tests::evidence_criteria_hash_preserves_e1_noop_order_and_tracks_meaning",
+    "evidence::tests::evidence_domain_rejects_unsafe_tokens_and_javascript_revision_overflow",
+    "evidence::tests::evidence_notes_and_waivers_have_one_canonical_bounded_value",
+    "service::capture::tests::a_failed_or_mismatched_artifact_cannot_remove_execution_or_prove_a_pass",
+    "service::capture::tests::capture_accepts_the_stream_limit_and_rejects_an_oversized_envelope",
+    "service::capture::tests::capture_preserves_failed_outcomes_and_incomplete_streams",
+    "service::capture::tests::capture_seals_exact_binary_streams_and_preserves_the_existing_wire_shape",
+    "service::capture::tests::malformed_observations_are_interrupted_without_sealing_or_claiming_not_run",
+    "service::capture::tests::stream_size_or_hash_mismatch_retains_execution_without_a_seal",
+    "verification::tests::host_verification_absent_recipe_preserves_legacy_criteria_bytes_and_hash",
+    "verification::tests::host_verification_bounds_hashes_oid_formats_and_capture_sizes",
+    "verification::tests::host_verification_closed_variants_reject_extra_authority_fields",
+    "verification::tests::host_verification_keeps_monotonic_duration_when_wall_clock_reverses",
+    "verification::tests::host_verification_requires_a_manifest_seal_and_complete_successful_execution"
+  ],
+  "moves": [
+    {
+      "before": "domain::planning::acceptance::tests::criteria_reject_blank_fields_and_duplicate_normalized_ids",
+      "after": "acceptance::tests::criteria_reject_blank_fields_and_duplicate_normalized_ids"
+    },
+    {
+      "before": "domain::planning::acceptance::tests::criteria_trim_and_sort_by_id_without_changing_meaning",
+      "after": "acceptance::tests::criteria_trim_and_sort_by_id_without_changing_meaning"
+    },
+    {
+      "before": "domain::planning::acceptance::tests::criterion_wire_requires_every_field_and_rejects_unknown_fields_or_channels",
+      "after": "acceptance::tests::criterion_wire_requires_every_field_and_rejects_unknown_fields_or_channels"
+    },
+    {
+      "before": "domain::planning::evidence::tests::evidence_artifact_requires_nonempty_bounded_host_hash_and_closed_shape",
+      "after": "evidence::tests::evidence_artifact_requires_nonempty_bounded_host_hash_and_closed_shape"
+    },
+    {
+      "before": "domain::planning::evidence::tests::evidence_criteria_hash_preserves_e1_noop_order_and_tracks_meaning",
+      "after": "evidence::tests::evidence_criteria_hash_preserves_e1_noop_order_and_tracks_meaning"
+    },
+    {
+      "before": "domain::planning::evidence::tests::evidence_domain_rejects_unsafe_tokens_and_javascript_revision_overflow",
+      "after": "evidence::tests::evidence_domain_rejects_unsafe_tokens_and_javascript_revision_overflow"
+    },
+    {
+      "before": "domain::planning::evidence::tests::evidence_notes_and_waivers_have_one_canonical_bounded_value",
+      "after": "evidence::tests::evidence_notes_and_waivers_have_one_canonical_bounded_value"
+    },
+    {
+      "before": "domain::planning::verification::tests::host_verification_absent_recipe_preserves_legacy_criteria_bytes_and_hash",
+      "after": "verification::tests::host_verification_absent_recipe_preserves_legacy_criteria_bytes_and_hash"
+    },
+    {
+      "before": "domain::planning::verification::tests::host_verification_bounds_hashes_oid_formats_and_capture_sizes",
+      "after": "verification::tests::host_verification_bounds_hashes_oid_formats_and_capture_sizes"
+    },
+    {
+      "before": "domain::planning::verification::tests::host_verification_closed_variants_reject_extra_authority_fields",
+      "after": "verification::tests::host_verification_closed_variants_reject_extra_authority_fields"
+    },
+    {
+      "before": "domain::planning::verification::tests::host_verification_keeps_monotonic_duration_when_wall_clock_reverses",
+      "after": "verification::tests::host_verification_keeps_monotonic_duration_when_wall_clock_reverses"
+    },
+    {
+      "before": "domain::planning::verification::tests::host_verification_requires_a_manifest_seal_and_complete_successful_execution",
+      "after": "verification::tests::host_verification_requires_a_manifest_seal_and_complete_successful_execution"
+    },
+    {
+      "before": "domain::planning::delivery_evidence::tests::automatic_policy_reasons_remain_denials_in_observe_and_public_round_trip",
+      "after": "delivery_evidence::tests::automatic_policy_reasons_remain_denials_in_observe_and_public_round_trip"
+    },
+    {
+      "before": "domain::planning::delivery_evidence::tests::empty_essential_criteria_are_never_vacuously_satisfied",
+      "after": "delivery_evidence::tests::empty_essential_criteria_are_never_vacuously_satisfied"
+    },
+    {
+      "before": "domain::planning::delivery_evidence::tests::evidence_binding_requires_an_exact_generation_and_closed_json",
+      "after": "delivery_evidence::tests::evidence_binding_requires_an_exact_generation_and_closed_json"
+    },
+    {
+      "before": "domain::planning::delivery_evidence::tests::mode_defaults_to_observe_and_only_accepts_the_two_exact_settings",
+      "after": "delivery_evidence::tests::mode_defaults_to_observe_and_only_accepts_the_two_exact_settings"
+    },
+    {
+      "before": "domain::planning::delivery_evidence::tests::observations_dedupe_only_when_the_entire_assessment_basis_is_unchanged",
+      "after": "delivery_evidence::tests::observations_dedupe_only_when_the_entire_assessment_basis_is_unchanged"
+    }
+  ],
+  "retainedRootTests": [
+    "domain::planning::acceptance::tests::criteria_need_a_host_revision_but_cleared_criteria_keep_their_history",
+    "domain::planning::acceptance::tests::current_task_round_trip_preserves_criteria_and_host_revision",
+    "domain::planning::acceptance::tests::legacy_tasks_default_to_empty_criteria_and_revision_zero",
+    "domain::planning::acceptance::tests::task_versions_accept_legacy_and_current_without_changing_directions"
+  ],
+  "addedTests": [
+    "acceptance::tests::criteria_require_a_revision_and_preserve_empty_history",
+    "service::capture::tests::a_failed_or_mismatched_artifact_cannot_remove_execution_or_prove_a_pass",
+    "service::capture::tests::capture_accepts_the_stream_limit_and_rejects_an_oversized_envelope",
+    "service::capture::tests::capture_preserves_failed_outcomes_and_incomplete_streams",
+    "service::capture::tests::capture_seals_exact_binary_streams_and_preserves_the_existing_wire_shape",
+    "service::capture::tests::malformed_observations_are_interrupted_without_sealing_or_claiming_not_run",
+    "service::capture::tests::stream_size_or_hash_mismatch_retains_execution_without_a_seal"
+  ],
+  "retainedRootIntegration": "application::service::task_verification::tests::capture:: (3 existing tests unchanged)",
+  "fullRootConsumerCoverage": "required; deferred to final integrated validation",
+  "validation": {
+    "unitTests": "passed",
+    "clippyAllTargetsWarningsDenied": "passed",
+    "cargoFmt": "passed",
+    "crateMetadataBoundaries": "passed",
+    "boundaryNodeTests": 8,
+    "testInventoryUnion": "17 moved + 4 retained = 21 existing; 7 new independent tests",
+    "rootAllTargets": "deferred to final integrated validation",
+    "windowsFullGate": "deferred to final integrated validation",
+    "linuxAndMacos": "not run locally",
+    "rebasedMetadataBoundaries": "passed; issue-core, native and verification owners/transfers preserved"
+  },
+  "stackBaseSha": "01e8c2b285541c8a2ba1ab8c3be899ab979b06f7"
+}
