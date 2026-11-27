@@ -12,7 +12,9 @@ use sha2::{Digest, Sha256};
 use crate::application::port::inbound::git_graph_port::{
     GitGraphCursor, GitGraphPage, GitGraphPageRequest, GitGraphPort, GitGraphRefsState,
 };
-use crate::application::port::outbound::git_history_port::{GitHistoryPort, GitHistoryRefs};
+use crate::application::port::outbound::git_history_port::{
+    GitHistoryPort, GitHistoryRefs, GitWorktreeProgress,
+};
 use crate::domain::git_graph::{
     GIT_GRAPH_LANE_LIMIT, GitCommitDetail, GitGraphCommit, GitGraphLaneState, GitGraphRefKind,
     GitGraphRow, clamp_git_graph_page_limit, is_git_commit_id,
@@ -82,9 +84,15 @@ impl GitGraphPort for GitGraphService {
 
     fn refs_state(&self, repository_dir: &str) -> Result<GitGraphRefsState> {
         let refs = self.history.read_refs(repository_dir)?;
+        let progress = match refs {
+            Some(_) => self.history.read_worktree_progress(repository_dir)?,
+            None => GitWorktreeProgress::default(),
+        };
         Ok(GitGraphRefsState {
             repository: refs.is_some(),
             refs_digest: refs.as_ref().map(refs_digest),
+            operation_in_progress: progress.operation,
+            conflicted_files: progress.conflicted_files,
         })
     }
 
@@ -203,6 +211,7 @@ mod tests {
         backup_only: HashSet<String>,
         backup_reads: Mutex<usize>,
         refs_after_commit_read: Mutex<Option<Option<GitHistoryRefs>>>,
+        progress: GitWorktreeProgress,
     }
 
     impl FakeHistory {
@@ -228,6 +237,7 @@ mod tests {
                 backup_only: HashSet::new(),
                 backup_reads: Mutex::new(0),
                 refs_after_commit_read: Mutex::new(None),
+                progress: GitWorktreeProgress::default(),
             }
         }
     }
@@ -290,6 +300,10 @@ mod tests {
         ) -> Result<HashSet<String>> {
             *self.backup_reads.lock().unwrap() += 1;
             Ok(self.backup_only.clone())
+        }
+
+        fn read_worktree_progress(&self, _repository_dir: &str) -> Result<GitWorktreeProgress> {
+            Ok(self.progress.clone())
         }
 
         fn read_commit_detail(
@@ -430,6 +444,25 @@ mod tests {
         let outside = service.refs_state("/repo").unwrap();
         assert!(!outside.repository);
         assert_eq!(outside.refs_digest, None);
+    }
+
+    #[test]
+    fn the_refs_state_carries_the_unfinished_work_of_the_worktree() {
+        let mut history = FakeHistory::linear(2);
+        history.progress = GitWorktreeProgress {
+            operation: Some("rebase".to_string()),
+            conflicted_files: 2,
+        };
+        let history = Arc::new(history);
+        let service = GitGraphService::new(history.clone());
+        let state = service.refs_state("/repo").unwrap();
+        assert_eq!(state.operation_in_progress.as_deref(), Some("rebase"));
+        assert_eq!(state.conflicted_files, 2);
+
+        *history.refs.lock().unwrap() = None;
+        let outside = service.refs_state("/repo").unwrap();
+        assert_eq!(outside.operation_in_progress, None);
+        assert_eq!(outside.conflicted_files, 0);
     }
 
     #[test]

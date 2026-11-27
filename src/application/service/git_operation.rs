@@ -695,6 +695,14 @@ mod tests {
     }
 
     impl GitHistoryPort for FakeRepository {
+        fn read_worktree_progress(
+            &self,
+            _repository_dir: &str,
+        ) -> Result<crate::application::port::outbound::git_history_port::GitWorktreeProgress>
+        {
+            Ok(Default::default())
+        }
+
         fn read_refs(&self, repository_dir: &str) -> Result<Option<GitHistoryRefs>> {
             let state = self.state.lock().unwrap();
             let mut refs: Vec<GitGraphRef> = state

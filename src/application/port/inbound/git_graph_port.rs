@@ -57,6 +57,10 @@ pub struct GitGraphRefsState {
     pub repository: bool,
     /// HEAD, ref, 작업 트리 가운데 하나가 바뀌면 값이 바뀐다. 저장소가 아니면 없다.
     pub refs_digest: Option<String>,
+    /// 이 작업 트리의 끝나지 않은 작업이다 (`merge`, `rebase`, `cherry-pick`, `revert`, `bisect`). 지문에 넣지 않는다.
+    pub operation_in_progress: Option<String>,
+    /// 충돌이 풀리지 않은 파일 수이다. 지문에 넣지 않는다.
+    pub conflicted_files: usize,
 }
 
 pub trait GitGraphPort: Send + Sync {

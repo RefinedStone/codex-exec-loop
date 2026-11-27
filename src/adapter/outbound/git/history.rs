@@ -12,7 +12,10 @@ use std::process::Stdio;
 
 use anyhow::{Context, Result, bail};
 
-use crate::application::port::outbound::git_history_port::{GitHistoryPort, GitHistoryRefs};
+use super::workspace::IN_PROGRESS_MARKERS;
+use crate::application::port::outbound::git_history_port::{
+    GitHistoryPort, GitHistoryRefs, GitWorktreeProgress,
+};
 use crate::domain::git_graph::{
     GIT_BACKUP_REF_PREFIX, GitCommitDetail, GitGraphCommit, GitGraphRef, GitGraphRefKind,
     GitGraphWorktree,
@@ -77,6 +80,36 @@ impl GitHistoryPort for GitHistoryAdapter {
             refs,
             worktrees,
         }))
+    }
+
+    fn read_worktree_progress(&self, repository_dir: &str) -> Result<GitWorktreeProgress> {
+        let repository = Path::new(repository_dir);
+        if !repository.is_absolute() {
+            bail!("the repository folder must be an absolute path");
+        }
+        let git_dir = required(
+            git_output(repository, &["rev-parse", "--absolute-git-dir"])?,
+            "git rev-parse",
+        )?;
+        let git_dir = Path::new(git_dir.trim());
+        let operation = IN_PROGRESS_MARKERS
+            .iter()
+            .find(|(marker, _)| git_dir.join(marker).exists())
+            .map(|(_, name)| (*name).to_string());
+        // index 만 읽는다. 작업 트리의 파일을 읽지 않으므로 필터와 줄 끝 설정이 닿지 않는다. 충돌한 파일은 단계마다
+        // 한 줄이다 (`<mode> <object> <stage>\t<path>`).
+        let unmerged = required(
+            git_output(repository, &["ls-files", "--unmerged", "-z"])?,
+            "git ls-files",
+        )?;
+        let conflicted: HashSet<&str> = unmerged
+            .split('\0')
+            .filter_map(|entry| entry.split_once('\t').map(|(_, path)| path))
+            .collect();
+        Ok(GitWorktreeProgress {
+            operation,
+            conflicted_files: conflicted.len(),
+        })
     }
 
     fn read_commits(
@@ -685,6 +718,48 @@ mod tests {
         assert_eq!(detail.message, "large");
         assert!(detail.diff_too_large);
         assert!(detail.diff.is_empty());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_stopped_cherry_pick_reports_its_name_and_the_conflicted_file() {
+        let directory = temp_repository("progress");
+        let repository = directory.display().to_string();
+        let adapter = GitHistoryAdapter;
+        initialize(&directory);
+        std::fs::write(directory.join("file.txt"), "base\n").unwrap();
+        git(&directory, &["add", "file.txt"]);
+        commit(&directory, "base");
+        assert_eq!(
+            adapter.read_worktree_progress(&repository).unwrap(),
+            GitWorktreeProgress::default()
+        );
+
+        git(&directory, &["switch", "--quiet", "-c", "topic"]);
+        std::fs::write(directory.join("file.txt"), "topic\n").unwrap();
+        git(&directory, &["commit", "--quiet", "-am", "topic"]);
+        git(&directory, &["switch", "--quiet", "main"]);
+        std::fs::write(directory.join("file.txt"), "main\n").unwrap();
+        git(&directory, &["commit", "--quiet", "-am", "main"]);
+        let picked = git_command()
+            .args(["cherry-pick", "topic"])
+            .current_dir(&directory)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("git should run");
+        assert!(
+            !picked.success(),
+            "the cherry-pick should stop on the conflict"
+        );
+
+        assert_eq!(
+            adapter.read_worktree_progress(&repository).unwrap(),
+            GitWorktreeProgress {
+                operation: Some("cherry-pick".to_string()),
+                conflicted_files: 1,
+            }
+        );
         let _ = std::fs::remove_dir_all(&directory);
     }
 

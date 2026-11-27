@@ -20,6 +20,15 @@ pub struct GitHistoryRefs {
     pub worktrees: Vec<GitGraphWorktree>,
 }
 
+/// 작업 트리의 끝나지 않은 일이다 (plan 27 §7.4 의 상태 띠).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GitWorktreeProgress {
+    /// 이 작업 트리의 끝나지 않은 작업의 이름이다 (`merge`, `rebase`, `cherry-pick`, `revert`, `bisect`).
+    pub operation: Option<String>,
+    /// 충돌이 풀리지 않은 파일 수이다.
+    pub conflicted_files: usize,
+}
+
 pub trait GitHistoryPort: Send + Sync {
     /// 저장소의 ref 들이다. 저장소가 아닌 폴더는 `None` 이다.
     fn read_refs(&self, repository_dir: &str) -> Result<Option<GitHistoryRefs>>;
@@ -41,6 +50,9 @@ pub trait GitHistoryPort: Send + Sync {
         repository_dir: &str,
         include_head: bool,
     ) -> Result<HashSet<String>>;
+
+    /// 이 작업 트리의 끝나지 않은 작업과 충돌 파일 수이다. 작업 트리의 파일은 읽지 않는다 (git 폴더와 index 만).
+    fn read_worktree_progress(&self, repository_dir: &str) -> Result<GitWorktreeProgress>;
 
     /// 커밋 하나의 상세이다. `commit` 은 전체 sha 이다 (`is_git_commit_id`). 그 커밋이 없으면 `None` 이다.
     fn read_commit_detail(

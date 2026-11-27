@@ -1430,6 +1430,8 @@ impl crate::application::port::inbound::git_graph_port::GitGraphPort for FolderE
             crate::application::port::inbound::git_graph_port::GitGraphRefsState {
                 repository: true,
                 refs_digest: None,
+                operation_in_progress: None,
+                conflicted_files: 0,
             },
         )
     }
