@@ -9,3 +9,10 @@
 .file-attachments label { display: inline-flex; align-items: center; gap: .25rem; }
 .file-attachments input[type="number"] { width: 4rem; }
 .file-attachments pre { white-space: pre-wrap; user-select: text; }
+.file-attachment-card { border-block-start: 1px solid var(--line); padding-block: .5rem; }
+.file-attachment-card details { margin-block: .25rem; }
+.file-attachment-card button, .diff-feedback-editor button { padding: .25rem .5rem; border-radius: .25rem; }
+.file-attachment-card mark { background: var(--line); color: var(--text); font-weight: 600; }
+.file-attachment-card textarea, .diff-feedback-editor textarea { min-height: 3em; resize: vertical; }
+.file-attachments .diff-feedback-editor { align-items: start; }
+.diff-feedback-editor pre, .diff-feedback-editor p { flex-basis: 100%; margin: 0; }
