@@ -419,3 +419,20 @@ test("unknown configurations and missing target test flags cannot produce a misl
   delete head.metadata.packages[1].targets[0].test;
   assert.throws(() => createValidationPlan(request({ head })), /target validation inventory/);
 });
+
+test("external resolved dependencies consuming a workspace member retain the full gate", () => {
+  const head = makeSnapshot();
+  const root = head.metadata.packages.find(pkg => pkg.name === "root");
+  const leaf = head.metadata.packages.find(pkg => pkg.name === "leaf");
+  const bridge = { id: "external-bridge", name: "bridge", version: "1.0.0", source: "registry+https://example.invalid", manifest_path: "/registry/bridge/Cargo.toml", dependencies: [], features: {}, targets: [] };
+  const edge = pkg => ({ name: pkg, pkg, dep_kinds: [{ kind: null, target: null }] });
+  head.metadata.packages.push(bridge);
+  head.metadata.resolve.nodes.find(node => node.id === root.id).deps.push(edge(bridge.id));
+  head.metadata.resolve.nodes.push({ id: bridge.id, deps: [edge(leaf.id)], features: [] });
+  const base = { ...clone(head), sha: BASE_SHA };
+  assertFull(createValidationPlan(request({ base, head })), "external-resolve-consumes-workspace-member");
+  const next = makeSnapshot();
+  assertFull(createValidationPlan(request({ base, head: next })), "base:external-resolve-consumes-workspace-member");
+  head.metadata.resolve.nodes.at(-1).deps = [];
+  assert.equal(createValidationPlan(request({ head })).mode, "selective");
+});
