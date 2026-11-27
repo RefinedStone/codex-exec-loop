@@ -642,14 +642,19 @@ export function App() {
     const current = session.current;
     const sourceThreadId = useDesktopStore.getState().openThreadId;
     if (!current || !sourceThreadId) return;
-    if (current.forkOutcomeUnknown(sourceThreadId) && !window.confirm(FORK_RETRY_WARNING)) return;
+    const approvedSnapshot = current.forkOutcomeSnapshot(sourceThreadId);
+    if (approvedSnapshot === null) {
+      toast("분기 결과 기록을 읽을 수 없어 요청을 보내지 않았습니다.");
+      return;
+    }
+    if (approvedSnapshot !== "[]" && !window.confirm(FORK_RETRY_WARNING)) return;
     const revision = useUiStore.getState().navigationRevision;
     const outcome = await current.forkThread(sourceThreadId, (threadId) => {
       const ui = useUiStore.getState();
       if (ui.view !== "thread" || ui.navigationRevision !== revision) return false;
       visit({ view: "thread", threadId });
       return true;
-    });
+    }, approvedSnapshot);
     toast(forkOutcomeText(outcome));
   }, []);
 

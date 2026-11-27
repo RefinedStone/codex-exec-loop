@@ -47,7 +47,7 @@ import { applyMcpWriteApprovalNotification, clearMcpWriteApprovals, MCP_WRITE_AP
 import { NextTurnQueue } from "./nextTurnQueue";
 import { NextTurnSettingsController } from "./nextTurnSettings";
 import { ThreadCompactionController } from "./threadCompaction";
-import { ForkOutcomeJournal } from "./forkOutcomeJournal";
+import { EMPTY_FORK_SNAPSHOT, ForkOutcomeJournal } from "./forkOutcomeJournal";
 import { ProvisionalThreadTitles, threadDisplayTitle } from "./threadTitles";
 import { type DotLiveState, type DotSummary, type GatewayInfo, type SessionStore, sortFolders, type WorkspaceFolder, type WorkspaceThread } from "./desktopStore";
 
@@ -135,6 +135,12 @@ export function forkBlockReason(thread: Pick<Thread, "id" | "ephemeral" | "paren
   const browser = transcript?.threadId === thread.id
     && transcript.turns.some((turn) => turn.items.some((item) => item.type === "mcpToolCall" && item.server === BROWSER_MCP_SERVER));
   return browser ? "브라우저 대화는 아직 분기하지 않습니다. 브라우저 연결은 대화마다 따로 등록해야 합니다." : null;
+}
+
+// Generic server/internal errors do not prove that a non-idempotent request
+// had no side effect. Only protocol-level pre-execution refusals are definitive.
+function definitiveForkRejection(error: unknown): error is JsonRpcError {
+  return error instanceof JsonRpcError && [-32700, -32600, -32601, -32602].includes(error.code);
 }
 
 /** `thread/fork` 응답의 새 대화이다. id 가 없거나 원본과 같으면 null 이다. */
@@ -259,7 +265,7 @@ export class DesktopSession {
   /** 원본 id → 진행 중인 분기이다. 같은 원본의 두 번째 요청은 같은 결과를 기다린다. */
   private readonly forksInFlight = new Map<string, Promise<ForkThreadOutcome>>();
   /** 요청 전 기록하여 renderer 재시작 뒤에도 결과 불명 경고를 유지한다. */
-  private readonly forkOutcomes = new ForkOutcomeJournal();
+  private readonly forkOutcomes: ForkOutcomeJournal;
   /** 사용자의 답을 기다리는 승인 요청의 응답 함수이다. 키는 요청 id 이다. */
   private readonly approvalAnswers = new Map<string, { approval: PendingApproval; answer: (answer: unknown) => void }>();
   /** 커널 패널의 연결이다 (plan 18 K3-6). 같은 Gateway 접속을 쓴다. */
@@ -275,7 +281,9 @@ export class DesktopSession {
     scheduler?: FrameScheduler,
     /** 원격 호스트의 세션이다 (plan 25). 기본은 읽기만 한다: 턴, 새 스레드, 승인 응답을 보내지 않는다. */
     private readonly readOnly = false,
+    forkOutcomes = new ForkOutcomeJournal(),
   ) {
+    this.forkOutcomes = forkOutcomes;
     this.client = new JsonRpcClient((text) => bridge.send(text));
     this.nextTurnSettings = new NextTurnSettingsController((params) => this.client.request("model/list", params));
     this.nextTurnQueue = new NextTurnQueue(async (threadId, text) => {
@@ -667,6 +675,12 @@ export class DesktopSession {
     }
   }
 
+  /** 승인 시점의 불명 시도 집합을 전송 직전에 다시 확인한다. */
+  forkOutcomeSnapshot(sourceThreadId: string): string | null {
+    try { return this.forkOutcomes.snapshot(sourceThreadId); }
+    catch { return null; }
+  }
+
   /** 이 원본의 지난 분기 결과를 모른다. 다시 분기하면 대화가 하나 더 생길 수 있다. */
   forkOutcomeUnknown(sourceThreadId: string): boolean {
     return this.forkOutcomes.has(sourceThreadId);
@@ -678,15 +692,15 @@ export class DesktopSession {
    * 시작한 턴은 새 대화에 들어가지 않는다. 응답이 왔을 때 원본이 아직 열려 있으면 `claimSelection` 을 부른다. 그것이
    * 화면을 새 대화로 옮기고 true 를 돌려주면 새 대화를 연다. 아니면 목록에만 넣고 fork 가 건 구독을 끝낸다.
    */
-  forkThread(sourceThreadId: string, claimSelection: (threadId: string) => boolean): Promise<ForkThreadOutcome> {
+  forkThread(sourceThreadId: string, claimSelection: (threadId: string) => boolean, approvedSnapshot = EMPTY_FORK_SNAPSHOT): Promise<ForkThreadOutcome> {
     const inFlight = this.forksInFlight.get(sourceThreadId);
     if (inFlight) return inFlight;
-    const fork = this.runFork(sourceThreadId, claimSelection).finally(() => this.forksInFlight.delete(sourceThreadId));
+    const fork = this.runFork(sourceThreadId, claimSelection, approvedSnapshot).finally(() => this.forksInFlight.delete(sourceThreadId));
     this.forksInFlight.set(sourceThreadId, fork);
     return fork;
   }
 
-  private async runFork(sourceThreadId: string, claimSelection: (threadId: string) => boolean): Promise<ForkThreadOutcome> {
+  private async runFork(sourceThreadId: string, claimSelection: (threadId: string) => boolean, approvedSnapshot: string): Promise<ForkThreadOutcome> {
     if (this.readOnly) return { kind: "refused", reason: "원격 호스트의 대화는 분기하지 않습니다." };
     if (!this.connected) return { kind: "refused", reason: "Gateway 에 연결되어 있지 않습니다." };
     let lastTurnId: string;
@@ -706,9 +720,15 @@ export class DesktopSession {
     // 여기부터 서버가 대화를 만들 수 있다. 결과를 모르면 다시 보내지 않는다.
     let attemptId: string;
     try {
-      attemptId = this.forkOutcomes.begin(sourceThreadId);
+      const admitted = await this.forkOutcomes.begin(sourceThreadId, approvedSnapshot);
+      if (admitted === null) return { kind: "refused", reason: "다른 분기 결과가 바뀌었습니다. 사이드바를 확인하고 다시 분기 여부를 확인하세요." };
+      attemptId = admitted;
     } catch {
       return { kind: "refused", reason: "분기 결과를 안전하게 기록할 수 없어 요청을 보내지 않았습니다." };
+    }
+    if (!this.connected) {
+      this.forkOutcomes.resolve(sourceThreadId, attemptId);
+      return { kind: "refused", reason: "분기 요청 전 Gateway 연결이 끊겼습니다." };
     }
     const params: ThreadForkParams = { threadId: sourceThreadId, lastTurnId, excludeTurns: true, ephemeral: false };
     const request = this.client.request<ThreadForkResponse>("thread/fork", params);
@@ -717,7 +737,7 @@ export class DesktopSession {
     try {
       response = await Promise.race([request, new Promise<typeof FORK_TIMED_OUT>((resolve) => { timer = setTimeout(() => resolve(FORK_TIMED_OUT), FORK_RESPONSE_TIMEOUT_MS); })]);
     } catch (error) {
-      if (error instanceof JsonRpcError) {
+      if (definitiveForkRejection(error)) {
         this.forkOutcomes.resolve(sourceThreadId, attemptId);
         return { kind: "refused", reason: error.code === -32601 ? "이 Codex app-server 는 대화 분기(thread/fork)를 지원하지 않습니다." : `분기하지 못했습니다: ${error.message}` };
       }
@@ -731,9 +751,12 @@ export class DesktopSession {
         const forked = forkedThreadOf(late, sourceThreadId);
         if (forked) {
           this.listFork(forked);
+          this.forkOutcomes.resolve(sourceThreadId, attemptId);
           this.releaseUnopenedFork(forked.id);
         }
-      }, () => undefined);
+      }, error => {
+        if (definitiveForkRejection(error)) this.forkOutcomes.resolve(sourceThreadId, attemptId);
+      });
       return this.forkOutcomeLost();
     }
     const forked = forkedThreadOf(response, sourceThreadId);
