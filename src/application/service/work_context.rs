@@ -361,9 +361,10 @@ impl WorkContextPort for WorkContextService {
             .iter()
             .map(|path| normalize_repository_path(path))
             .collect::<Result<_>>()?;
+        let task = request.task_id.as_deref().map(valid_scope_id).transpose()?;
         let scope_id = format!(
             "{:x}",
-            Sha256::digest(serde_json::to_vec(&(&repository, &request.task_id, paths))?)
+            Sha256::digest(serde_json::to_vec(&(&repository, task, paths))?)
         );
         let manifest = ContextManifest::capture(
             scope_id,
@@ -699,6 +700,7 @@ mod tests {
     struct FakeStore {
         links: Mutex<Vec<(String, WorkContextLink)>>,
         markers: Mutex<HashMap<String, String>>,
+        manifests: Mutex<HashMap<(String, String), ContextManifest>>,
         link_reads: Mutex<Option<mpsc::Sender<()>>>,
     }
 
@@ -707,6 +709,24 @@ mod tests {
     }
 
     impl WorkContextStorePort for FakeStore {
+        fn save_manifest(&self, repository: &str, manifest: &ContextManifest) -> Result<()> {
+            manifest.validate()?;
+            self.manifests.lock().unwrap().insert(
+                (repository.to_owned(), manifest.id.clone()),
+                manifest.clone(),
+            );
+            Ok(())
+        }
+
+        fn load_manifest(&self, repository: &str, id: &str) -> Result<Option<ContextManifest>> {
+            Ok(self
+                .manifests
+                .lock()
+                .unwrap()
+                .get(&(repository.to_owned(), id.to_owned()))
+                .cloned())
+        }
+
         fn set_repository_preference(
             &self,
             repository: &str,
@@ -1432,6 +1452,43 @@ mod tests {
     fn path(path: &str) -> ContextScope {
         ContextScope::Path {
             path: path.to_string(),
+        }
+    }
+
+    #[test]
+    fn manifest_comparison_normalizes_task_id_in_both_directions() {
+        let (service, versions, _) = versioned_service("");
+        let service = service.with_repository_identity(Arc::new(FakeRepositories));
+        versions.set("a/b#1", "v1");
+        service
+            .attach_scope_resource(&attach(
+                scope(
+                    "/one/wt",
+                    ContextScope::Task {
+                        task_id: "T-1".into(),
+                    },
+                ),
+                "https://github.com/a/b/pull/1",
+            ))
+            .unwrap();
+        let request = |task_id: &str| ContextSelectionRequest {
+            cwd: "/one/main".into(),
+            task_id: Some(task_id.into()),
+            paths: Vec::new(),
+        };
+        for (first, next) in [(" T-1 ", "T-1"), ("T-1", " T-1 ")] {
+            let captured = service.capture_manifest(&request(first), None).unwrap();
+            assert_eq!(captured.manifest.entries.len(), 1);
+            assert!(captured.manifest.entries[0].selected);
+            let compared = service
+                .capture_manifest(&request(next), Some(&captured.manifest.id))
+                .unwrap();
+            assert_eq!(compared.manifest, captured.manifest);
+            assert_eq!(
+                compared.previous_id.as_deref(),
+                Some(captured.manifest.id.as_str())
+            );
+            assert!(!compared.changed);
         }
     }
 
