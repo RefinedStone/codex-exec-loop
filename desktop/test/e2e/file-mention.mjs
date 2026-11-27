@@ -99,10 +99,26 @@ try {
   await page.getByTestId("settings").waitFor();
   check("Enter runs the app command and clears only the command draft", (await input.inputValue()) === "");
   await page.getByTestId("settings").getByTitle("닫기").click();
+  // 포커스만 나갔다가 돌아오면 같은 커서에서도 후보를 복원한다. 모델로 보내지 않는다.
+  await input.fill("/settings");
+  await slashList.waitFor();
+  await page.getByTestId("composer-send").focus();
+  await slashList.waitFor({ state: "hidden" });
+  await input.focus();
+  await slashList.waitFor();
+  await page.keyboard.press("Enter");
+  await page.getByTestId("settings").waitFor();
+  check("refocusing restores commands and Enter runs settings", (await input.inputValue()) === "");
+  check("refocusing a command does not send a model request", modelCalls.length === modelCallsBeforeCommands);
+  await page.getByTestId("settings").getByTitle("닫기").click();
+
   await input.fill("/settings");
   await slashList.waitFor();
   await page.keyboard.press("Escape");
   check("Escape preserves the draft and dismisses commands", (await input.inputValue()) === "/settings" && (await slashList.count()) === 0);
+  await page.getByTestId("composer-send").focus();
+  await input.focus();
+  check("Escape dismissal survives a focus roundtrip", (await input.inputValue()) === "/settings" && (await slashList.count()) === 0);
 
   await input.fill("/review");
   await slashList.waitFor();
