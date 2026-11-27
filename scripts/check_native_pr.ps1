@@ -309,6 +309,7 @@ try {
             "scripts/crate-boundaries.test.mjs",
             "scripts/agent-plan.test.mjs",
             "scripts/native-rust-contracts.test.mjs",
+            "scripts/native-contract-progress.test.mjs",
             "scripts/npm-audit-gate.test.mjs"
         )
     }
