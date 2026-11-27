@@ -208,10 +208,11 @@ export class NextTurnSettingsController {
   }
 
   setModel(threadId: string, model: string | null): void {
-    if (model === null) { this.reset(threadId); return; }
+    const state = this.snapshot(threadId);
+    // 모델만 상속으로 되돌린다. 따로 고른 승인·sandbox 정책은 남긴다.
+    if (model === null) { this.set(threadId, { ...state, draft: { model: null, effort: null }, draftRevision: state.draftRevision + 1 }); return; }
     const choice = this.catalog.phase === "ready" && this.catalog.models.find((entry) => entry.model === model);
     if (!choice) throw new Error("현재 지원 목록에 있는 모델을 선택하세요.");
-    const state = this.snapshot(threadId);
     this.set(threadId, { ...state, draft: { model, effort: choice.defaultEffort }, draftRevision: state.draftRevision + 1 });
   }
 
