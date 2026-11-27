@@ -144,6 +144,46 @@ describe("next turn model settings", () => {
     settings.dispose();
   });
 
+  it("sends a narrower policy once without consent and keeps an unknown current policy unknown", () => {
+    const settings = new NextTurnSettingsController(async () => page());
+    settings.connectionChanged(true);
+    settings.observeSnapshot("t", "model-a", "low", undefined, { approvalPolicy: "on-request", sandbox: { type: "workspaceWrite", writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false } });
+    settings.setPolicy("t", "approvalPolicy", "untrusted");
+    settings.setPolicy("t", "sandbox", "readOnly");
+    expect(settings.needsPolicyConsent("t")).toBe(false);
+    const sent = settings.prepare("t");
+    expect(sent.params).toEqual({ approvalPolicy: "untrusted", sandboxPolicy: { type: "readOnly", networkAccess: false } });
+    settings.accepted(sent);
+    expect(settings.snapshot("t").policyDraft).toEqual({ approvalPolicy: null, sandbox: null, widerConfirmed: false });
+    expect(settings.snapshot("t").currentPolicy).toEqual({ approvalPolicy: null, sandbox: null });
+    expect(settings.prepare("t").params).toEqual({});
+    settings.observeNotification("t", "model-a", "low", { approvalPolicy: "on-failure", sandbox: { type: "future" } });
+    expect(settings.snapshot("t").currentPolicy).toEqual({ approvalPolicy: null, sandbox: null });
+    settings.dispose();
+  });
+
+  it("blocks a wider or unknown-baseline policy until the user confirms it", () => {
+    const settings = new NextTurnSettingsController(async () => page());
+    settings.connectionChanged(true);
+    settings.setPolicy("t", "sandbox", "readOnly");
+    expect(settings.validationReason("t")).toContain("넓은 권한");
+    settings.observeSnapshot("t", "model-a", "low", undefined, { approvalPolicy: "untrusted", sandbox: { type: "readOnly", networkAccess: false } });
+    expect(settings.needsPolicyConsent("t")).toBe(false);
+    settings.setPolicy("t", "approvalPolicy", "never");
+    expect(() => settings.prepare("t")).toThrow("넓은 권한");
+    settings.confirmWiderPolicy("t");
+    expect(settings.prepare("t").params).toEqual({ approvalPolicy: "never", sandboxPolicy: { type: "readOnly", networkAccess: false } });
+    settings.setPolicy("t", "sandbox", "dangerFullAccess");
+    expect(settings.needsPolicyConsent("t")).toBe(true);
+    settings.observeSnapshot("t", "model-a", "low", undefined, { approvalPolicy: "never", sandbox: { type: "workspaceWrite", writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: true } });
+    settings.setPolicy("t", "sandbox", "workspaceWrite");
+    expect(settings.needsPolicyConsent("t")).toBe(true);
+    expect(() => settings.setPolicy("t", "sandbox", "externalSandbox")).toThrow("정책 값");
+    settings.reset("t");
+    expect(settings.prepare("t").params).toEqual({});
+    settings.dispose();
+  });
+
   it("rejects repeated pagination cursors and late responses from an old connection", async () => {
     const list = vi.fn().mockResolvedValueOnce(page([], "same")).mockResolvedValueOnce(page([], "same"));
     const settings = new NextTurnSettingsController(list);

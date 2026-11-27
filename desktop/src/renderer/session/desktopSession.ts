@@ -203,6 +203,8 @@ interface OpenedThread {
   writerElsewhere: boolean;
   model?: string | null;
   effort?: string | null;
+  approvalPolicy?: unknown;
+  sandbox?: unknown;
 }
 
 export class DesktopSession {
@@ -590,7 +592,8 @@ export class DesktopSession {
   async startThread(cwd: string): Promise<string> {
     this.assertWritable();
     const response = await this.client.request<ThreadStartResponse>("thread/start", { cwd });
-    this.nextTurnSettings.observeSnapshot(response.thread.id, response.model ?? response.thread.model, response.reasoningEffort ?? response.thread.reasoningEffort);
+    this.nextTurnSettings.observeSnapshot(response.thread.id, response.model ?? response.thread.model, response.reasoningEffort ?? response.thread.reasoningEffort,
+      undefined, { approvalPolicy: response.approvalPolicy, sandbox: response.sandbox });
     const transcript = transcriptFromThread(response.thread);
     this.invalidateConversation();
     this.batcher.clear();
@@ -614,7 +617,8 @@ export class DesktopSession {
         },
       });
       const threadId = response.thread.id;
-      this.nextTurnSettings.observeSnapshot(threadId, response.model ?? response.thread.model, response.reasoningEffort ?? response.thread.reasoningEffort);
+      this.nextTurnSettings.observeSnapshot(threadId, response.model ?? response.thread.model, response.reasoningEffort ?? response.thread.reasoningEffort,
+        undefined, { approvalPolicy: response.approvalPolicy, sandbox: response.sandbox });
       await agent.setActiveThread(threadId);
       await agent.bind(registration.registrationId, threadId);
       let cursor: string | null = null;
@@ -1046,7 +1050,7 @@ export class DesktopSession {
       this.writerElsewhereThreadId = opened.writerElsewhere ? threadId : null;
       this.store.setWriterElsewhere(opened.writerElsewhere);
       this.nextTurnSettings.observeSnapshot(threadId, opened.model ?? opened.thread.model,
-        opened.effort ?? opened.thread.reasoningEffort, settingsRevision);
+        opened.effort ?? opened.thread.reasoningEffort, settingsRevision, { approvalPolicy: opened.approvalPolicy, sandbox: opened.sandbox });
       let transcript = transcriptFromThread(opened.thread);
       // 서버가 턴을 함께 보냈으면(예: 녹화 재생) 그대로 쓴다.
       if (transcript.turns.length === 0) {
@@ -1072,7 +1076,8 @@ export class DesktopSession {
   private async subscribeOrRead(threadId: string): Promise<OpenedThread> {
     try {
       const response = await this.client.request<ThreadResumeResponse>("thread/resume", { threadId, excludeTurns: true });
-      return { thread: response.thread, writerElsewhere: false, model: response.model, effort: response.reasoningEffort };
+      return { thread: response.thread, writerElsewhere: false, model: response.model, effort: response.reasoningEffort,
+        approvalPolicy: response.approvalPolicy, sandbox: response.sandbox };
     } catch (error) {
       if (!(error instanceof JsonRpcError && WRITER_ELSEWHERE_ERROR.test(error.message))) {
         throw error;
@@ -1199,8 +1204,9 @@ export class DesktopSession {
       return;
     }
     if (method === "thread/settings/updated") {
-      const settings = (params as { threadSettings?: { model?: unknown; effort?: unknown } } | null)?.threadSettings;
-      if (settings && typeof settings === "object") this.nextTurnSettings.observeNotification(threadId, settings.model, settings.effort);
+      const settings = (params as { threadSettings?: { model?: unknown; effort?: unknown; approvalPolicy?: unknown; sandboxPolicy?: unknown } } | null)?.threadSettings;
+      if (settings && typeof settings === "object") this.nextTurnSettings.observeNotification(threadId, settings.model, settings.effort,
+        { approvalPolicy: settings.approvalPolicy, sandbox: settings.sandboxPolicy });
       return;
     }
     if (method === "turn/completed") {
