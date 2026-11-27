@@ -3,7 +3,7 @@
 pub(crate) use akra_native::subprocess::spawn_without_console;
 pub(crate) use akra_native::subprocess::{
     ManagedChild, command_output_with_input_and_timeout,
-    command_output_with_input_timeout_and_limits, command_output_with_timeout, controlled, spawn,
+    command_output_with_input_timeout_and_limits, command_output_with_timeout, spawn,
     wait_with_output_timeout, wait_with_output_timeout_and_limits,
 };
 use std::io;
