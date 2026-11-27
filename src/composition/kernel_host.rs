@@ -25,6 +25,7 @@ use crate::core::runtime::CoreInputWaker;
 use crate::domain::issue_automation::collection::{
     IssueCollectionDetail, IssueCollectionPage, IssueCollectionQuery,
 };
+use crate::domain::issue_automation::decision::StoredIssueDecision;
 use crate::domain::issue_work::IssueReference;
 use crate::domain::kernel_event::{
     KernelCommandDescriptor, KernelEventPage, OperationReceipt, OperationStatus, ReasonCode,
@@ -224,6 +225,9 @@ enum KernelHostInput {
     },
     IssueAutomationPolicy {
         reply: Sender<Option<IssueAutomationPolicyInspection>>,
+    },
+    OpenIssueDecisions {
+        reply: Sender<Result<Vec<StoredIssueDecision>, String>>,
     },
     Issues {
         query: IssueCollectionQuery,
@@ -488,6 +492,16 @@ impl KernelCommandSender {
         let (reply, answer) = mpsc::channel();
         self.inbox
             .send(KernelHostInput::IssueAutomationPolicy { reply })?;
+        wait_reply(&answer, timeout)
+    }
+
+    pub(crate) fn open_issue_decisions(
+        &self,
+        timeout: Duration,
+    ) -> Result<Result<Vec<StoredIssueDecision>, String>, KernelCallError> {
+        let (reply, answer) = mpsc::channel();
+        self.inbox
+            .send(KernelHostInput::OpenIssueDecisions { reply })?;
         wait_reply(&answer, timeout)
     }
 
@@ -877,6 +891,13 @@ impl KernelHostLoop {
             }
             KernelHostInput::IssueAutomationPolicy { reply } => {
                 let _ = reply.send(self.runtime.issue_automation_policy());
+            }
+            KernelHostInput::OpenIssueDecisions { reply } => {
+                let decisions = self
+                    .runtime
+                    .open_issue_decisions()
+                    .map_err(|_| "issue decision local state could not be read".to_string());
+                let _ = reply.send(decisions);
             }
             KernelHostInput::Issues { query, reply } => {
                 let page = self

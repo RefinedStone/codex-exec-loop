@@ -2065,6 +2065,15 @@ impl NativeClientRuntime {
             .issues(query)
     }
 
+    pub(super) fn open_issue_decisions(
+        &self,
+    ) -> anyhow::Result<Vec<crate::domain::issue_automation::decision::StoredIssueDecision>> {
+        self.issue_collection
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("issue collection is unavailable"))?
+            .open_decisions()
+    }
+
     pub(super) fn issue_automation_policy(&self) -> Option<IssueAutomationPolicyInspection> {
         self.issue_collection
             .as_ref()

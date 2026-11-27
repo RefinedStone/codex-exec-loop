@@ -422,6 +422,13 @@ fn query(sim: &mut SimKernel, issue: &IssueReference) -> IssueCollectionDetail {
     answer.recv_timeout(WAIT).unwrap().unwrap()
 }
 
+fn attention_decisions(sim: &mut SimKernel) -> Vec<StoredIssueDecision> {
+    let (reply, answer) = mpsc::channel();
+    sim.host
+        .handle_input(KernelHostInput::OpenIssueDecisions { reply });
+    answer.recv_timeout(WAIT).unwrap().unwrap()
+}
+
 fn subscribe(sim: &mut SimKernel) -> Receiver<KernelHostEvent> {
     let (reply, answer) = mpsc::channel();
     sim.host
@@ -531,6 +538,55 @@ fn assert_no_execution_effects(sim: &mut SimKernel, fixture: &Fixture) {
 }
 
 #[test]
+fn kernel_simulation_attention_reads_decisions_without_retriaging_the_catalog() {
+    struct CountedPolicy(Arc<AtomicUsize>);
+    impl IssueAutomationPolicySourcePort for CountedPolicy {
+        fn load_user_policy_toml(&self) -> anyhow::Result<Option<String>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        }
+        fn load_project_policy_toml(&self, _: &str) -> anyhow::Result<Option<String>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(POLICY.to_owned()))
+        }
+    }
+    let fixture = Fixture::new();
+    let source = Source::new();
+    let services = fixture.services(source.clone());
+    services.seed();
+    let mut sim = fixture.boot(&services, Arc::new(SimKernelLog::default()));
+    let commit = services.ensure(&mut sim, "attention-snapshot");
+    let reads = Arc::new(AtomicUsize::new(0));
+    let triage = Arc::new(IssueTriageService::new(
+        fixture.workspace.clone(),
+        services.store.clone(),
+        IssueAutomationPolicyService::new(Arc::new(CountedPolicy(reads.clone()))),
+        IssuePolicyService::new(Arc::new(DisclosurePolicy)),
+    ));
+    let issues = Arc::new(
+        IssueCollectionService::new(
+            fixture.workspace.clone(),
+            services.store.clone(),
+            source,
+            Arc::new(Origin),
+            IssuePolicyService::new(Arc::new(DisclosurePolicy)),
+        )
+        .with_triage(triage),
+    );
+    sim.host
+        .runtime
+        .attach_issue_collection(issues.clone())
+        .unwrap();
+    let before = reads.load(Ordering::SeqCst);
+    assert_eq!(attention_decisions(&mut sim), vec![commit.record]);
+    assert_eq!(reads.load(Ordering::SeqCst), before);
+    // This same service does assess policy for normal issue lists, proving the
+    // attention read deliberately avoids that expensive projection path.
+    issues.issues(&IssueCollectionQuery::default()).unwrap();
+    assert!(reads.load(Ordering::SeqCst) > before);
+}
+
+#[test]
 fn kernel_simulation_issue_decision_answers_once_replays_and_publishes_matching_live_revisions() {
     let fixture = Fixture::new();
     let source = Source::new();
@@ -551,6 +607,9 @@ fn kernel_simulation_issue_decision_answers_once_replays_and_publishes_matching_
     assert!(!wire.contains(SECRET));
     assert!(wire.contains("open_decisions"));
     assert_eq!(opened.item.as_ref().unwrap().open_decisions.len(), 1);
+    let source_calls = source.calls.load(Ordering::SeqCst);
+    assert_eq!(attention_decisions(&mut sim), vec![commit.record.clone()]);
+    assert_eq!(source.calls.load(Ordering::SeqCst), source_calls);
     let requested = live_decisions(&events);
     assert_eq!(requested.len(), 1);
     assert_eq!(requested[0]["type"], "issue_decision");
@@ -574,6 +633,7 @@ fn kernel_simulation_issue_decision_answers_once_replays_and_publishes_matching_
     let closed = query(&mut sim, issue);
     assert_eq!(revision, closed.revision);
     assert!(closed.item.as_ref().unwrap().open_decisions.is_empty());
+    assert!(attention_decisions(&mut sim).is_empty());
     let resolved = live_decisions(&events);
     assert_eq!(resolved.len(), 1);
     assert_eq!(resolved[0]["type"], "issue_decision");
