@@ -1,0 +1,407 @@
+{
+  "schemaVersion": 1,
+  "revision": 1,
+  "baselineSha": "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
+  "rootPackage": "akra-ade",
+  "packages": [
+    {
+      "name": "akra-ade",
+      "manifest": "Cargo.toml",
+      "state": "active",
+      "workspaceDependencies": [
+        "akra-issue-core",
+        "akra-native",
+        "akra-verification",
+        "akra-verification-native"
+      ],
+      "consumerCoverage": "full",
+      "sourcePrefixes": [
+        "src/",
+        "tests/"
+      ],
+      "externalInputs": [
+        "templates/",
+        "schema/",
+        "assets/",
+        "npm/",
+        "desktop/src/shared/protocol/"
+      ]
+    },
+    {
+      "name": "akra-issue-core",
+      "manifest": "crates/issue-core/Cargo.toml",
+      "state": "planned",
+      "workspaceDependencies": [],
+      "consumerCoverage": "full",
+      "sourcePrefixes": [
+        "crates/issue-core/"
+      ],
+      "externalInputs": []
+    },
+    {
+      "name": "akra-native",
+      "manifest": "crates/native/Cargo.toml",
+      "state": "planned",
+      "workspaceDependencies": [],
+      "consumerCoverage": "full",
+      "sourcePrefixes": [
+        "crates/native/"
+      ],
+      "externalInputs": []
+    },
+    {
+      "name": "akra-verification",
+      "manifest": "crates/verification/Cargo.toml",
+      "state": "planned",
+      "workspaceDependencies": [
+        "akra-issue-core"
+      ],
+      "consumerCoverage": "full",
+      "sourcePrefixes": [
+        "crates/verification/"
+      ],
+      "externalInputs": []
+    },
+    {
+      "name": "akra-verification-native",
+      "manifest": "crates/verification-native/Cargo.toml",
+      "state": "planned",
+      "workspaceDependencies": [
+        "akra-native",
+        "akra-verification"
+      ],
+      "consumerCoverage": "full",
+      "sourcePrefixes": [
+        "crates/verification-native/"
+      ],
+      "externalInputs": []
+    }
+  ],
+  "fullInputs": [
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain.toml",
+    "AGENTS.md",
+    ".cargo/",
+    ".github/",
+    "scripts/",
+    "tests/fixtures/"
+  ],
+  "transfers": [
+    {
+      "source": "src/domain/issue_work.rs",
+      "destination": "crates/issue-core/src/issue_work.rs",
+      "owner": "akra-issue-core",
+      "kind": "production-and-unit-tests",
+      "oldTestPrefix": "domain::issue_work::",
+      "newTestPrefix": "issue_work::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/domain/issue_policy.rs",
+      "destination": "crates/issue-core/src/issue_policy.rs",
+      "owner": "akra-issue-core",
+      "kind": "production-and-unit-tests",
+      "oldTestPrefix": "domain::issue_policy::",
+      "newTestPrefix": "issue_policy::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/domain/issue_template.rs",
+      "destination": "crates/issue-core/src/issue_template.rs",
+      "owner": "akra-issue-core",
+      "kind": "production-and-unit-tests",
+      "oldTestPrefix": "domain::issue_template::",
+      "newTestPrefix": "issue_template::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/domain/issue_markdown.rs",
+      "destination": "crates/issue-core/src/issue_markdown.rs",
+      "owner": "akra-issue-core",
+      "kind": "production-and-unit-tests",
+      "oldTestPrefix": "domain::issue_markdown::",
+      "newTestPrefix": "issue_markdown::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/domain/issue_validation.rs",
+      "destination": "crates/issue-core/src/issue_validation.rs",
+      "owner": "akra-issue-core",
+      "kind": "production-and-unit-tests",
+      "oldTestPrefix": "domain::issue_validation::",
+      "newTestPrefix": "issue_validation::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/domain/issue_masking.rs",
+      "destination": "crates/issue-core/src/issue_masking.rs",
+      "owner": "akra-issue-core",
+      "kind": "production-and-unit-tests",
+      "oldTestPrefix": "domain::issue_masking::",
+      "newTestPrefix": "issue_masking::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/domain/issue_secret_spans.rs",
+      "destination": "crates/issue-core/src/issue_secret_spans.rs",
+      "owner": "akra-issue-core",
+      "kind": "production-and-unit-tests",
+      "oldTestPrefix": "domain::issue_secret_spans::",
+      "newTestPrefix": "issue_secret_spans::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/domain/issue_review.rs",
+      "destination": "crates/issue-core/src/issue_review.rs",
+      "owner": "akra-issue-core",
+      "kind": "production-and-unit-tests",
+      "oldTestPrefix": "domain::issue_review::",
+      "newTestPrefix": "issue_review::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/domain/issue_publish_intent.rs",
+      "destination": "crates/issue-core/src/issue_publish_intent.rs",
+      "owner": "akra-issue-core",
+      "kind": "production-and-unit-tests",
+      "oldTestPrefix": "domain::issue_publish_intent::",
+      "newTestPrefix": "issue_publish_intent::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/domain/issue_creation.rs",
+      "destination": "crates/issue-core/src/issue_creation.rs",
+      "owner": "akra-issue-core",
+      "kind": "production-and-unit-tests",
+      "oldTestPrefix": "domain::issue_creation::",
+      "newTestPrefix": "issue_creation::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/domain/issue_masking/tests.rs",
+      "destination": "crates/issue-core/src/issue_masking/tests.rs",
+      "owner": "akra-issue-core",
+      "kind": "unit-tests",
+      "oldTestPrefix": "domain::issue_masking::tests::",
+      "newTestPrefix": "issue_masking::tests::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    }
+  ],
+  "nativeCandidates": [
+    {
+      "source": "src/process_liveness.rs",
+      "owner": "akra-native",
+      "decision": "extract"
+    },
+    {
+      "source": "src/trusted_executable.rs",
+      "owner": "akra-native",
+      "decision": "extract-with-private-filesystem"
+    },
+    {
+      "source": "src/private_fs.rs",
+      "owner": "akra-native",
+      "decision": "extract-windows"
+    },
+    {
+      "source": "src/private_directory.rs",
+      "owner": "akra-native",
+      "decision": "extract"
+    },
+    {
+      "source": "src/private_sqlite.rs",
+      "owner": "akra-native",
+      "decision": "extract-directory-identity-only"
+    },
+    {
+      "source": "src/subprocess.rs",
+      "owner": "akra-ade",
+      "decision": "retain-configuration-boundary-until-injected"
+    },
+    {
+      "source": "src/private_ipc.rs",
+      "owner": "akra-ade",
+      "decision": "retain-provider-meaning"
+    },
+    {
+      "source": "src/git_subprocess.rs",
+      "owner": "akra-verification-native",
+      "decision": "audit-git-contract"
+    },
+    {
+      "source": "src/git_execution_guard.rs",
+      "owner": "akra-verification-native",
+      "decision": "audit-git-contract"
+    }
+  ],
+  "contracts": [
+    {
+      "id": "evidence-gate",
+      "owner": "akra-ade",
+      "target": {
+        "kind": "lib",
+        "name": "akra_ade"
+      },
+      "filter": "application::service::parallel_mode::tests::distributor::evidence_gate::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "all",
+      "isolation": "process-per-filter",
+      "classification": "root-integration",
+      "reason": "parallel admission + issue binding + SQLite/Git integration",
+      "coverage": "retain-full"
+    },
+    {
+      "id": "post-turn-verification",
+      "owner": "akra-ade",
+      "target": {
+        "kind": "lib",
+        "name": "akra_ade"
+      },
+      "filter": "application::service::post_turn_evaluation::tests::automatic_verification::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "all",
+      "isolation": "process-per-filter",
+      "classification": "root-integration",
+      "reason": "post-turn continuation and authority integration",
+      "coverage": "retain-full"
+    },
+    {
+      "id": "orchestrator-verification",
+      "owner": "akra-ade",
+      "target": {
+        "kind": "lib",
+        "name": "akra_ade"
+      },
+      "filter": "application::service::parallel_mode::orchestrator_loop::tests::automatic_verification::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "all",
+      "isolation": "process-per-filter",
+      "classification": "root-integration",
+      "reason": "orchestrator ownership and continuation integration",
+      "coverage": "retain-full"
+    },
+    {
+      "id": "lease-verification",
+      "owner": "akra-ade",
+      "target": {
+        "kind": "lib",
+        "name": "akra_ade"
+      },
+      "filter": "parallel_mode::tests::pool::lease::task_verification::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "all",
+      "isolation": "process-per-filter",
+      "classification": "root-integration",
+      "reason": "live lease and verification integration",
+      "coverage": "retain-full"
+    }
+  ],
+  "securityContracts": [
+    {
+      "name": "IssueValidationPassed",
+      "owner": "akra-issue-core",
+      "source": "src/domain/issue_validation.rs",
+      "privateFields": [
+        "shared_copy"
+      ],
+      "forbiddenDerives": [
+        "Deserialize"
+      ],
+      "construction": "validate_issue"
+    },
+    {
+      "name": "VaultUserConfirmation",
+      "owner": "akra-ade",
+      "construction": "existing native confirmation process",
+      "boundary": "retain restricted constructors, no serialization of plaintext/key, zeroize"
+    },
+    {
+      "name": "verification-owner-run-token",
+      "owner": "akra-verification",
+      "boundary": "retain private construction, redacted Debug and no external deserialization"
+    }
+  ]
+}
