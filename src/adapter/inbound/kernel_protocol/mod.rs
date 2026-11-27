@@ -2,6 +2,7 @@
 //! core 타입 사이의 변환을 둔다. core 는 직렬화를 모르므로 변환은 이 inbound adapter 만 한다. 커널 호스트는
 //! `src/composition/kernel_host.rs` 이다. 전송(Gateway)은 K3-5 에서 붙인다.
 
+use crate::application::port::inbound::planning_admin_port::PlanningAdminDraftKind;
 use crate::application::port::inbound::stored_command_port::task_evidence::{
     PrepareTaskEvidenceRequest, RecordTaskEvidenceRequest, RequestTaskVerificationRequest,
     WaiveTaskCriterionRequest,
@@ -20,6 +21,7 @@ use crate::domain::kernel_event::{
 };
 pub use crate::domain::kernel_spec::OperationState;
 use crate::domain::kernel_spec::{KernelCommandKind, spec_names};
+use crate::domain::parallel_agent_profile::{ParallelAgentProfile, ParallelAgentProfileConfig};
 use crate::domain::planning::evidence::TaskEvidenceStatus;
 use crate::domain::task_usage::TaskUsageState;
 use schemars::JsonSchema;
@@ -340,6 +342,10 @@ impl CommandRequest {
             | KernelCommand::CreateDirection { .. }
             | KernelCommand::UpdateDirection { .. }
             | KernelCommand::DeleteDirection { .. }
+            | KernelCommand::ExportPlanningFiles {}
+            | KernelCommand::ApplyPlanningFiles {}
+            | KernelCommand::PromoteDraft { .. }
+            | KernelCommand::SaveParallelAgentProfiles { .. }
             | KernelCommand::SetIssueAutomationMode { .. }
             | KernelCommand::SetIssueAutonomy { .. }
             | KernelCommand::SetIssueBindingPaused { .. }
@@ -541,6 +547,27 @@ pub enum CommandResult {
         default_retained: bool,
         planning_revision: i64,
     },
+    PlanningFilesExported {
+        /// 파일을 쓴 작업 공간이다. 커널의 대표 checkout 이다.
+        directory: String,
+        /// 그 작업 공간 안의 경로이다.
+        paths: Vec<String>,
+    },
+    PlanningFilesApplied {
+        directory: String,
+        paths: Vec<String>,
+        planning_revision: i64,
+    },
+    /// 검사에 실패한 초안은 아무것도 바꾸지 않는다: `promoted_file_count` 가 0 이고 `planning_revision` 이 없다.
+    DraftPromoted {
+        promoted_file_count: usize,
+        is_valid: bool,
+        planning_revision: Option<i64>,
+    },
+    ParallelAgentProfilesSaved {
+        /// 프로필 파일을 쓴 작업 공간이다. 커널의 대표 checkout 이다.
+        directory: String,
+    },
     IssueAutonomyChanged {
         command_id: String,
         changed: bool,
@@ -652,6 +679,30 @@ impl CommandResult {
                 default_retained,
                 planning_revision,
             },
+            StoredCommandResult::PlanningFilesExported { directory, paths } => {
+                Self::PlanningFilesExported { directory, paths }
+            }
+            StoredCommandResult::PlanningFilesApplied {
+                directory,
+                paths,
+                planning_revision,
+            } => Self::PlanningFilesApplied {
+                directory,
+                paths,
+                planning_revision,
+            },
+            StoredCommandResult::DraftPromoted {
+                promoted_file_count,
+                is_valid,
+                planning_revision,
+            } => Self::DraftPromoted {
+                promoted_file_count,
+                is_valid,
+                planning_revision,
+            },
+            StoredCommandResult::ParallelAgentProfilesSaved { directory } => {
+                Self::ParallelAgentProfilesSaved { directory }
+            }
             StoredCommandResult::IssueAutonomyChanged {
                 command_id,
                 changed,
@@ -694,6 +745,10 @@ impl CommandResult {
             KernelCommandKind::CreateDirection => Some("direction_created"),
             KernelCommandKind::UpdateDirection => Some("direction_updated"),
             KernelCommandKind::DeleteDirection => Some("direction_deleted"),
+            KernelCommandKind::ExportPlanningFiles => Some("planning_files_exported"),
+            KernelCommandKind::ApplyPlanningFiles => Some("planning_files_applied"),
+            KernelCommandKind::PromoteDraft => Some("draft_promoted"),
+            KernelCommandKind::SaveParallelAgentProfiles => Some("parallel_agent_profiles_saved"),
             KernelCommandKind::SetIssueAutomationMode => Some("issue_automation_mode_changed"),
             KernelCommandKind::SetIssueAutonomy => Some("issue_autonomy_changed"),
             KernelCommandKind::SetIssueBindingPaused => Some("issue_binding_pause_requested"),
@@ -1015,6 +1070,23 @@ pub enum KernelCommand {
         /// 지우는 명령이라 `true` 가 아니면 거절한다 (K-D1).
         #[serde(default)]
         confirm: bool,
+    },
+    /// 저장된 지원 파일을 커널의 작업 공간에 편집용 파일로 쓴다 (plan 18 K4-9d). planning 데이터는 바뀌지 않는다.
+    ExportPlanningFiles {},
+    /// 내보낸 파일을 다시 읽어 저장한다. 내보낼 때 둔 revision 이 지금의 것과 다르면 거절된다.
+    ApplyPlanningFiles {},
+    /// 저장된 편집 초안을 기준 planning 으로 올린다. `expected_planning_revision` 은 초안을 만든 때의 revision 이다.
+    PromoteDraft {
+        #[schemars(length(min = 1), regex(pattern = NON_BLANK))]
+        draft_name: String,
+        kind: PlanningAdminDraftKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        direction_id: Option<String>,
+        expected_planning_revision: i64,
+    },
+    /// 병렬 에이전트 프로필을 바꾼다 (plan 18 K4-9b 의 9b-A). 빈 목록은 기본 프로필이다.
+    SaveParallelAgentProfiles {
+        profiles: Vec<ParallelAgentProfile>,
     },
     /// 이슈 관찰 모드만 바꾼다. 저장 성공 뒤에만 원격 수집을 허용한다.
     SetIssueAutomationMode {
@@ -1344,6 +1416,10 @@ impl KernelCommand {
             Self::CreateDirection { .. } => KernelCommandKind::CreateDirection,
             Self::UpdateDirection { .. } => KernelCommandKind::UpdateDirection,
             Self::DeleteDirection { .. } => KernelCommandKind::DeleteDirection,
+            Self::ExportPlanningFiles {} => KernelCommandKind::ExportPlanningFiles,
+            Self::ApplyPlanningFiles {} => KernelCommandKind::ApplyPlanningFiles,
+            Self::PromoteDraft { .. } => KernelCommandKind::PromoteDraft,
+            Self::SaveParallelAgentProfiles { .. } => KernelCommandKind::SaveParallelAgentProfiles,
             Self::SetIssueAutomationMode { .. } => KernelCommandKind::SetIssueAutomationMode,
             Self::SetIssueAutonomy { .. } => KernelCommandKind::SetIssueAutonomy,
             Self::SetIssueBindingPaused { .. } => KernelCommandKind::SetIssueBindingPaused,
@@ -1382,6 +1458,10 @@ impl KernelCommand {
             | Self::UpdateTask { .. }
             | Self::CreateDirection { .. }
             | Self::UpdateDirection { .. }
+            | Self::ExportPlanningFiles {}
+            | Self::ApplyPlanningFiles {}
+            | Self::PromoteDraft { .. }
+            | Self::SaveParallelAgentProfiles { .. }
             | Self::SetIssueAutomationMode { .. }
             | Self::SetIssueAutonomy { .. }
             | Self::SetIssueBindingPaused { .. }
@@ -1490,6 +1570,24 @@ impl KernelCommand {
                 expected_planning_revision,
                 confirm: true,
             },
+            StoredCommand::ExportPlanningFiles => Self::ExportPlanningFiles {},
+            StoredCommand::ApplyPlanningFiles => Self::ApplyPlanningFiles {},
+            StoredCommand::PromoteDraft {
+                draft_name,
+                kind,
+                direction_id,
+                expected_planning_revision,
+            } => Self::PromoteDraft {
+                draft_name,
+                kind,
+                direction_id,
+                expected_planning_revision,
+            },
+            StoredCommand::SaveParallelAgentProfiles { config } => {
+                Self::SaveParallelAgentProfiles {
+                    profiles: config.profiles,
+                }
+            }
             StoredCommand::SetIssueAutonomy { command_id, level } => {
                 Self::SetIssueAutonomy { command_id, level }
             }
@@ -1806,6 +1904,24 @@ impl KernelCommand {
                 direction_id: non_blank("direction_id", direction_id)?,
                 expected_planning_revision,
             },
+            Self::ExportPlanningFiles {} => StoredCommand::ExportPlanningFiles,
+            Self::ApplyPlanningFiles {} => StoredCommand::ApplyPlanningFiles,
+            Self::PromoteDraft {
+                draft_name,
+                kind,
+                direction_id,
+                expected_planning_revision,
+            } => StoredCommand::PromoteDraft {
+                draft_name: non_blank("draft_name", draft_name)?,
+                kind,
+                direction_id,
+                expected_planning_revision,
+            },
+            Self::SaveParallelAgentProfiles { profiles } => {
+                StoredCommand::SaveParallelAgentProfiles {
+                    config: ParallelAgentProfileConfig { profiles },
+                }
+            }
             core => {
                 return core
                     .into_core(workspace_directory)
@@ -1891,6 +2007,10 @@ impl KernelCommand {
             | Self::CreateDirection { .. }
             | Self::UpdateDirection { .. }
             | Self::DeleteDirection { .. }
+            | Self::ExportPlanningFiles {}
+            | Self::ApplyPlanningFiles {}
+            | Self::PromoteDraft { .. }
+            | Self::SaveParallelAgentProfiles { .. }
             | Self::SetIssueAutomationMode { .. }
             | Self::SetIssueAutonomy { .. }
             | Self::SetIssueBindingPaused { .. }

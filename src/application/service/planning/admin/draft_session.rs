@@ -10,6 +10,8 @@ use super::{
     PlanningAdminDraftMutationRequest, PlanningAdminFacadeService, PlanningAdminFileKey,
     PlanningAdminQueuePreview, PlanningAdminSessionView, PlanningAdminValidationView,
 };
+use crate::application::port::inbound::planning_admin_port::PlanningAdminDraftPromotionOutcome;
+use crate::application::port::inbound::stored_command_port::StoredCommand;
 use crate::application::port::outbound::planning_workspace_port::{
     PlanningDraftFileRecord, PlanningDraftLoadRecord,
 };
@@ -185,6 +187,89 @@ impl PlanningAdminFacadeService {
         })?;
         Ok((result, session))
     }
+    /*
+     * 커널 명령으로 가는 승격의 앞 절반이다 (plan 18 K4-9d-5). admin 의 메모리에서 초안을 만든 때의 revision 을 찾고,
+     * 화면의 글을 초안에 저장하고, 보낼 명령을 만든다. 초안의 저장은 편집이므로 직접 한다 (설계 §3.4).
+     */
+    pub fn stored_draft_promote_command(
+        &self,
+        request: &PlanningAdminDraftMutationRequest,
+    ) -> Result<StoredCommand> {
+        ensure_valid_draft_name(&request.draft_name)?;
+        let metadata = self.require_draft_stage_metadata(
+            &request.draft_name,
+            request.kind,
+            request.direction_id.as_deref(),
+        )?;
+        let visible_files = self.resolve_mutated_visible_files(request)?;
+        self.planning.workspace.save_draft_editor_files(
+            self.workspace_dir.as_str(),
+            &request.draft_name,
+            &visible_files,
+        )?;
+        Ok(StoredCommand::PromoteDraft {
+            draft_name: request.draft_name.clone(),
+            kind: request.kind,
+            direction_id: request.direction_id.clone(),
+            expected_planning_revision: metadata.source_planning_revision,
+        })
+    }
+
+    /*
+     * 저장 명령 `promote_draft` 의 실행이다. 실행기는 admin 의 메모리를 볼 수 없으므로 초안의 종류와 revision 을 입력으로
+     * 받는다 (Q-9d-3). 저장된 초안의 글을 그대로 올린다. 낡은 revision 은 `planning_revision_stale` 로 거절된다.
+     */
+    pub fn promote_operator_draft(
+        &self,
+        draft_name: &str,
+        kind: PlanningAdminDraftKind,
+        direction_id: Option<&str>,
+        expected_planning_revision: i64,
+    ) -> Result<PlanningDraftPromoteResult> {
+        let request = PlanningAdminDraftMutationRequest {
+            draft_name: draft_name.to_string(),
+            kind,
+            direction_id: direction_id.map(str::to_string),
+            files: Vec::new(),
+        };
+        let visible_files = self.resolve_mutated_visible_files(&request)?;
+        self.planning
+            .workspace
+            .promote_draft_editor_files_at_revision(
+                self.workspace_dir.as_str(),
+                draft_name,
+                &visible_files,
+                expected_planning_revision,
+            )
+    }
+
+    /// 커널 명령으로 간 승격의 뒤 절반이다. admin 의 메모리를 새 revision 으로 옮기고 초안 화면을 다시 읽는다.
+    pub fn draft_promotion_outcome(
+        &self,
+        request: PlanningAdminDraftMutationRequest,
+        expected_planning_revision: i64,
+        promoted_file_count: usize,
+        is_valid: bool,
+        planning_revision: Option<i64>,
+    ) -> Result<PlanningAdminDraftPromotionOutcome> {
+        if let Some(planning_revision) = planning_revision {
+            self.advance_draft_stage_revision(
+                &request.draft_name,
+                expected_planning_revision,
+                planning_revision,
+            )?;
+        }
+        Ok(PlanningAdminDraftPromotionOutcome {
+            promoted_file_count,
+            is_valid,
+            session: self.load_draft_session(PlanningAdminDraftLoadRequest {
+                draft_name: request.draft_name,
+                kind: request.kind,
+                direction_id: request.direction_id,
+            })?,
+        })
+    }
+
     fn remember_draft_stage_metadata(
         &self,
         draft_name: &str,

@@ -17,7 +17,7 @@ use crate::domain::planning::{
  * 이유는 route가 domain enum이나 persistence snapshot을 직접 serialize하기 시작하면 authority format 변경이
  * 곧바로 admin API breaking change가 되기 때문이다.
  */
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanningAdminDraftKind {
     FullPlanning,

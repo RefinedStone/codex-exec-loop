@@ -96,6 +96,18 @@ fn sample_commands() -> Vec<KernelCommand> {
             expected_planning_revision: 7,
             confirm: true,
         },
+        KernelCommand::ExportPlanningFiles {},
+        KernelCommand::ApplyPlanningFiles {},
+        KernelCommand::PromoteDraft {
+            draft_name: "draft-1".to_string(),
+            kind: crate::application::port::inbound::planning_admin_port::PlanningAdminDraftKind::DirectionDetail,
+            direction_id: Some("direction-1".to_string()),
+            expected_planning_revision: 7,
+        },
+        KernelCommand::SaveParallelAgentProfiles {
+            profiles: crate::domain::parallel_agent_profile::ParallelAgentProfileConfig::default()
+                .profiles,
+        },
         KernelCommand::SetIssueAutomationMode {
             mode: IssueAutomationMode::Observe,
         },
