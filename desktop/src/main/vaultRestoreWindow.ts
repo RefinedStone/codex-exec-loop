@@ -28,6 +28,8 @@ interface Entry {
   started: boolean;
   minimized: boolean;
   hidden: boolean;
+  unlockGeneration: number;
+  unlockOffered: boolean;
 }
 
 export interface VaultRestoreWindowsDeps {
@@ -53,7 +55,12 @@ export class VaultRestoreWindows {
       entry.started = true;
       void entry.session.unlock();
     });
-    ipcMain.on(VAULT_RESTORE_CHANNELS.unlock, (event) => void this.entryOf(event)?.session.unlock());
+    ipcMain.on(VAULT_RESTORE_CHANNELS.unlock, (event, generation: unknown) => {
+      const entry = this.entryOf(event);
+      if (!entry || !entry.unlockOffered || generation !== entry.unlockGeneration) return;
+      entry.unlockOffered = false;
+      void entry.session.unlock();
+    });
     ipcMain.on(VAULT_RESTORE_CHANNELS.lock, (event) => this.entryOf(event)?.session.lock("user"));
     ipcMain.on(VAULT_RESTORE_CHANNELS.review, (event) => void this.entryOf(event)?.session.requestReview());
     ipcMain.on(VAULT_RESTORE_CHANNELS.reconnect, (event, mappings: unknown) => void this.entryOf(event)?.session.reconnect(mappings));
@@ -76,7 +83,10 @@ export class VaultRestoreWindows {
           continue;
         }
         // 현재 이슈 상세에서 새로 연 요청만 이전 프로젝트의 대상을 다시 활성화한다.
-        entry.targetActive = true;
+        if (!entry.targetActive) {
+          entry.targetActive = true;
+          entry.session.lock("project_switch");
+        }
         if (entry.window.isMinimized()) entry.window.restore();
         return entry.window.focus();
       }
@@ -109,13 +119,16 @@ export class VaultRestoreWindows {
       profileHold: () => !entry.targetActive ? "source_unavailable"
         : entry.minimized || entry.hidden ? "window_not_visible" : this.powerHold() ?? this.deps.profileHold(),
       emit: (state) => {
+        // Each emitted state supersedes all previously rendered unlock buttons.
+        entry.unlockGeneration += 1;
+        entry.unlockOffered = state.phase === "locked" || state.phase === "held";
         if (!contents.isDestroyed()) {
-          try { contents.send(VAULT_RESTORE_CHANNELS.state, state); } catch { /* 종료된 renderer에 늦은 응답을 보내지 않는다. */ }
+          try { contents.send(VAULT_RESTORE_CHANNELS.state, state, entry.unlockGeneration); } catch { /* 종료된 renderer에 늦은 응답을 보내지 않는다. */ }
         }
       },
       sessionMs: VIEWING_SESSION_MS,
     });
-    entry = { window, session, openerId, targetKey, targetActive: true, rendererAvailable: true, started: false, minimized: false, hidden: false };
+    entry = { window, session, openerId, targetKey, targetActive: true, rendererAvailable: true, started: false, minimized: false, hidden: false, unlockGeneration: 0, unlockOffered: false };
     this.entries.set(contentsId, entry);
     lockDownNavigation(contents);
     const invalidateRenderer = () => {
@@ -139,12 +152,20 @@ export class VaultRestoreWindows {
       entry.minimized = true;
       session.lock("window_hidden");
     });
-    window.on("restore", () => { entry.minimized = false; });
+    window.on("restore", () => {
+      if (!entry.minimized) return;
+      entry.minimized = false;
+      session.lock("window_hidden");
+    });
     window.on("hide", () => {
       entry.hidden = true;
       session.lock("window_hidden");
     });
-    window.on("show", () => { entry.hidden = false; });
+    window.on("show", () => {
+      if (!entry.hidden) return;
+      entry.hidden = false;
+      session.lock("window_hidden");
+    });
     window.once("closed", () => {
       session.lock("window_closed");
       this.entries.delete(contentsId);
@@ -171,7 +192,8 @@ export class VaultRestoreWindows {
 
   /** Release just the matching OS hold. Never open a channel automatically. */
   releasePowerHold(cause: PowerHold): void {
-    this.powerHolds.delete(cause);
+    if (!this.powerHolds.delete(cause)) return;
+    for (const entry of this.entries.values()) entry.session.lock(cause);
   }
 
   private powerHold(): VaultRestoreHold | null {

@@ -79,6 +79,7 @@ try {
   await restore.locator('#root[data-phase="held"]').waitFor({ timeout: 5_000 });
   check("a switched-away target cannot unlock itself", (await restore.getByTestId("vault-restore-detail").textContent())?.includes("복원 경로") === true);
   await page.evaluate((target) => window.akra.vaultRestore.open(target), TARGET);
+  await restore.locator('#root[data-phase="locked"]').waitFor();
   await restore.getByTestId("vault-restore-unlock").click();
   await restore.locator('#root[data-phase="held"]').waitFor({ timeout: 5_000 });
   check("a fresh current-target open still obeys the automation hold", (await restore.getByTestId("vault-restore-detail").textContent())?.includes("자동화") === true);
@@ -122,6 +123,7 @@ try {
   await restore.locator('#root[data-phase="held"]').waitFor();
   check("screen unlock does not release the suspend hold", (await restore.getByTestId("vault-restore-detail").textContent()).includes("절전 상태"));
   await app.evaluate(({ powerMonitor }) => powerMonitor.emit("resume"));
+  await restore.locator('#root[data-phase="locked"]').waitFor();
   check("resume does not reveal or automatically reopen", (await restore.getByTestId("vault-restored-body").count()) === 0);
   await restore.getByTestId("vault-restore-unlock").click();
   await restore.locator('#root[data-phase="held"]').waitFor();

@@ -77,11 +77,11 @@ function reviewForm(review: VaultReconnectReview): HTMLElement[] {
   ];
 }
 
-function render(state: VaultRestoreViewState): void {
+function render(state: VaultRestoreViewState, unlockGeneration = -1): void {
   const view = vaultRestoreView(state);
   const actions = element("div");
   actions.className = "actions";
-  const run: Record<VaultRestoreAction, () => void> = { unlock: bridge.unlock, lock: bridge.lock, review: bridge.review };
+  const run: Record<VaultRestoreAction, () => void> = { unlock: () => bridge.unlock(unlockGeneration), lock: bridge.lock, review: bridge.review };
   actions.append(...view.actions.map((action) => button(ACTION_LABEL[action], `vault-restore-${action}`, run[action])));
   const heading = element("h1", view.heading, "vault-restore-heading");
   const nodes: HTMLElement[] = [heading, element("p", view.detail, "vault-restore-detail")];

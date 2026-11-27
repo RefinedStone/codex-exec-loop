@@ -7,11 +7,11 @@ import { type VaultRestoreViewState, VAULT_RESTORE_CHANNELS } from "../shared/va
 const bridge: VaultRestoreBridge = {
   ready: () => ipcRenderer.send(VAULT_RESTORE_CHANNELS.ready),
   onState(listener) {
-    const handler = (_event: IpcRendererEvent, state: VaultRestoreViewState) => listener(state);
+    const handler = (_event: IpcRendererEvent, state: VaultRestoreViewState, unlockGeneration: number) => listener(state, unlockGeneration);
     ipcRenderer.on(VAULT_RESTORE_CHANNELS.state, handler);
     return () => ipcRenderer.off(VAULT_RESTORE_CHANNELS.state, handler);
   },
-  unlock: () => ipcRenderer.send(VAULT_RESTORE_CHANNELS.unlock),
+  unlock: (generation) => ipcRenderer.send(VAULT_RESTORE_CHANNELS.unlock, generation),
   lock: () => ipcRenderer.send(VAULT_RESTORE_CHANNELS.lock),
   review: () => ipcRenderer.send(VAULT_RESTORE_CHANNELS.review),
   reconnect: (mappings) => ipcRenderer.send(VAULT_RESTORE_CHANNELS.reconnect, mappings),
