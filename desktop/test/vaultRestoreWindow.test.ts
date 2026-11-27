@@ -36,9 +36,13 @@ class FakeWindow extends EventEmitter {
 }
 const allWindows: FakeWindow[] = [];
 const listeners = new Map<string, (event: unknown, ...args: unknown[]) => void>();
+const invocations = new Map<string, (event: unknown, ...args: unknown[]) => Promise<unknown>>();
 vi.doMock("electron", () => ({
   BrowserWindow: FakeWindow,
-  ipcMain: { on: (channel: string, listener: (event: unknown, ...args: unknown[]) => void) => listeners.set(channel, listener) },
+  ipcMain: {
+    on: (channel: string, listener: (event: unknown, ...args: unknown[]) => void) => listeners.set(channel, listener),
+    handle: (channel: string, handler: (event: unknown, ...args: unknown[]) => Promise<unknown>) => invocations.set(channel, handler),
+  },
 }));
 const { VaultRestoreWindows } = await import("../src/main/vaultRestoreWindow");
 
@@ -98,7 +102,7 @@ describe("dedicated Vault window lifetime", () => {
     send(f.window, VAULT_RESTORE_CHANNELS.ready);
     expect(f.source).not.toHaveBeenCalled();
     expect(f.window.webContents.send).toHaveBeenLastCalledWith(
-      VAULT_RESTORE_CHANNELS.state, { phase: "held", reason: "os_lock_unavailable" }, expect.any(Number));
+      VAULT_RESTORE_CHANNELS.state, { phase: "held", reason: "os_lock_unavailable" }, expect.any(Number), false);
     state = "active";
     await microtasks();
     expect(f.source).not.toHaveBeenCalled();
@@ -110,7 +114,7 @@ describe("dedicated Vault window lifetime", () => {
     expect(f.created[0]!.channel.close).toHaveBeenCalledTimes(1);
     expect(f.created[0]!.channel.restore).not.toHaveBeenCalled();
     expect(f.window.webContents.send).toHaveBeenLastCalledWith(
-      VAULT_RESTORE_CHANNELS.state, { phase: "held", reason: "os_lock_unavailable" }, expect.any(Number));
+      VAULT_RESTORE_CHANNELS.state, { phase: "held", reason: "os_lock_unavailable" }, expect.any(Number), false);
   });
 
   it("does not start a helper on Linux even if its idle state looks active", async () => {
@@ -120,7 +124,7 @@ describe("dedicated Vault window lifetime", () => {
     await microtasks();
     expect(f.source).not.toHaveBeenCalled();
     expect(f.window.webContents.send).toHaveBeenLastCalledWith(
-      VAULT_RESTORE_CHANNELS.state, { phase: "held", reason: "os_lock_unsupported" }, expect.any(Number));
+      VAULT_RESTORE_CHANNELS.state, { phase: "held", reason: "os_lock_unsupported" }, expect.any(Number), false);
   });
 
   it("accepts the first page load but ignores subframe and in-place navigation", async () => {
@@ -229,14 +233,14 @@ describe("dedicated Vault window lifetime", () => {
     send(next, VAULT_RESTORE_CHANNELS.ready);
     expect(f.source).toHaveBeenCalledTimes(2);
     expect(next.webContents.send).toHaveBeenLastCalledWith(
-      VAULT_RESTORE_CHANNELS.state, { phase: "held", reason: "os_locked" }, expect.any(Number),
+      VAULT_RESTORE_CHANNELS.state, { phase: "held", reason: "os_locked" }, expect.any(Number), false,
     );
 
     f.windows.lockAll("suspend");
     f.windows.releasePowerHold("os_lock");
     send(next, VAULT_RESTORE_CHANNELS.unlock);
     expect(next.webContents.send).toHaveBeenLastCalledWith(
-      VAULT_RESTORE_CHANNELS.state, { phase: "held", reason: "system_suspended" }, expect.any(Number),
+      VAULT_RESTORE_CHANNELS.state, { phase: "held", reason: "system_suspended" }, expect.any(Number), false,
     );
     expect(f.source).toHaveBeenCalledTimes(2);
     const suspendedGeneration = latestGeneration(next);
