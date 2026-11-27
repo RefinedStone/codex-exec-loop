@@ -882,7 +882,10 @@ export function App() {
       const current = session.current;
       const cwd = useUiStore.getState().homeCwd ?? (await window.akra.chooseFolder());
       if (!cwd || !current) return false;
-      const threadId = await current.startThread(cwd);
+      const mode = useUiStore.getState().homeWorkspaceMode;
+      const threadId = mode === "isolated"
+        ? await current.startIsolatedThread(cwd)
+        : await current.startThread(cwd);
       visit({ view: "thread", threadId });
       // 스레드는 이미 만들었다. 첫 메시지가 실패하면 글을 그 스레드의 입력창에 되돌려서 다시 보낼 수 있게 한다.
       await current.sendMessage(text).catch((error: unknown) => {
