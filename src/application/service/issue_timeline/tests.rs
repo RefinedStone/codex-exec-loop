@@ -245,7 +245,10 @@ fn issue_timeline_replays_frozen_journal_with_the_same_event_tags_revisions_and_
     };
     assert!(!has_older);
     assert_eq!(
-        entries.iter().map(|entry| entry.sequence).collect::<Vec<_>>(),
+        entries
+            .iter()
+            .map(|entry| entry.sequence)
+            .collect::<Vec<_>>(),
         [7, 8, 9]
     );
     assert_eq!(entries[0].kind, "issue_tracked");
