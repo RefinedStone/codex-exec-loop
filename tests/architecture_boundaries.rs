@@ -12291,6 +12291,320 @@ fn outbound_adapters_do_not_depend_on_inbound_adapters() {
     });
 }
 
+// A transferred Port is still a real contract. Follow only these exact public
+// compatibility paths, and inspect the destination declaration instead of
+// exempting a shim because its filename is known.
+struct TransferredOutboundPort {
+    shim: &'static str,
+    crate_root: &'static str,
+    module_path: &'static [&'static str],
+    trait_name: &'static str,
+}
+
+const TRANSFERRED_OUTBOUND_PORTS: &[TransferredOutboundPort] = &[
+    TransferredOutboundPort {
+        shim: "src/application/port/outbound/issue_policy_source_port.rs",
+        crate_root: "crates/issue-core/src/lib.rs",
+        module_path: &["akra_issue_core", "issue_policy_source_port"],
+        trait_name: "IssuePolicySourcePort",
+    },
+    TransferredOutboundPort {
+        shim: "src/application/port/outbound/issue_template_source_port.rs",
+        crate_root: "crates/issue-core/src/lib.rs",
+        module_path: &["akra_issue_core", "issue_template_source_port"],
+        trait_name: "IssueTemplateSourcePort",
+    },
+    TransferredOutboundPort {
+        shim: "src/application/port/outbound/task_evidence_artifact_port.rs",
+        crate_root: "crates/verification/src/lib.rs",
+        module_path: &["akra_verification", "ports", "task_evidence_artifact_port"],
+        trait_name: "TaskEvidenceArtifactPort",
+    },
+    TransferredOutboundPort {
+        shim: "src/application/port/outbound/task_verification_runner_port.rs",
+        crate_root: "crates/verification/src/lib.rs",
+        module_path: &[
+            "akra_verification",
+            "ports",
+            "task_verification_runner_port",
+        ],
+        trait_name: "TaskVerificationRunnerPort",
+    },
+];
+
+fn outbound_port_has_unconditional_attributes(attributes: &[syn::Attribute]) -> bool {
+    // These four compatibility APIs are unconditional. Conditional or redirected
+    // declarations require explicit analyzer support instead of a guessed path.
+    !attributes.iter().any(|attribute| {
+        ["cfg", "cfg_attr", "path"]
+            .iter()
+            .any(|name| attribute.path().is_ident(name))
+    })
+}
+
+fn outbound_port_defines_public_trait(syntax: &syn::File, expected: &str) -> bool {
+    outbound_port_has_unconditional_attributes(&syntax.attrs)
+        && syntax.items.iter().any(|item| {
+            matches!(item, syn::Item::Trait(item)
+                if item.ident == expected
+                    && matches!(item.vis, syn::Visibility::Public(_))
+                    && outbound_port_has_unconditional_attributes(&item.attrs))
+        })
+}
+
+fn outbound_port_use_exports(tree: &syn::UseTree, module_path: &[&str], trait_name: &str) -> bool {
+    match tree {
+        syn::UseTree::Group(group) => {
+            group.items.len() == 1
+                && group
+                    .items
+                    .first()
+                    .is_some_and(|item| outbound_port_use_exports(item, module_path, trait_name))
+        }
+        syn::UseTree::Path(path) => module_path.split_first().is_some_and(|(head, tail)| {
+            path.ident == *head && outbound_port_use_exports(&path.tree, tail, trait_name)
+        }),
+        syn::UseTree::Glob(_) => module_path.is_empty(),
+        syn::UseTree::Name(name) => module_path.is_empty() && name.ident == trait_name,
+        syn::UseTree::Rename(_) => false,
+    }
+}
+
+fn outbound_port_parse(source: &str, path: &str) -> Result<syn::File, String> {
+    syn::parse_file(source).map_err(|error| format!("{path}: invalid Rust: {error}"))
+}
+
+fn outbound_port_contract(
+    relative_path: &str,
+    source: &str,
+    read: &impl Fn(&str) -> Result<Option<String>, String>,
+) -> Result<(), String> {
+    let Some(contract) = TRANSFERRED_OUTBOUND_PORTS
+        .iter()
+        .find(|contract| contract.shim == relative_path)
+    else {
+        // Keep the established inline-module policy outside this narrow change.
+        return if source.contains("trait ") && source.contains("Port") {
+            Ok(())
+        } else {
+            Err("outbound port module must define a Port trait contract".to_string())
+        };
+    };
+
+    let shim = outbound_port_parse(source, relative_path)?;
+    // This also supports the common base before a later Port is extracted.
+    if outbound_port_defines_public_trait(&shim, contract.trait_name) {
+        return Ok(());
+    }
+    let [syn::Item::Use(export)] = shim.items.as_slice() else {
+        return Err("transferred Port must be an exact public reexport shim".to_string());
+    };
+    if !matches!(export.vis, syn::Visibility::Public(_))
+        || !outbound_port_has_unconditional_attributes(&shim.attrs)
+        || !outbound_port_has_unconditional_attributes(&export.attrs)
+        || !outbound_port_use_exports(&export.tree, contract.module_path, contract.trait_name)
+    {
+        return Err(format!(
+            "transferred Port must publicly reexport {}::{}",
+            contract.module_path.join("::"),
+            contract.trait_name
+        ));
+    }
+
+    let mut current_path = contract.crate_root.to_string();
+    let mut current_source = read(&current_path)?
+        .ok_or_else(|| format!("transferred Port crate root is missing: {current_path}"))?;
+    let mut directory = contract
+        .crate_root
+        .rsplit_once('/')
+        .expect("registered crate roots have a parent directory")
+        .0
+        .to_string();
+
+    for module_name in &contract.module_path[1..] {
+        let syntax = outbound_port_parse(&current_source, &current_path)?;
+        let declarations = syntax
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                syn::Item::Mod(module) if module.ident == *module_name => Some(module),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [module] = declarations.as_slice() else {
+            return Err(format!(
+                "{current_path}: expected one public module {module_name}"
+            ));
+        };
+        if !matches!(module.vis, syn::Visibility::Public(_))
+            || module.content.is_some()
+            || !outbound_port_has_unconditional_attributes(&syntax.attrs)
+            || !outbound_port_has_unconditional_attributes(&module.attrs)
+        {
+            return Err(format!(
+                "{current_path}: {module_name} must be an unconditional public file module"
+            ));
+        }
+
+        directory = format!("{directory}/{module_name}");
+        let direct_path = format!("{directory}.rs");
+        let nested_path = format!("{directory}/mod.rs");
+        match (read(&direct_path)?, read(&nested_path)?) {
+            (Some(source), None) => {
+                current_path = direct_path;
+                current_source = source;
+            }
+            (None, Some(source)) => {
+                current_path = nested_path;
+                current_source = source;
+            }
+            (None, None) => {
+                return Err(format!(
+                    "transferred Port module is missing: {direct_path} or {nested_path}"
+                ));
+            }
+            (Some(_), Some(_)) => {
+                return Err(format!(
+                    "transferred Port module is ambiguous: {direct_path} and {nested_path}"
+                ));
+            }
+        }
+    }
+
+    let destination = outbound_port_parse(&current_source, &current_path)?;
+    if !outbound_port_defines_public_trait(&destination, contract.trait_name) {
+        return Err(format!(
+            "{current_path}: must define the public trait {}",
+            contract.trait_name
+        ));
+    }
+    Ok(())
+}
+
+fn outbound_port_fixture(contract: &TransferredOutboundPort) -> HashMap<String, String> {
+    let mut sources = HashMap::new();
+    let mut path = contract.crate_root.to_string();
+    let mut directory = path.rsplit_once('/').unwrap().0.to_string();
+    for module_name in &contract.module_path[1..] {
+        sources.insert(path, format!("pub mod {module_name};"));
+        directory = format!("{directory}/{module_name}");
+        path = format!("{directory}.rs");
+    }
+    sources.insert(path, format!("pub trait {} {{}}", contract.trait_name));
+    sources
+}
+
+fn check_outbound_port_fixture(
+    contract: &TransferredOutboundPort,
+    shim: &str,
+    sources: &HashMap<String, String>,
+) -> Result<(), String> {
+    outbound_port_contract(contract.shim, shim, &|path| Ok(sources.get(path).cloned()))
+}
+
+#[test]
+fn outbound_port_reexports_resolve_real_public_traits() {
+    for contract in TRANSFERRED_OUTBOUND_PORTS {
+        let sources = outbound_port_fixture(contract);
+        let path = contract.module_path.join("::");
+        for shim in [
+            format!("pub use {path}::*;"),
+            format!("pub use {path}::{};", contract.trait_name),
+            format!("pub use {path}::{{{}}};", contract.trait_name),
+        ] {
+            assert!(check_outbound_port_fixture(contract, &shim, &sources).is_ok());
+        }
+        // Before extraction the real public declaration still satisfies the rule.
+        let inline = format!("pub trait {} {{}}", contract.trait_name);
+        assert!(check_outbound_port_fixture(contract, &inline, &HashMap::new()).is_ok());
+    }
+}
+
+#[test]
+fn outbound_port_reexports_reject_forged_or_nonpublic_paths() {
+    let contract = &TRANSFERRED_OUTBOUND_PORTS[0];
+    let sources = outbound_port_fixture(contract);
+    let path = contract.module_path.join("::");
+    for shim in [
+        format!("use {path}::*;"),
+        format!("pub(crate) use {path}::*;"),
+        "pub use unrelated::issue_policy_source_port::*;".to_string(),
+        format!("pub use {path}::NotAPort;"),
+        format!("pub use {path}::{} as OtherPort;", contract.trait_name),
+        format!(
+            "pub use {path}::{{{}, Other as akra_issue_core}};",
+            contract.trait_name
+        ),
+        format!("#[cfg(test)] pub use {path}::*;"),
+        format!("#![cfg(test)]\npub use {path}::*;"),
+        format!("mod akra_issue_core {{}}\npub use {path}::*;"),
+        format!("// pub trait {} {{}}", contract.trait_name),
+        format!(
+            "pub const NOTE: &str = \"pub trait {} {{}}\";",
+            contract.trait_name
+        ),
+    ] {
+        assert!(
+            check_outbound_port_fixture(contract, &shim, &sources).is_err(),
+            "accepted invalid shim: {shim}"
+        );
+    }
+}
+
+#[test]
+fn outbound_port_reexports_reject_missing_or_private_module_chains() {
+    let contract = &TRANSFERRED_OUTBOUND_PORTS[0];
+    let shim = format!("pub use {}::*;", contract.module_path.join("::"));
+    let module_name = contract.module_path[1];
+    for declaration in [
+        String::new(),
+        format!("mod {module_name};"),
+        format!("#[cfg(test)] pub mod {module_name};"),
+        format!("#![cfg(test)]\npub mod {module_name};"),
+        format!("#[path = \"elsewhere.rs\"] pub mod {module_name};"),
+        format!("pub mod {module_name} {{}}"),
+    ] {
+        let mut sources = outbound_port_fixture(contract);
+        sources.insert(contract.crate_root.to_string(), declaration);
+        assert!(check_outbound_port_fixture(contract, &shim, &sources).is_err());
+    }
+    let directory = contract.crate_root.rsplit_once('/').unwrap().0;
+    let direct = format!("{directory}/{module_name}.rs");
+    let nested = format!("{directory}/{module_name}/mod.rs");
+    let mut sources = outbound_port_fixture(contract);
+    let destination = sources.get(&direct).unwrap().clone();
+    sources.insert(nested.clone(), destination);
+    assert!(check_outbound_port_fixture(contract, &shim, &sources).is_err());
+    sources.remove(&direct);
+    assert!(check_outbound_port_fixture(contract, &shim, &sources).is_ok());
+    sources.remove(&nested);
+    assert!(check_outbound_port_fixture(contract, &shim, &sources).is_err());
+}
+
+#[test]
+fn outbound_port_reexports_reject_missing_or_fake_destination_traits() {
+    let contract = &TRANSFERRED_OUTBOUND_PORTS[0];
+    let shim = format!("pub use {}::*;", contract.module_path.join("::"));
+    let directory = contract.crate_root.rsplit_once('/').unwrap().0;
+    let destination = format!("{directory}/{}.rs", contract.module_path[1]);
+    for source in [
+        String::new(),
+        format!("pub struct {};", contract.trait_name),
+        format!("trait {} {{}}", contract.trait_name),
+        format!("#[cfg(test)] pub trait {} {{}}", contract.trait_name),
+        format!("#![cfg(test)]\npub trait {} {{}}", contract.trait_name),
+        format!("// pub trait {} {{}}", contract.trait_name),
+        format!(
+            "pub const NOTE: &str = \"pub trait {} {{}}\";",
+            contract.trait_name
+        ),
+    ] {
+        let mut sources = outbound_port_fixture(contract);
+        sources.insert(destination.clone(), source);
+        assert!(check_outbound_port_fixture(contract, &shim, &sources).is_err());
+    }
+}
+
 #[test]
 fn outbound_port_modules_follow_port_naming_contract() {
     // Static guard: port module naming is a directory/API contract, not a behavior.
@@ -12317,11 +12631,14 @@ fn outbound_port_modules_follow_port_naming_contract() {
         let source = fs::read_to_string(&path).unwrap_or_else(|error| {
             panic!("failed to read {}: {error}", path.display());
         });
-        if !source.contains("trait ") || !source.contains("Port") {
-            violations.push(format!(
-                "{}: outbound port module must define a Port trait contract",
-                relative_path(&repo_root, &path)
-            ));
+        let relative = relative_path(&repo_root, &path);
+        let read = |relative: &str| match fs::read_to_string(repo_root.join(relative)) {
+            Ok(source) => Ok(Some(source)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(format!("failed to read {relative}: {error}")),
+        };
+        if let Err(error) = outbound_port_contract(&relative, &source, &read) {
+            violations.push(format!("{relative}: {error}"));
         }
     }
 
