@@ -103,6 +103,7 @@ mod tests {
             branch: Some("main".to_string()),
         };
         GitOperationRecord {
+            pick_index: None,
             op_id: op_id.to_string(),
             operation: GitOperation::Reset {
                 target: "new".to_string(),

@@ -11,6 +11,8 @@
  *
  * 큐는 저장소마다 하나이다 (plan 27 §3.4). 같은 저장소의 모든 작업 트리가 같은 큐를 쓴다.
  */
+mod sequence;
+use crate::domain::git_operation::cherry_pick::{PickAction, PickPrediction};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -115,6 +117,17 @@ impl GitOperationPort for GitOperationService {
         Ok(records)
     }
 
+    fn resolve_pick(
+        &self,
+        cwd: &str,
+        op_id: &str,
+        action: PickAction,
+    ) -> Result<GitOperationOutcome> {
+        let queue = self.repository_queue(cwd);
+        let _lock = queue.lock().unwrap_or_else(|p| p.into_inner());
+        self.resume_sequence(cwd, op_id, action)
+    }
+
     fn undo(&self, repository_dir: &str, op_id: &str) -> Result<GitOperationOutcome> {
         let queue = self.repository_queue(repository_dir);
         let _queue = queue
@@ -138,7 +151,7 @@ impl GitOperationPort for GitOperationService {
                 "this operation ran in another worktree; undo it from that worktree",
             ));
         }
-        let observed = self.build_plan(repository_dir, record.inverse())?;
+        let mut observed = self.build_plan(repository_dir, record.inverse())?;
         let branch_commit = match &record.operation {
             GitOperation::MoveBranch { branch, .. } => observed
                 .refs
@@ -151,8 +164,16 @@ impl GitOperationPort for GitOperationService {
                 "the repository changed after this operation, so the undo would discard that change",
             ));
         }
+        let is_sequence = matches!(record.operation, GitOperation::CherryPick { .. });
+        if is_sequence {
+            observed.plan.branch = None;
+        } // An undo must restore the original set of refs.
         let outcome = self.execute_plan(repository_dir, observed.plan, Some(op_id.to_string()))?;
         if let GitOperationOutcome::Done { record: undo } = &outcome {
+            if is_sequence && let Some(backup) = &record.backup_ref {
+                self.workspace
+                    .release_backup(repository_dir, backup, &record.before.commit)?;
+            }
             let undone = GitOperationRecord {
                 undone_by: Some(undo.op_id.clone()),
                 ..record
@@ -181,6 +202,7 @@ impl GitOperationService {
     fn build_plan(&self, repository_dir: &str, operation: GitOperation) -> Result<ObservedPlan> {
         validate_operation(&operation)?;
         let mut plan = GitOperationPlan {
+            picks: Vec::new(),
             operation: operation.clone(),
             expectation: GitOperationExpectation::default(),
             branch: None,
@@ -224,8 +246,58 @@ impl GitOperationService {
                 format!("a {name} is in progress in this worktree"),
             );
         }
+        if self.journal.load(repository_dir)?.iter().any(|r| {
+            r.pick_index.is_some()
+                && matches!(
+                    r.status,
+                    GitOperationStatus::Paused | GitOperationStatus::Started
+                )
+                && same_git_worktree_path(&r.worktree, repository_dir)
+        }) {
+            block(
+                &mut plan,
+                GitOperationBlockerCode::OperationInProgress,
+                "a journalled cherry-pick needs to finish first",
+            );
+        }
         self.block_running_turn(&refs, repository_dir, &mut plan);
         match &operation {
+            GitOperation::CherryPick { commits } => {
+                plan.before = Some(head.clone());
+                plan.branch = head.branch.clone();
+                if let Some(branch) = &head.branch {
+                    block_agent_branch(&mut plan, branch);
+                } else {
+                    block(
+                        &mut plan,
+                        GitOperationBlockerCode::DetachedHead,
+                        "select a local branch before cherry-picking",
+                    );
+                }
+                if condition.tracked_changes {
+                    block(
+                        &mut plan,
+                        GitOperationBlockerCode::UncommittedChanges,
+                        "commit or stash tracked changes first",
+                    );
+                }
+                if plan.blockers.is_empty() {
+                    plan.picks =
+                        self.workspace
+                            .preview_picks(repository_dir, &head.commit, commits)?;
+                    if plan
+                        .picks
+                        .iter()
+                        .all(|p| p.prediction == PickPrediction::AlreadyApplied)
+                    {
+                        block(
+                            &mut plan,
+                            GitOperationBlockerCode::NothingToDo,
+                            "all selected patches are already applied",
+                        );
+                    }
+                }
+            }
             GitOperation::Reset { target } => {
                 self.plan_reset(repository_dir, &head, &condition, target, &mut plan)?;
             }
@@ -409,6 +481,9 @@ impl GitOperationService {
         plan: GitOperationPlan,
         undo_of: Option<String>,
     ) -> Result<GitOperationOutcome> {
+        if plan.blockers.is_empty() && matches!(plan.operation, GitOperation::CherryPick { .. }) {
+            return self.start_sequence(repository_dir, plan);
+        }
         let (Some(before), Some(after), true) = (
             plan.before.clone(),
             plan.after.clone(),
@@ -423,6 +498,7 @@ impl GitOperationService {
             .as_deref()
             .map(|branch| git_backup_ref_name(branch, &op_id));
         let mut record = GitOperationRecord {
+            pick_index: None,
             op_id,
             operation: plan.operation,
             worktree: repository_dir.to_string(),
@@ -465,6 +541,7 @@ impl GitOperationService {
                 .create_ref(repository_dir, backup_ref, &record.before.commit)?;
         }
         match &record.operation {
+            GitOperation::CherryPick { .. } => bail!("cherry-pick requires sequence execution"),
             GitOperation::Reset { .. } => self
                 .workspace
                 .reset_to(repository_dir, &record.after.commit),
@@ -567,6 +644,20 @@ fn block_branch_in_use(
 
 fn validate_operation(operation: &GitOperation) -> Result<()> {
     let (branch, target) = match operation {
+        GitOperation::CherryPick { commits } => {
+            if commits.is_empty()
+                || commits.len() > 32
+                || commits.iter().any(|c| !is_git_commit_id(c))
+                || commits
+                    .iter()
+                    .collect::<std::collections::HashSet<_>>()
+                    .len()
+                    != commits.len()
+            {
+                bail!("select 1 to 32 distinct full commit SHAs");
+            }
+            return Ok(());
+        }
         GitOperation::Reset { target } | GitOperation::CheckoutCommit { target } => {
             (None, Some(target))
         }

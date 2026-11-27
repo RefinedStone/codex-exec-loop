@@ -12,16 +12,36 @@ use crate::domain::git_operation::{
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum GitOperationOutcome {
     /// 저장소를 고쳤다.
-    Done { record: GitOperationRecord },
+    Done {
+        record: GitOperationRecord,
+    },
+    Paused {
+        record: GitOperationRecord,
+    },
     /// git 명령이 실패했다. `record.error` 가 git 의 글이다. 백업 ref 는 남아 있을 수 있다.
-    Failed { record: GitOperationRecord },
+    Failed {
+        record: GitOperationRecord,
+    },
     /// 저장소가 계획과 다르거나 계획에 막는 이유가 있다. 고치지 않았다. `plan` 은 지금 상태의 계획이다.
-    Stale { plan: GitOperationPlan },
+    Stale {
+        plan: GitOperationPlan,
+    },
     /// 되돌릴 수 없는 기록이다. 고치지 않았다.
-    Refused { message: String },
+    Refused {
+        message: String,
+    },
 }
 
 pub trait GitOperationPort: Send + Sync {
+    fn resolve_pick(
+        &self,
+        _cwd: &str,
+        _op_id: &str,
+        _action: crate::domain::git_operation::cherry_pick::PickAction,
+    ) -> Result<GitOperationOutcome> {
+        anyhow::bail!("cherry-pick is unavailable")
+    }
+
     /// 작업의 계획을 만든다. 저장소를 고치지 않는다. 커밋 id 가 전체 sha 가 아니면 오류이다.
     fn plan(&self, repository_dir: &str, operation: GitOperation) -> Result<GitOperationPlan>;
 

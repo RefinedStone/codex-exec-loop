@@ -24,11 +24,13 @@ interface GraphRowsProps {
   preview: GitOperationPlan | null;
   /** 줄 목록의 맨 위에 둔다 ("커밋하지 않은 변경"). */
   top: ReactNode;
+  picks: readonly string[];
+  togglePick(commit: string): void;
   onSelect(commit: string): void;
   onOpenThread(threadId: string): void;
 }
 
-export function GraphRows({ graph, folders, selected, preview, top, onSelect, onOpenThread }: GraphRowsProps) {
+export function GraphRows({ graph, folders, selected, preview, top, picks, togglePick, onSelect, onOpenThread }: GraphRowsProps) {
   const { state, loadMore } = graph;
   const scrollRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
@@ -178,6 +180,7 @@ export function GraphRows({ graph, folders, selected, preview, top, onSelect, on
                 data-testid="git-graph-row"
                 data-commit={row.id}
               >
+                <input type="checkbox" aria-label={"cherry-pick: " + row.subject} checked={picks.includes(row.id)} onClick={(event) => event.stopPropagation()} onChange={() => { togglePick(row.id); onSelect(row.id); }} />
                 <GraphRow row={row} width={width} labels={labels.get(row.id)} badges={badges.get(row.id)} head={row.id === state.head} planned={planned?.commit === row.id ? planned : undefined} now={now} onOpenThread={onOpenThread} />
               </div>
             );

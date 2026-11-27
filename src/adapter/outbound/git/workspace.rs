@@ -25,6 +25,7 @@ use crate::application::port::outbound::git_workspace_port::{
 use crate::domain::git_operation::GitOperationImpact;
 use crate::{git_execution_guard, git_subprocess, subprocess};
 
+mod cherry_pick;
 mod conversation_worktree;
 
 use super::progress_markers::IN_PROGRESS_MARKERS;
@@ -51,6 +52,65 @@ const ATTRIBUTE_FILES_PATHSPEC: &str = ":(glob)**/.gitattributes";
 pub(crate) struct GitWorkspaceAdapter;
 
 impl GitWorkspacePort for GitWorkspaceAdapter {
+    fn preview_picks(
+        &self,
+        cwd: &str,
+        head: &str,
+        commits: &[String],
+    ) -> Result<Vec<crate::domain::git_operation::cherry_pick::PickPreview>> {
+        cherry_pick::preview(absolute(cwd)?, head, commits)
+    }
+    fn pick_one(&self, cwd: &str, commit: &str, receipt: &str) -> Result<()> {
+        cherry_pick::apply(
+            absolute(cwd)?,
+            &["cherry-pick", "--no-edit", "--no-gpg-sign", commit],
+            receipt,
+        )
+    }
+    fn finish_pick(
+        &self,
+        cwd: &str,
+        action: crate::domain::git_operation::cherry_pick::PickAction,
+        receipt: &str,
+    ) -> Result<()> {
+        use crate::domain::git_operation::cherry_pick::PickAction;
+        let option = match action {
+            PickAction::Continue => "--continue",
+            PickAction::Skip => "--skip",
+            PickAction::Abort => "--abort",
+        };
+        cherry_pick::apply(absolute(cwd)?, &["cherry-pick", option], receipt)
+    }
+    fn pick_marker(&self, cwd: &str) -> Result<Option<String>> {
+        let dirs = GitDirs::read(absolute(cwd)?)?;
+        if dirs.worktree.join("sequencer").exists() {
+            bail!("another multi-commit sequencer owns this worktree");
+        }
+        match std::fs::read_to_string(dirs.worktree.join("CHERRY_PICK_HEAD")) {
+            Ok(value) => Ok(Some(value.trim().to_owned())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+    fn pick_completed(&self, cwd: &str, parent: &str, receipt: &str) -> Result<bool> {
+        let repo = absolute(cwd)?;
+        let previous = read(
+            repo,
+            &[
+                "show",
+                "-s",
+                "--format=%P",
+                "--no-show-signature",
+                "HEAD",
+                "--",
+            ],
+        )?;
+        let message = read(
+            repo,
+            &["reflog", "show", "-1", "--format=%gs", "HEAD", "--"],
+        )?;
+        Ok(previous.trim() == parent && message.starts_with(&format!("{receipt}: ")))
+    }
     fn create_conversation_worktree(
         &self,
         repository_dir: &str,
@@ -153,6 +213,15 @@ impl GitWorkspacePort for GitWorkspaceAdapter {
         read(
             repository,
             &["update-ref", "--no-deref", full_ref, commit, ""],
+        )
+        .map(|_| ())
+    }
+
+    fn release_backup(&self, cwd: &str, reference: &str, expected: &str) -> Result<()> {
+        require_full_ref(reference)?;
+        read(
+            absolute(cwd)?,
+            &["update-ref", "--no-deref", "-d", reference, expected],
         )
         .map(|_| ())
     }

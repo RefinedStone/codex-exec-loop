@@ -126,6 +126,7 @@ fn respond(ports: &GitPorts, id: Value, method: &str, text: &str) -> String {
         (GIT_PLAN_METHOD, Some(operations)) => plan_result(operations, text),
         (GIT_EXECUTE_METHOD, Some(operations)) => execute_result(operations, text),
         (GIT_OPERATIONS_METHOD, Some(operations)) => operations_result(operations, text),
+        ("akra/git/resolvePick", Some(operations)) => resolve_pick_result(operations, text),
         (GIT_UNDO_METHOD, Some(operations)) => undo_result(operations, text),
         _ => {
             return error_response(
@@ -187,6 +188,22 @@ fn operations_result(operations: &dyn GitOperationPort, text: &str) -> MethodRes
     let params = params::<RefsParams>(text)?;
     let records = operations.operations(&params.cwd);
     Some(records.and_then(|records| Ok(json!({ "operations": serde_json::to_value(records)? }))))
+}
+
+fn resolve_pick_result(operations: &dyn GitOperationPort, text: &str) -> MethodResult {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PickParams {
+        cwd: String,
+        op_id: String,
+        action: crate::domain::git_operation::cherry_pick::PickAction,
+    }
+    let query = params::<PickParams>(text)?;
+    Some(
+        operations
+            .resolve_pick(&query.cwd, &query.op_id, query.action)
+            .and_then(|outcome| Ok(serde_json::to_value(outcome)?)),
+    )
 }
 
 fn undo_result(operations: &dyn GitOperationPort, text: &str) -> MethodResult {
@@ -267,6 +284,7 @@ mod tests {
     impl GitOperationPort for EchoOperations {
         fn plan(&self, _repository_dir: &str, operation: GitOperation) -> Result<GitOperationPlan> {
             Ok(GitOperationPlan {
+                picks: Vec::new(),
                 operation,
                 expectation: GitOperationExpectation::default(),
                 branch: None,

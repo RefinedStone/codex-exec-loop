@@ -4,13 +4,14 @@ import type { CommitActions, GitOperation } from "./gitOperations";
 import { SHOW_COMMIT_ACTIONS } from "./openCommitActions";
 
 interface Props {
+  readonly picks: readonly string[];
   readonly commit: string;
   readonly running: boolean;
   readonly actions: CommitActions;
   plan(operation: GitOperation, branch: string | null): void;
 }
 
-export function CommitPlanButtons({ commit, running, actions, plan }: Props) {
+export function CommitPlanButtons({ picks, commit, running, actions, plan }: Props) {
   const [choosing, setChoosing] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
   useLayoutEffect(() => {
@@ -31,6 +32,7 @@ export function CommitPlanButtons({ commit, running, actions, plan }: Props) {
   const { reset, checkoutCommit } = actions;
   const controls = (
       <div className="git-action-buttons">
+        <button type="button" disabled={running || picks.length === 0 || picks.length > 32} onClick={() => choose({ kind: "cherry_pick", commits: picks }, null)}>cherry-pick 계획 ({picks.length})</button>
         {reset && (
           <button type="button" disabled={running} onClick={() => choose(reset.operation, reset.branch)} data-testid="git-action-reset">
             여기로 reset ({reset.branch})

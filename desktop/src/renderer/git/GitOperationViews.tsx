@@ -19,6 +19,7 @@ import {
   type GitOperationRecord,
   noticeFrom,
   type OperationNotice,
+  outcomeFrom,
   operationTitle,
   planSummary,
   recordStatus,
@@ -69,7 +70,7 @@ export function useGitOperationLog(request: GatewayRequest, cwd: string | null, 
     (outcome: GitOperationOutcome, undo = false) => {
       setNotice(noticeFrom(outcome, undo));
       reload();
-      if (outcome.status === "done" || outcome.status === "failed") onChanged();
+      if (outcome.status === "done" || outcome.status === "paused" || outcome.status === "failed") onChanged();
     },
     [reload, onChanged],
   );
@@ -92,9 +93,17 @@ export function useGitOperationLog(request: GatewayRequest, cwd: string | null, 
 }
 
 /** 마지막 결과의 알림과 작업 기록이다. 패널의 머리 아래에 있다. */
-export function OperationLogView({ log, cwd, busyReason }: { log: GitOperationLog; cwd: string; busyReason: string | null }) {
+export function OperationLogView({ request, log, cwd, busyReason }: { request: GatewayRequest; log: GitOperationLog; cwd: string; busyReason: string | null }) {
   const { records, notice, working } = log;
-  const blocked = working || busyReason !== null;
+  const [resolving, setResolving] = useState(false);
+  const [resolutionError, setResolutionError] = useState("");
+  const blocked = resolving || working || busyReason !== null;
+  const resolve = async (opId: string, action: "continue" | "skip" | "abort") => {
+    setResolving(true); setResolutionError("");
+    try { log.finished(outcomeFrom(await request("akra/git/resolvePick", { cwd, opId, action }))); }
+    catch (error) { setResolutionError(errorText(error)); }
+    finally { setResolving(false); }
+  };
   if (notice === null && records.length === 0) return null;
   return (
     <div className="git-operations">
@@ -111,6 +120,7 @@ export function OperationLogView({ log, cwd, busyReason }: { log: GitOperationLo
           </button>
         </div>
       )}
+      {resolutionError && <p role="alert">{resolutionError}</p>}
       {records.length > 0 && (
         <details className="git-operation-log" data-testid="git-operation-log">
           <summary>작업 기록 {records.length}개</summary>
@@ -123,6 +133,7 @@ export function OperationLogView({ log, cwd, busyReason }: { log: GitOperationLo
                 <span className="muted">
                   {recordStatus(record)} · {fullTime(record.startedAt)}
                 </span>
+                {record.operation.kind === "cherry_pick" && record.worktree === cwd && (record.status === "paused" || record.status === "started") && ([ ["continue", "계속"], ["skip", "건너뛰기"], ["abort", "전체 중단"] ] as const).map(([action, label]) => <button type="button" key={action} disabled={blocked} onClick={() => void resolve(record.opId, action)}>{label}</button>)}
                 {canUndo(record, cwd) && (
                   <button type="button" disabled={blocked} title={busyReason ?? undefined} onClick={() => log.undo(record.opId)}>
                     되돌리기
@@ -140,6 +151,7 @@ export function OperationLogView({ log, cwd, busyReason }: { log: GitOperationLo
 type PlanState = { phase: "idle" } | { phase: "planning"; title: string } | { phase: "planned"; plan: GitOperationPlan; stale: boolean; running: boolean } | { phase: "failed"; message: string };
 
 export interface CommitActionsProps {
+  picks: readonly string[];
   request: GatewayRequest;
   cwd: string;
   commit: string;
@@ -154,7 +166,7 @@ export interface CommitActionsProps {
 }
 
 /** 고른 커밋의 작업 단추와 계획이다. 커밋이 바뀌면 부모가 `key` 로 새로 만든다. */
-export function CommitActionsView({ request, cwd, commit, refs, head, worktrees, busyReason, log, onPreview }: CommitActionsProps) {
+export function CommitActionsView({ picks, request, cwd, commit, refs, head, worktrees, busyReason, log, onPreview }: CommitActionsProps) {
   const actions = useMemo(() => commitActions(commit, refs, head, worktrees), [commit, refs, head, worktrees]);
   const [state, setState] = useState<PlanState>({ phase: "idle" });
   const previewed = state.phase === "planned" ? state.plan : null;
@@ -198,7 +210,7 @@ export function CommitActionsView({ request, cwd, commit, refs, head, worktrees,
   if (nothing) return null;
   return (
     <div className="git-actions">
-      <CommitPlanButtons actions={actions} running={running} commit={commit} plan={plan} />
+      <CommitPlanButtons picks={picks} actions={actions} running={running} commit={commit} plan={plan} />
       {state.phase === "planning" && <p className="muted">{state.title}: 계획을 읽는 중…</p>}
       {state.phase === "failed" && (
         <p className="error" data-testid="git-plan-error">
