@@ -1,6 +1,8 @@
 use super::NativeClientRuntime;
 use crate::application::service::issue_timeline::project_issue_timeline;
-use crate::domain::issue_automation::timeline::{ISSUE_TIMELINE_READ_LIMIT, IssueTimelineProjection};
+use crate::domain::issue_automation::timeline::{
+    ISSUE_TIMELINE_READ_LIMIT, IssueTimelineProjection,
+};
 use crate::domain::issue_work::IssueReference;
 
 impl NativeClientRuntime {
