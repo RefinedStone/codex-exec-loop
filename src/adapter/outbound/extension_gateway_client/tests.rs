@@ -82,7 +82,7 @@ async fn a_server_accepting_input_rejected_by_its_catalog_is_a_contract_error() 
 
 fn blog_catalog() -> Value {
     json!([{
-        "id":"akra.tech-blog","version":2,
+        "id":"akra.tech-blog","version":3,
         "operations":crate::domain::repository_extension::tech_blog::operations()
     }])
 }
@@ -90,12 +90,12 @@ fn blog_catalog() -> Value {
 fn validate_blog_call(action: &str, input: Value) -> Result<()> {
     validate_catalog_call(
         &blog_catalog(),
-        &json!({"extension":"akra.tech-blog","version":2,"action":action,"input":input}),
+        &json!({"extension":"akra.tech-blog","version":3,"action":action,"input":input}),
     )
 }
 
 #[tokio::test]
-async fn blog_v2_job_success_is_returned_once_without_catalog_mismatch() {
+async fn blog_v3_job_receipt_is_returned_once_without_catalog_mismatch() {
     // Fake responses cover every model job entrance without scheduling a worker or model.
     for (action, input) in [
         ("generate", json!({"commits":["a".repeat(40)]})),
@@ -107,10 +107,10 @@ async fn blog_v2_job_success_is_returned_once_without_catalog_mismatch() {
         ("review", json!({"id":"article","revision":2})),
     ] {
         let result =
-            json!({"id":"article","version":2,"revision":3,"job":{"id":"already-started"}});
+            json!({"id":"job","extension":"akra.tech-blog","action":action,"state":"queued"});
         let answer = call_with_catalog_response(
             blog_catalog(),
-            json!({"extension":"akra.tech-blog","version":2,"action":action,"input":input}),
+            json!({"extension":"akra.tech-blog","version":3,"action":action,"input":input}),
             json!({"result":result}),
         )
         .await
@@ -120,7 +120,7 @@ async fn blog_v2_job_success_is_returned_once_without_catalog_mismatch() {
 }
 
 #[tokio::test]
-async fn blog_v2_figure_success_preserves_edition_and_export_metadata() {
+async fn blog_v3_figure_success_preserves_edition_and_export_metadata() {
     // Figure registration is a fake response too: do not invoke model or image workers here.
     let result = json!({
         "id":"article","version":2,"revision":4,"task":"generate","state":"edited",
@@ -133,7 +133,7 @@ async fn blog_v2_figure_success_preserves_edition_and_export_metadata() {
     });
     let answer = call_with_catalog_response(
         blog_catalog(),
-        json!({"extension":"akra.tech-blog","version":2,"action":"figure",
+        json!({"extension":"akra.tech-blog","version":3,"action":"figure",
             "input":{"id":"article","revision":3,"png":"encoded-image","caption":"figure"}}),
         json!({"result":result}),
     )
@@ -152,11 +152,9 @@ async fn blog_v2_figure_success_preserves_edition_and_export_metadata() {
 }
 
 #[test]
-fn blog_v2_catalog_matches_optional_defaults_and_valid_worker_requests() {
+fn blog_v3_catalog_matches_optional_defaults_and_valid_worker_requests() {
     let commits = (0..30).map(|n| format!("{n:040x}")).collect::<Vec<_>>();
     for (action, input) in [
-        ("catalog", json!({})),
-        ("configure", json!({"enabled":true})),
         ("targets", json!({})),
         ("targets", json!({"limit":1})),
         ("targets", json!({"limit":500})),
@@ -171,7 +169,7 @@ fn blog_v2_catalog_matches_optional_defaults_and_valid_worker_requests() {
             json!({"commits":commits,"topic":"t".repeat(300)}),
         ),
         ("generate", json!({"commits":["b".repeat(40)],"topic":""})),
-        ("cancel", json!({"id":"article"})),
+        ("stop", json!({"id":"article"})),
         ("resume", json!({"id":"article","revision":1})),
         ("revise", json!({"id":"article","revision":1})),
         (
@@ -209,11 +207,9 @@ fn blog_v2_catalog_matches_optional_defaults_and_valid_worker_requests() {
 }
 
 #[test]
-fn blog_v2_catalog_rejects_invalid_worker_fields_and_obsolete_actions() {
+fn blog_v3_catalog_rejects_invalid_worker_fields_and_obsolete_actions() {
     let commits = (0..31).map(|n| format!("{n:040x}")).collect::<Vec<_>>();
     for (action, input) in [
-        ("configure", json!({})),
-        ("configure", json!({"enabled":1})),
         ("targets", json!({"limit":0})),
         ("targets", json!({"limit":501})),
         ("targets", json!({"limit":true})),
@@ -243,7 +239,7 @@ fn blog_v2_catalog_rejects_invalid_worker_fields_and_obsolete_actions() {
             "generate",
             json!({"commits":["a".repeat(40)],"topic":"t".repeat(301)}),
         ),
-        ("cancel", json!({})),
+        ("stop", json!({})),
         ("resume", json!({"id":"article"})),
         ("resume", json!({"id":"article","revision":0})),
         ("revise", json!({"id":"article"})),
@@ -285,7 +281,10 @@ fn blog_v2_catalog_rejects_invalid_worker_fields_and_obsolete_actions() {
     ] {
         assert!(validate_blog_call(action, input).is_err(), "{action}");
     }
-    for action in ["create", "accept", "write", "rewrite", "execute", "failed"] {
+    // Version 2 entrances moved to the common host: catalog, configure and cancel.
+    for action in [
+        "create", "accept", "write", "rewrite", "execute", "failed", "catalog",
+    ] {
         assert!(
             validate_blog_call(
                 action,
@@ -298,14 +297,14 @@ fn blog_v2_catalog_rejects_invalid_worker_fields_and_obsolete_actions() {
     assert!(
         validate_catalog_call(
             &blog_catalog(),
-            &json!({"extension":"akra.tech-blog","version":1,"action":"catalog","input":{}})
+            &json!({"extension":"akra.tech-blog","version":2,"action":"list","input":{}})
         )
         .is_err()
     );
 }
 
 #[test]
-fn blog_v2_catalog_preserves_the_public_surface_and_saved_v1_outputs() {
+fn blog_v3_catalog_preserves_the_public_surface_and_saved_v1_outputs() {
     let operations = crate::domain::repository_extension::tech_blog::operations();
     assert_eq!(
         operations
@@ -313,22 +312,8 @@ fn blog_v2_catalog_preserves_the_public_surface_and_saved_v1_outputs() {
             .map(|operation| operation.name.as_str())
             .collect::<Vec<_>>(),
         [
-            "catalog",
-            "configure",
-            "targets",
-            "list",
-            "open",
-            "seen",
-            "generate",
-            "cancel",
-            "resume",
-            "revise",
-            "review",
-            "save",
-            "restore",
-            "figure",
-            "export",
-            "delete"
+            "targets", "list", "open", "seen", "generate", "stop", "resume", "revise", "review",
+            "save", "restore", "figure", "export", "delete"
         ]
     );
     // Python present() adds v2 display fields without migrating the saved v1 article.
@@ -338,7 +323,7 @@ fn blog_v2_catalog_preserves_the_public_surface_and_saved_v1_outputs() {
         "state":"reviewed","stage":null,"stopped":null,"commits":[],"evidence":null,"calls":0,
         "edition":1,"previous":null,"unread":false
     });
-    for action in ["open", "seen", "cancel", "save", "figure", "export"] {
+    for action in ["open", "seen", "stop", "save", "figure", "export"] {
         let operation = operations
             .iter()
             .find(|entry| entry.name == action)

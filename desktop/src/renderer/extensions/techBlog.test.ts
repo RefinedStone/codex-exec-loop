@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { activityTitle, blogActivity, finishedArticles, stageMarks, stateLabel, taskMarks, taskStages } from "./techBlogStages";
+import { activityTitle, blogActivity, finishedArticles, jobArticle, stageMarks, stateLabel, taskMarks, taskStages } from "./techBlogStages";
 
 describe("stageMarks", () => {
   it("marks earlier stages done and waits on the optional rewrite", () => {
@@ -46,5 +46,22 @@ describe("blog activity", () => {
     const before = [row("a", "running"), row("b", "running"), row("c", "reviewed", true)];
     const after = [row("a", "reviewed", true), row("b", "stopped"), row("c", "reviewed", true)];
     expect(finishedArticles(before, after).map(a => a.id)).toEqual(["a"]);
+  });
+});
+
+describe("jobArticle", () => {
+  const instant = () => Promise.resolve();
+  it("returns the article that the job reports in progress", async () => {
+    const states = [{ id: "j", state: "running", progress: null }, { id: "j", state: "running", progress: { article_id: "a1" } }];
+    const call = (async () => states.shift()) as never;
+    await expect(jobArticle(call, { id: "j", state: "queued" }, instant)).resolves.toBe("a1");
+  });
+  it("raises the worker rejection of a failed job", async () => {
+    const call = (async () => ({ id: "j", state: "failed", error: "다른 창에서 글이 바뀌었습니다." })) as never;
+    await expect(jobArticle(call, { id: "j", state: "queued" }, instant)).rejects.toThrow("다른 창에서");
+  });
+  it("stops waiting when the job never starts", async () => {
+    const call = (async () => ({ id: "j", state: "queued" })) as never;
+    await expect(jobArticle(call, { id: "j", state: "queued" }, instant)).rejects.toThrow("아직 시작되지");
   });
 });

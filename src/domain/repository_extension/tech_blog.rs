@@ -1,28 +1,20 @@
-//! Machine schemas for the bundled Python studio's public editing requests.
+//! Machine schemas for the bundled Python studio's public editing requests (version 3).
 // Keep permissive extra fields and optional defaults from tech_blog_studio.py.
 // Runtime existence, revision conflicts, commit membership and PNG content remain worker checks.
+// Activation, job receipts and job cancellation belong to the common extension host.
 use crate::domain::kernel_extension::{ExtensionOperation, ExtensionOperationKind};
 use serde_json::{Value, json};
+
+pub(crate) const ID: &str = "akra.tech-blog";
+pub(crate) const VERSION: u32 = 3;
+/// Model jobs: the host runs the worker stages until none remain.
+pub(crate) const JOBS: [&str; 4] = ["generate", "resume", "revise", "review"];
 
 pub(crate) fn operations() -> Vec<ExtensionOperation> {
     let id = text(64, false);
     let revision = json!({"type":"integer","minimum":1});
     let article_key = json!({"id":id,"revision":revision});
     let mut entries = vec![
-        operation(
-            "catalog",
-            ExtensionOperationKind::Query,
-            json!({}),
-            &[],
-            object(),
-        ),
-        operation(
-            "configure",
-            ExtensionOperationKind::Command,
-            json!({"enabled":{"type":"boolean"}}),
-            &["enabled"],
-            object(),
-        ),
         operation(
             "targets",
             ExtensionOperationKind::Query,
@@ -53,7 +45,7 @@ pub(crate) fn operations() -> Vec<ExtensionOperation> {
         ),
         operation(
             "generate",
-            ExtensionOperationKind::Command,
+            ExtensionOperationKind::Job,
             json!({
                 "commits":{
                     "type":"array","minItems":1,"maxItems":30,"uniqueItems":true,
@@ -67,17 +59,17 @@ pub(crate) fn operations() -> Vec<ExtensionOperation> {
             &["commits"],
             object(),
         ),
+        // Stops the article's running stages. The host `cancel {job_id}` has the same effect.
         operation(
-            "cancel",
+            "stop",
             ExtensionOperationKind::Command,
             json!({"id":id}),
             &["id"],
             object(),
         ),
-        // These commands return the article containing its legacy worker job.
         operation(
             "resume",
-            ExtensionOperationKind::Command,
+            ExtensionOperationKind::Job,
             article_key.clone(),
             &["id", "revision"],
             object(),
@@ -87,14 +79,14 @@ pub(crate) fn operations() -> Vec<ExtensionOperation> {
     revise["instruction"] = text(1_000, true);
     entries.push(operation(
         "revise",
-        ExtensionOperationKind::Command,
+        ExtensionOperationKind::Job,
         revise,
         &["id", "revision"],
         object(),
     ));
     entries.push(operation(
         "review",
-        ExtensionOperationKind::Command,
+        ExtensionOperationKind::Job,
         article_key.clone(),
         &["id", "revision"],
         object(),
@@ -162,11 +154,17 @@ fn operation(
     required: &[&str],
     output_schema: Value,
 ) -> ExtensionOperation {
+    // A job reports the article it drives before its first stage finishes.
+    let progress_schema = (kind == ExtensionOperationKind::Job).then(|| {
+        json!({"type":"object","required":["article_id"],"properties":{
+            "article_id":{"type":"string"},"stage":{"type":["string","null"]}
+        }})
+    });
     ExtensionOperation {
         name: name.into(),
         kind,
         input_schema: json!({"type":"object","properties":properties,"required":required}),
         output_schema,
-        progress_schema: None,
+        progress_schema,
     }
 }

@@ -1,4 +1,4 @@
-use crate::domain::kernel_extension::{ExtensionCatalogEntry, ExtensionScope as HostScope};
+use crate::domain::kernel_extension::ExtensionScope as HostScope;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -29,12 +29,6 @@ pub(crate) struct ExtensionAttachResponse {
     pub kernel: String,
     pub scope: HostScope,
     pub generation: String,
-}
-#[derive(serde::Serialize, JsonSchema)]
-#[serde(untagged)]
-pub(crate) enum ExtensionCatalogItem {
-    Registered(ExtensionCatalogEntry),
-    Legacy(crate::domain::repository_extension::ExtensionManifest),
 }
 #[derive(Default, serde::Serialize, JsonSchema)]
 pub(crate) struct ExtensionChanged {

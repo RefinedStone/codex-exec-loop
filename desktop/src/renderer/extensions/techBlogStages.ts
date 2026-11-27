@@ -1,4 +1,6 @@
-// 블로그 글의 상태와 단계 표시이다 (plan 31). 화면 저장소를 읽지 않는 순수 함수만 둔다.
+// 블로그 글의 상태와 단계 표시이다 (plan 31). 화면 저장소를 읽지 않는 함수만 둔다.
+import type { ExtensionCall } from "./repositoryExtensions";
+
 export type State = "running" | "reviewed" | "findings" | "edited" | "stopped";
 export type Stage = "collect" | "write" | "review" | "revise";
 export type Commit = { sha: string; time: number; subject: string };
@@ -82,4 +84,23 @@ export function activityTitle({ running, unread, stopped }: Omit<BlogActivity, "
 export function finishedArticles(previous: Summary[], next: Summary[]): Summary[] {
   const wasRunning = new Set(previous.filter(a => a.state === "running").map(a => a.id));
   return next.filter(a => wasRunning.has(a.id) && a.state !== "running" && a.unread);
+}
+
+/** 공통 확장 호스트의 작업이다. 호출은 receipt를 돌려주고, 워커가 맡은 글 ID는 progress로 온다. */
+export const JOBS = new Set(["generate", "resume", "revise", "review"]);
+const JOB_POLL_MS = 200;
+const JOB_START_LIMIT_MS = 30_000;
+export interface Receipt { id: string; state: string; error?: string | null; progress?: { article_id?: string } | null; result?: { id?: string } | null }
+
+/** 작업이 글을 맡을 때까지 기다린다. 워커가 거절하면(예: 다른 창에서 글이 바뀜) 그 오류를 던진다. */
+export async function jobArticle(call: ExtensionCall, receipt: Receipt, wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))): Promise<string> {
+  let job = receipt;
+  for (let waited = 0; ; waited += JOB_POLL_MS) {
+    const id = job.progress?.article_id ?? job.result?.id;
+    if (id) return id;
+    if (["failed", "cancelled", "interrupted", "completed"].includes(job.state)) throw new Error(job.error || "작업이 글을 맡지 못했습니다.");
+    if (waited >= JOB_START_LIMIT_MS) throw new Error("작업이 아직 시작되지 않았습니다. 잠시 뒤 글 목록을 확인하세요.");
+    await wait(JOB_POLL_MS);
+    job = await call<Receipt>("job", { job_id: job.id });
+  }
 }

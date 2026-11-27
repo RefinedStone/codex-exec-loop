@@ -12,7 +12,7 @@ export const corePanels = [
 ] as const satisfies readonly { id: string; label: string; icon: string; testId: string }[];
 
 export const extensionPanels = [
-  { id: "akra.tech-blog", version: 2, scope: "repository", label: "기술 블로그", icon: "book", testId: "tech-blog-toggle" },
+  { id: "akra.tech-blog", version: 3, scope: "repository", label: "기술 블로그", icon: "book", testId: "tech-blog-toggle" },
   { id: "akra.storage-analysis", version: 1, scope: "local_user", label: "저장 공간", icon: "folder", testId: "storage-toggle" },
 ] as const satisfies readonly { id: string; version: number; scope: string; label: string; icon: string; testId: string }[];
 
