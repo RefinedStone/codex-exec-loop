@@ -48,6 +48,7 @@ import { isLinearIssueUrl } from "../shared/providerLinks";
 import { SkillService } from "./skillService";
 import { TerminalService } from "./terminalService";
 import { VaultRestoreWindows } from "./vaultRestoreWindow";
+import { inspectBackup } from "./vaultBackupPreview";
 import { createVaultRestoreSource } from "./vaultRestoreSource";
 import { DEFAULT_WINDOW_STATE, loadWindowState, saveWindowState, visibleBounds } from "./windowState";
 import { keepCredentialIdentity, prepareUserData } from "./userDataMigration";
@@ -863,6 +864,7 @@ ipcMain.on(IPC_CHANNELS.reportWorking, (event, working: unknown) => {
  */
 const vaultRestores = new VaultRestoreWindows({
   source: createVaultRestoreSource({ executable: () => resolveGatewayExecutable(repositoryRoot()) }),
+  inspectBackup: (archive, key, signal) => inspectBackup(resolveGatewayExecutable(repositoryRoot()), archive, key, signal),
   profileHold: () =>
     vaultRestoreProfileHold({
       automation:
