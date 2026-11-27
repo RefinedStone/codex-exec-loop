@@ -242,6 +242,24 @@ describe("dedicated Vault window lifetime", () => {
     expect(f.created[2]!.channel.prepare).toHaveBeenCalledTimes(1);
   });
 
+  it("fences queued unlocks while hidden or minimized, including overlapping holds", async () => {
+    const f = fixture();
+    send(f.window, VAULT_RESTORE_CHANNELS.ready);
+    const pending = f.created[0]!;
+    f.window.emit("minimize");
+    f.window.emit("hide");
+    pending.prepared.resolve({ kind: "prepared" });
+    await microtasks();
+    expect(pending.channel.restore).not.toHaveBeenCalled();
+    f.window.emit("restore");
+    send(f.window, VAULT_RESTORE_CHANNELS.unlock);
+    expect(f.source).toHaveBeenCalledTimes(1);
+    f.window.emit("show");
+    expect(f.source).toHaveBeenCalledTimes(1);
+    send(f.window, VAULT_RESTORE_CHANNELS.unlock);
+    expect(f.source).toHaveBeenCalledTimes(2);
+  });
+
   it("ignores the general window and nested frames on the private channels", () => {
     const f = fixture();
     send(f.opener, VAULT_RESTORE_CHANNELS.ready);

@@ -19,6 +19,7 @@ export type VaultRestoreHold =
   | "profile_automation"
   | "profile_dev_renderer"
   | "profile_hidden_window"
+  | "window_not_visible"
   | "agent_working"
   | "os_locked"
   | "os_lock_unavailable"
@@ -136,6 +137,7 @@ const HOLD_TEXT: Record<VaultRestoreHold, string> = {
   profile_automation: "이 앱은 자동화 또는 디버깅 연결로 실행 중입니다. 이 실행 방식에서는 열람을 보류합니다.",
   profile_dev_renderer: "화면을 개발 서버에서 읽었습니다. 이 실행 방식에서는 열람을 보류합니다.",
   profile_hidden_window: "창을 숨기는 시험 방식으로 실행 중입니다. 이 실행 방식에서는 열람을 보류합니다.",
+  window_not_visible: "복원 창이 숨겨져 있습니다. 다시 표시한 뒤 확인하세요.",
   agent_working: "이 앱에서 에이전트 턴이 실행 중입니다. 턴이 끝난 뒤에 다시 여세요.",
   os_locked: "운영체제 화면이 잠겨 있습니다. 화면을 잠금 해제한 뒤 다시 확인하세요.",
   os_lock_unavailable: "운영체제 화면 잠금 상태를 확인할 수 없습니다. 공유본만 볼 수 있으며, 상태 확인이 가능해진 뒤 다시 시도하세요.",
