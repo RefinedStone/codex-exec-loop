@@ -870,7 +870,7 @@ const vaultRestores = new VaultRestoreWindows({
       devRenderer: Boolean(process.env.ELECTRON_RENDERER_URL),
       hiddenWindows: HIDDEN_WINDOWS,
       agentWorking: workingWindows.size > 0,
-    }),
+    }) ?? (powerMonitor.getSystemIdleState(1) === "locked" ? "os_locked" : null),
   preloadPath: join(__dirname, "../preload/vaultRestore.js"),
   // 개발 서버의 화면은 프로필 검사가 보류한다. 그래서 여기서는 빌드한 파일만 읽는다.
   loadPage: (window) => void window.loadFile(join(__dirname, "../renderer/vault-restore.html")),
@@ -1005,7 +1005,9 @@ void app.whenReady().then(() => {
   installApplicationMenu();
   // OS 화면 잠금과 절전은 열려 있는 로컬 복원본을 다시 잠근다 (#2427).
   powerMonitor.on("lock-screen", () => vaultRestores.lockAll("os_lock"));
+  powerMonitor.on("unlock-screen", () => vaultRestores.releasePowerHold("os_lock"));
   powerMonitor.on("suspend", () => vaultRestores.lockAll("suspend"));
+  powerMonitor.on("resume", () => vaultRestores.releasePowerHold("suspend"));
   createWindow();
   if (delegatedChatEnabled()) {
     try {

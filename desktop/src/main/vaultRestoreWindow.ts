@@ -14,6 +14,8 @@ import { VaultRestoreSession, type VaultRestoreSource } from "./vaultRestoreSess
 /** 복원본을 연 뒤 다시 잠글 때까지의 시간이다. */
 const VIEWING_SESSION_MS = 5 * 60_000;
 
+type PowerHold = "os_lock" | "suspend";
+
 interface Entry {
   window: BrowserWindow;
   session: VaultRestoreSession;
@@ -39,6 +41,7 @@ export interface VaultRestoreWindowsDeps {
 export class VaultRestoreWindows {
   /** 키는 복원본 창의 webContents id 이다. */
   private readonly entries = new Map<number, Entry>();
+  private readonly powerHolds = new Set<PowerHold>();
 
   constructor(private readonly deps: VaultRestoreWindowsDeps) {
     ipcMain.on(VAULT_RESTORE_CHANNELS.ready, (event) => {
@@ -101,7 +104,7 @@ export class VaultRestoreWindows {
     const session = new VaultRestoreSession({
       target,
       source: this.deps.source,
-      profileHold: () => entry.targetActive ? this.deps.profileHold() : "source_unavailable",
+      profileHold: () => entry.targetActive ? this.powerHold() ?? this.deps.profileHold() : "source_unavailable",
       emit: (state) => {
         if (!contents.isDestroyed()) {
           try { contents.send(VAULT_RESTORE_CHANNELS.state, state); } catch { /* 종료된 renderer에 늦은 응답을 보내지 않는다. */ }
@@ -149,7 +152,21 @@ export class VaultRestoreWindows {
 
   /** 모든 복원본을 다시 잠근다 (OS 잠금, 절전, 에이전트 턴 시작). */
   lockAll(cause: VaultRelockCause): void {
+    // Latch before closing channels: an already queued unlock must not start a
+    // new helper during the same OS lock/suspend interval.
+    if (cause === "os_lock" || cause === "suspend") this.powerHolds.add(cause);
     for (const entry of this.entries.values()) entry.session.lock(cause);
+  }
+
+  /** Release just the matching OS hold. Never open a channel automatically. */
+  releasePowerHold(cause: PowerHold): void {
+    this.powerHolds.delete(cause);
+  }
+
+  private powerHold(): VaultRestoreHold | null {
+    if (this.powerHolds.has("os_lock")) return "os_locked";
+    if (this.powerHolds.has("suspend")) return "system_suspended";
+    return null;
   }
 
   /** 그 창의 프로젝트·화면 수명이 끝나면 대상을 비활성화하고 복원본을 즉시 잠근다. */
