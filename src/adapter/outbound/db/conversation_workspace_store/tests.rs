@@ -374,3 +374,57 @@ fn conversation_workspace_target_filter_and_worktree_config_use_existing_write_g
     assert!(fixture.service().prepare(request).is_err());
     assert!(!fixture.root.join("outside").exists());
 }
+
+#[test]
+fn conversation_workspace_inventory_after_restart_preserves_dirty_and_missing_allocations() {
+    use crate::domain::conversation_workspace::ConversationWorkspaceInventoryQuery;
+    let fixture = Fixture::new();
+    let query = || ConversationWorkspaceInventoryQuery {
+        cwd: fixture.cwd(),
+        after: None,
+    };
+    assert!(
+        fixture
+            .service()
+            .inventory(query())
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    assert!(!fixture.runtime.exists());
+    let first = fixture.service().prepare(fixture.request()).unwrap();
+    let mut request = fixture.request();
+    request.request_id = "new-conversation-2".into();
+    let second = fixture.service().prepare(request).unwrap();
+    std::fs::write(Path::new(&first.workspace_dir).join("tracked.txt"), "dirty").unwrap();
+    std::fs::write(
+        Path::new(&first.workspace_dir).join("untracked.txt"),
+        "preserve",
+    )
+    .unwrap();
+    git(
+        &fixture.repo,
+        &["worktree", "remove", &second.workspace_dir],
+    );
+    let page = fixture.service().inventory(query()).unwrap();
+    assert_eq!(page.items.len(), 2);
+    assert!(page.items.iter().all(|entry| !entry.cleanup_allowed));
+    assert!(
+        page.items[0]
+            .reasons
+            .iter()
+            .any(|reason| reason == "tracked_changes")
+    );
+    assert!(
+        page.items[1]
+            .reasons
+            .iter()
+            .any(|reason| reason == "workspace_missing")
+    );
+    assert!(
+        Path::new(&first.workspace_dir)
+            .join("untracked.txt")
+            .is_file()
+    );
+    assert_eq!(fixture.service().get(fixture.query()).unwrap(), Some(first));
+}

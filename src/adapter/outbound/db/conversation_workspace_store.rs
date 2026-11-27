@@ -10,7 +10,7 @@ use crate::application::port::outbound::conversation_workspace_store_port::{
     ConversationWorkspaceTransaction,
 };
 use crate::domain::conversation_workspace::{
-    ConversationWorkspaceRecord, request_key, validate_request_id,
+    ConversationWorkspaceRecord, WORKSPACE_INVENTORY_LIMIT, request_key, validate_request_id,
 };
 use crate::private_sqlite::{
     DatabaseFiles, PinnedPrivateDirectory, PrivateConnection, Synchronous,
@@ -109,6 +109,40 @@ impl ConversationWorkspaceStorePort for ConversationWorkspaceStoreAdapter {
         };
         transaction.verify()?;
         Ok(Box::new(transaction))
+    }
+
+    fn inventory(
+        &self,
+        cwd: &str,
+        after: Option<&str>,
+    ) -> Result<Vec<ConversationWorkspaceRecord>> {
+        let Some(location) = (self.resolve)(cwd, false)? else {
+            return Ok(Vec::new());
+        };
+        let Some(mut database) = crate::private_sqlite::open_existing(
+            &location.runtime_dir,
+            RECORDS,
+            Synchronous::Extra,
+        )?
+        else {
+            return Ok(Vec::new());
+        };
+        let (connection, guard) = database.parts();
+        let tx = connection.transaction()?;
+        ensure_schema(&tx, false)?;
+        let ids = tx.prepare("SELECT request_id FROM conversation_workspaces WHERE request_id > ?1 ORDER BY request_id LIMIT ?2")?
+            .query_map(params![after.unwrap_or(""), (WORKSPACE_INVENTORY_LIMIT + 1) as i64], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut records = Vec::with_capacity(ids.len());
+        for id in ids {
+            records.push(
+                read_record(&tx, &location, &id)?
+                    .context("workspace record missing from inventory")?,
+            );
+        }
+        guard.verify_identity()?;
+        tx.commit()?;
+        Ok(records)
     }
 
     fn get(&self, cwd: &str, request_id: &str) -> Result<Option<ConversationWorkspaceRecord>> {
