@@ -345,6 +345,7 @@ try {
             "scripts/ci-contract-targets.test.mjs",
             "scripts/native-rust-contracts.test.mjs",
             "scripts/native-contract-progress.test.mjs",
+            "scripts/ci-rust-test-profile.test.mjs",
             "scripts/npm-audit-gate.test.mjs"
         )
     }
