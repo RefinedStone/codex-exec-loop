@@ -3,6 +3,7 @@
 // 계획을 준다. 끝난 작업은 알림과 작업 기록에서 되돌린다.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { CommitPlanButtons } from "./CommitPlanButtons";
 import type { GatewayRequest } from "../work/notionHub";
 import { fullTime, type GitRef, type GitWorktree } from "./gitGraph";
 import {
@@ -197,39 +198,7 @@ export function CommitActionsView({ request, cwd, commit, refs, head, worktrees,
   if (nothing) return null;
   return (
     <div className="git-actions">
-      <div className="git-action-buttons">
-        {actions.reset && (
-          <button type="button" disabled={running} onClick={() => plan(actions.reset!.operation, actions.reset!.branch)} data-testid="git-action-reset">
-            여기로 reset ({actions.reset.branch})
-          </button>
-        )}
-        {actions.checkoutBranches.map(({ operation, branch }) => (
-          <button key={branch} type="button" disabled={running} onClick={() => plan(operation, null)} data-testid="git-action-checkout-branch">
-            체크아웃: {branch}
-          </button>
-        ))}
-        {actions.checkoutCommit && (
-          <button type="button" disabled={running} onClick={() => plan(actions.checkoutCommit!, null)} data-testid="git-action-checkout-commit">
-            이 커밋 체크아웃
-          </button>
-        )}
-        {actions.movableBranches.length > 0 && (
-          <select
-            value=""
-            disabled={running}
-            aria-label="이 커밋으로 옮길 브랜치"
-            onChange={(event) => event.target.value && plan({ kind: "move_branch", branch: event.target.value, target: commit }, null)}
-            data-testid="git-action-move"
-          >
-            <option value="">브랜치를 여기로 옮기기…</option>
-            {actions.movableBranches.map((branch) => (
-              <option key={branch} value={branch}>
-                {branch}
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
+      <CommitPlanButtons actions={actions} running={running} commit={commit} plan={plan} />
       {state.phase === "planning" && <p className="muted">{state.title}: 계획을 읽는 중…</p>}
       {state.phase === "failed" && (
         <p className="error" data-testid="git-plan-error">
