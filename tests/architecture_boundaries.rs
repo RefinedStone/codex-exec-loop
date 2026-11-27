@@ -769,6 +769,85 @@ fn issue_automation_guard_rejects_grouped_alias_and_relative_dependency_escapes(
     }
 }
 
+// 상태 모델은 시험에서도 Kernel이나 root 실행 계층을 다시 가져오지 않는다 (#2912).
+fn issue_automation_journal_dependency_violations(source: &str) -> Vec<String> {
+    rust_semantic_references_including_tests(source)
+        .paths
+        .into_iter()
+        .filter(|path| {
+            let segments = path.split("::").collect::<Vec<_>>();
+            let journal = segments.iter().any(|segment| {
+                matches!(*segment, "kernel_event" | "KernelEvent" | "RecordedKernelEvent")
+            });
+            let root_integration = matches!(segments.first(), Some(&"crate" | &"self" | &"super"))
+                && segments.iter().any(|segment| {
+                    matches!(*segment, "application" | "adapter" | "composition" | "core")
+                });
+            journal || root_integration
+        })
+        .collect()
+}
+
+#[test]
+fn issue_automation_domain_cannot_read_kernel_journal_even_in_tests() {
+    let root = repo_root();
+    for required in [
+        "src/domain/issue_automation/timeline.rs",
+        "src/application/service/issue_timeline.rs",
+        "src/application/service/issue_timeline/tests.rs",
+        "src/domain/kernel_event/issue_scope.rs",
+    ] {
+        assert!(root.join(required).is_file(), "missing timeline owner: {required}");
+    }
+    let mut violations = Vec::new();
+    for path in rust_files_for_path(&root.join("src/domain/issue_automation")) {
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        for reference in issue_automation_journal_dependency_violations(&source) {
+            violations.push(format!("{}: {reference}", relative_path(&root, &path)));
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "Automation state and tests must not depend on Kernel/root integration:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn issue_automation_journal_guard_rejects_test_only_and_aliased_back_edges() {
+    for forbidden in [
+        "use crate::domain::kernel_event::KernelEvent;",
+        "use crate::domain::{kernel_event as journal}; type Event = journal::RecordedKernelEvent;",
+        "use crate::domain as domain; use domain::kernel_event as journal; type Event = journal::KernelEvent;",
+        "use super::super::kernel_event::*;",
+        "#[cfg(test)] mod tests { use crate::domain::kernel_event::KernelEvent; }",
+        "#[cfg(test)] use crate::domain::kernel_event as journal;",
+        "struct State; impl State { #[cfg(test)] fn replay(_: crate::domain::kernel_event::KernelEvent) {} }",
+        "trait Replay { #[cfg(test)] fn replay(_: crate::domain::kernel_event::RecordedKernelEvent); }",
+        "pub use crate::application::service::issue_timeline::project_issue_timeline;",
+        "#[cfg(test)] mod tests { use crate::composition::issue_work_execution::AkraIssueWorkExecutionAdapter; }",
+        "use super::super::super::adapter as host;",
+        "use crate as root; type State = root::core::Runtime;",
+    ] {
+        assert!(
+            !issue_automation_journal_dependency_violations(forbidden).is_empty(),
+            "Automation journal back edge escaped: {forbidden}"
+        );
+    }
+    for allowed in [
+        "use crate::domain::issue_work::IssueReference;",
+        "#[cfg(test)] mod tests { use super::*; use crate::domain::issue_automation::execution::IssueExecutionProgress; }",
+        "use core::fmt; struct State;",
+        "// use crate::domain::kernel_event::KernelEvent;\nfn safe() { let _ = \"RecordedKernelEvent\"; }",
+    ] {
+        assert!(
+            issue_automation_journal_dependency_violations(allowed).is_empty(),
+            "safe Automation value dependency rejected: {allowed}"
+        );
+    }
+}
+
 #[test]
 fn cli_and_telegram_enter_application_through_inbound_ports() {
     assert_no_forbidden_references_in_paths(
@@ -14237,9 +14316,20 @@ struct RustSemanticReferences {
 }
 
 fn rust_semantic_references(source: &str) -> RustSemanticReferences {
+    collect_rust_semantic_references(source, false)
+}
+
+fn rust_semantic_references_including_tests(source: &str) -> RustSemanticReferences {
+    collect_rust_semantic_references(source, true)
+}
+
+fn collect_rust_semantic_references(source: &str, include_tests: bool) -> RustSemanticReferences {
     let syntax = syn::parse_file(source)
         .unwrap_or_else(|error| panic!("architecture source must parse as Rust: {error}"));
-    let mut visitor = RustSemanticReferenceVisitor::default();
+    let mut visitor = RustSemanticReferenceVisitor {
+        include_tests,
+        ..Default::default()
+    };
     visitor.visit_file(&syntax);
     expand_semantic_alias_paths(&mut visitor.references.paths, &visitor.aliases);
     visitor.references.paths.sort();
@@ -14313,41 +14403,42 @@ fn expand_semantic_alias_paths(paths: &mut Vec<String>, aliases: &[(String, Stri
 
 #[derive(Default)]
 struct RustSemanticReferenceVisitor {
+    include_tests: bool,
     references: RustSemanticReferences,
     aliases: Vec<(String, String)>,
 }
 
 impl<'ast> Visit<'ast> for RustSemanticReferenceVisitor {
     fn visit_item(&mut self, item: &'ast syn::Item) {
-        if item_is_test_only(item) {
+        if !self.include_tests && item_is_test_only(item) {
             return;
         }
         visit::visit_item(self, item);
     }
 
     fn visit_arm(&mut self, arm: &'ast syn::Arm) {
-        if attributes_are_test_only(&arm.attrs) {
+        if !self.include_tests && attributes_are_test_only(&arm.attrs) {
             return;
         }
         visit::visit_arm(self, arm);
     }
 
     fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
-        if impl_item_attributes(item).is_some_and(attributes_are_test_only) {
+        if !self.include_tests && impl_item_attributes(item).is_some_and(attributes_are_test_only) {
             return;
         }
         visit::visit_impl_item(self, item);
     }
 
     fn visit_trait_item(&mut self, item: &'ast syn::TraitItem) {
-        if trait_item_attributes(item).is_some_and(attributes_are_test_only) {
+        if !self.include_tests && trait_item_attributes(item).is_some_and(attributes_are_test_only) {
             return;
         }
         visit::visit_trait_item(self, item);
     }
 
     fn visit_foreign_item(&mut self, item: &'ast syn::ForeignItem) {
-        if foreign_item_attributes(item).is_some_and(attributes_are_test_only) {
+        if !self.include_tests && foreign_item_attributes(item).is_some_and(attributes_are_test_only) {
             return;
         }
         visit::visit_foreign_item(self, item);
