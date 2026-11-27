@@ -579,7 +579,10 @@ function ThreadConversation({ threadId, onLoadOlder, onDraftTask, onQuote, onFor
       )}
       {menu && <ConversationMenu target={menu} onQuote={onQuote} onFork={onFork} onClose={closeMenu}
         onDraftTask={onDraftTask && ((source) => {
-          if (source.threadId === threadId && menu.taskEpoch === taskEpoch.current) onDraftTask(source);
+          if (source.threadId !== threadId || menu.taskEpoch !== taskEpoch.current) return;
+          // Give the dialog a persistent focus origin before the menu item disappears.
+          scrollRef.current?.focus({ preventScroll: true });
+          onDraftTask(source);
         })}
         onFind={() => {
           useUiStore.setState({ findOpen: true, overlay: null });

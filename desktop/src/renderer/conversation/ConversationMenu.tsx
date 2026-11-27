@@ -49,7 +49,7 @@ export function ConversationMenu({ target, onQuote, onFind, onFork, onDraftTask,
   const position = useFittedMenuPosition(menu, target);
   useEffect(() => {
     const previous = document.activeElement;
-    menu.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    menu.current?.querySelector<HTMLButtonElement>("button")?.focus({ preventScroll: true });
     const close = (event: Event) => {
       if (event instanceof KeyboardEvent ? event.key === "Escape" : !menu.current?.contains(event.target as Node)) onClose();
     };
@@ -78,7 +78,7 @@ export function ConversationMenu({ target, onQuote, onFind, onFork, onDraftTask,
       const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
       const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
         : (current + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
-      buttons[next]?.focus();
+      buttons[next]?.focus({ preventScroll: true });
     }} aria-label="대화 메뉴" style={{ left: position.x, top: position.y }} data-testid="conversation-menu">
       {target.taskSource && onDraftTask && item("선택한 내용으로 작업 만들기", "draft-task-from-selection", () => onDraftTask(target.taskSource!))}
       {selection && onQuote && item("선택한 글 인용", "conversation-menu-quote", () => onQuote(selection))}

@@ -117,12 +117,17 @@ export function TaskEditor({ workspace, source, controller, onClose, onSaved }: 
     }
   }
 
+  const close = () => {
+    dialog.current?.close();
+    onClose();
+  };
+
   return (
     <dialog ref={dialog} className="task-editor-dialog" aria-labelledby="task-editor-title" data-testid="task-editor"
-      onCancel={(event) => { event.preventDefault(); onClose(); }}>
+      onCancel={(event) => { event.preventDefault(); close(); }}>
       <header className="task-editor-header">
         <h2 id="task-editor-title">{taskId ? "작업 편집" : "작업 초안"}</h2>
-        <button type="button" onClick={onClose} aria-label="작업 편집 닫기">닫기</button>
+        <button type="button" onClick={close} aria-label="작업 편집 닫기">닫기</button>
       </header>
       <p className="muted task-editor-workspace">{workspace}</p>
       <label>기존 작업 열기

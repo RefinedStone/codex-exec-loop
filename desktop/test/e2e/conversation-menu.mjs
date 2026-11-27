@@ -68,11 +68,13 @@ try {
   });
   check("the menu stays inside the window", inside);
   await page.keyboard.press("Escape");
-  await page.getByTestId("e2e-link").evaluate((element) => element.remove());
+  await page.evaluate(() => document.querySelector('[data-testid="e2e-link"]')?.remove());
 
   // 본문이 150% 일 때도 메뉴는 누른 자리에 열린다.
   await page.locator(".main-view").evaluate((view) => { view.style.zoom = "1.5"; });
-  const box = await message.locator("p").boundingBox();
+  const paragraph = message.locator("p");
+  await paragraph.scrollIntoViewIfNeeded();
+  const box = await paragraph.boundingBox();
   const click = { x: box.x + 5, y: box.y + 5 };
   await page.mouse.click(click.x, click.y, { button: "right" });
   const zoomed = await page.getByTestId("conversation-menu").evaluate((element) => element.getBoundingClientRect().toJSON());
