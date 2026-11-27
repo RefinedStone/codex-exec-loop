@@ -2,6 +2,7 @@
 // 쓰지 않는다. 스레드를 열고 패널을 열면 그 스레드의 폴더로 그래프를 읽고, 라벨과 선을 그리고, 끝에 가까워지면 다음
 // 쪽을 읽는다. 저장소가 바뀌면 누르지 않아도 다시 읽고, 줄을 고르면 상세를 보이고, 읽지 않은 쪽까지 찾는다 (G2).
 // 고른 커밋에서 작업의 계획을 보고, 실행하고, 되돌린다 (G3). 가짜 Gateway 는 저장소를 고치지 않는다.
+// 패널을 최대화하면 ref 목록, 그래프, 상세가 함께 보이고, 상태 띠가 끝나지 않은 작업을 한 줄로 쓴다 (#2851).
 // 창은 숨긴 채로 돌린다. `AKRA_QA_SCREENSHOT=<png>` 이면 패널을 찍는다.
 import { writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -22,6 +23,8 @@ const NOW = Math.floor(Date.now() / 1000);
 
 // 저장소가 바뀐 뒤이다. 맨 위에 새 커밋이 하나 있고 ref 들의 지문이 다르다.
 let repositoryChanged = false;
+// `akra/git/refs` 가 주는 작업 트리의 끝나지 않은 일이다 (#2851).
+let worktreeProgress = { operationInProgress: null, conflictedFiles: 0 };
 const BACKUP_ONLY_ROW = 6;
 
 // 첫 쪽: 머지 커밋 하나, 두 레인, 그 뒤로 한 줄 이력이다. 번호가 클수록 새 커밋이다.
@@ -150,7 +153,7 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST
   },
   gitRefs() {
     refsRequests += 1;
-    return { repository: true, refsDigest: repositoryChanged ? "d2" : "d1" };
+    return { repository: true, refsDigest: repositoryChanged ? "d2" : "d1", ...worktreeProgress };
   },
   gitCommit(params) {
     commitRequests.push(params.commit);
@@ -322,6 +325,8 @@ try {
   await reset.click();
   await page.getByTestId("git-plan").waitFor({ timeout: 10_000 });
   check("a click asks for a plan and changes nothing", planRequests.length === 1 && planRequests[0].operation.kind === "reset" && planRequests[0].operation.target === sha(total - 3) && executeRequests.length === 0);
+  const planned = page.getByTestId("git-graph-planned");
+  check("the open plan draws the branch at its new commit with a dashed label", (await planned.count()) === 1 && (await planned.innerText()) === "main" && (await rowWith("Fork point").getByTestId("git-graph-planned").count()) === 1 && (await rowWith("Fork point").locator(".git-node-planned").count()) === 1);
   const planLines = (await page.getByTestId("git-plan-line").allInnerTexts()).join("\n");
   check("the plan says how many commits leave the branch and what the backup keeps", planLines.includes("브랜치에서 커밋 4개가 빠집니다.") && planLines.includes("그중 2개는 다른 브랜치와 태그가 닿지 못합니다. 백업 ref 가 지킵니다."));
 
@@ -335,6 +340,7 @@ try {
   check("the second execution carries the expectation of the new plan", executeRequests.length === 2 && executeRequests[1].expectation === "seen-after-change");
   check("the notice names the operation and offers undo", (await page.getByTestId("git-operation-notice").innerText()).includes("reset: main → ") && (await page.getByTestId("git-operation-notice").innerText()).includes("· 완료") && (await page.getByTestId("git-operation-undo").count()) === 1);
   check("the plan closes after the execution", (await page.getByTestId("git-plan").count()) === 0);
+  check("the dashed preview leaves with the plan", (await page.getByTestId("git-graph-planned").count()) === 0);
   await page.getByTestId("git-operation-log").waitFor({ timeout: 10_000 });
   await page.getByTestId("git-operation-log").locator("summary").click();
   check("the operation log lists the operation", (await page.getByTestId("git-operation-entry").count()) === 1);
@@ -348,6 +354,40 @@ try {
   await page.getByTestId("git-operation-notice").filter({ hasText: "되돌리기 (reset" }).waitFor({ timeout: 10_000 });
   check("undo names the operation of the notice", undoRequests.length === 1 && undoRequests[0] === "20261119T010203Z-0000002a");
   check("an undo and an undone operation offer no further undo", (await page.getByTestId("git-operation-undo").count()) === 0 && (await page.getByTestId("git-operation-entry").count()) === 2 && (await page.getByTestId("git-operation-entry").locator("button").count()) === 0);
+
+  // ---- #2851: 상태 띠, 최대화, ref 목록 ----
+  check("the narrow panel has no ref list", (await page.getByTestId("git-ref-list").count()) === 0 && (await page.getByTestId("right-panel").getAttribute("data-maximized")) === "false");
+  check("no status strip while nothing is unfinished", (await page.getByTestId("git-status-strip").count()) === 0);
+  worktreeProgress = { operationInProgress: "rebase", conflictedFiles: 2 };
+  const strip = page.getByTestId("git-status-strip");
+  await strip.waitFor({ timeout: 10_000 });
+  check("the status strip writes the unfinished operation and its conflicts in one line",
+    (await strip.innerText()) === "rebase 진행 중 · 충돌 파일 2개" && (await strip.evaluate((element) => element.getBoundingClientRect().height <= 28)));
+
+  await page.getByTestId("graph-maximize").click();
+  const refList = page.getByTestId("git-ref-list");
+  await refList.waitFor({ timeout: 10_000 });
+  const refListText = await refList.innerText();
+  check("the ref list groups the local, remote, tag, backup and worktree refs", ["로컬", "원격", "태그", "백업", "worktree", "origin/topic", "v1.0", "main/op-1"].every((text) => refListText.includes(text)));
+  await refList.getByTestId("git-ref-item").filter({ hasText: "origin/topic" }).click();
+  await page.getByTestId("git-commit-message").filter({ hasText: "Topic work" }).waitFor({ timeout: 10_000 });
+  const box = async (testId) => page.getByTestId(testId).boundingBox();
+  const [listBox, graphBox, detailBox, stripBox] = [await box("git-ref-list"), await box("git-graph-scroll"), await box("git-commit-detail"), await box("git-status-strip")];
+  check("maximized: the ref list is left of the graph and the detail is below it, all with the status strip",
+    (await page.getByTestId("right-panel").getAttribute("data-maximized")) === "true"
+      && listBox && graphBox && detailBox && stripBox
+      && listBox.x + listBox.width <= graphBox.x && detailBox.y >= graphBox.y + graphBox.height - 1 && stripBox.y < graphBox.y
+      && (await rowWith("Topic work").getAttribute("aria-selected")) === "true");
+  if (process.env.AKRA_QA_SCREENSHOT) {
+    await capture();
+    await page.waitForTimeout(300);
+    writeFileSync(process.env.AKRA_QA_SCREENSHOT.replace(/\.png$/, "-maximized.png"), Buffer.from(await capture(), "base64"));
+  }
+  await page.getByTestId("graph-restore").click();
+  check("restoring the panel removes the ref list and keeps the graph", (await page.getByTestId("git-ref-list").count()) === 0 && (await page.getByTestId("git-graph-row").count()) > 0);
+  worktreeProgress = { operationInProgress: null, conflictedFiles: 0 };
+  await strip.waitFor({ state: "detached", timeout: 10_000 });
+  check("the status strip leaves when the work is finished", (await strip.count()) === 0);
   check("the panel never starts a turn", !gateway.receivedMethods.includes("turn/start"));
 } catch (error) {
   check(`flow finished without error (${String(error).split("\n")[0]})`, false);

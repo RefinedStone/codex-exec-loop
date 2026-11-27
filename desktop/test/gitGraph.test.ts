@@ -6,7 +6,7 @@ import {
   fetchCommitDetail,
   fetchGraphPage,
   fetchGraphRows,
-  fetchRefsDigest,
+  fetchRefsState,
   findRows,
   GIT_COMMIT_METHOD,
   GIT_GRAPH_METHOD,
@@ -22,6 +22,7 @@ import {
   scrollTopAfterRowsChange,
   threadBadges,
   threadIdsInWorktreeOf,
+  unfinishedWork,
   worktreeOf,
 } from "../src/renderer/git/gitGraph";
 import { ROW_HEIGHT } from "../src/renderer/git/graphGeometry";
@@ -181,12 +182,17 @@ describe("refs digest and commit detail", () => {
       calls.push({ method, params });
       return (method === GIT_REFS_METHOD ? { repository: true, refsDigest: "d2" } : { commit: null }) as T;
     };
-    expect(await fetchRefsDigest(request, "/repo")).toBe("d2");
+    expect(await fetchRefsState(request, "/repo")).toEqual({ refsDigest: "d2", progress: { operation: null, conflictedFiles: 0 } });
     expect(await fetchCommitDetail(request, "/repo", "abc1234")).toBeNull();
     expect(calls).toEqual([
       { method: GIT_REFS_METHOD, params: { cwd: "/repo" } },
       { method: GIT_COMMIT_METHOD, params: { cwd: "/repo", commit: "abc1234" } },
     ]);
+  });
+
+  it("reads the unfinished work of the worktree", async () => {
+    const request = async <T>(): Promise<T> => ({ repository: true, refsDigest: "d", operationInProgress: "rebase", conflictedFiles: 2 }) as T;
+    expect((await fetchRefsState(request, "/repo")).progress).toEqual({ operation: "rebase", conflictedFiles: 2 });
   });
 
   it("reads a commit detail and refuses an unknown shape", () => {
@@ -195,6 +201,18 @@ describe("refs digest and commit detail", () => {
     expect(commitDetailFrom({ commit: { id: "abc", diffTooLarge: true } })).toMatchObject({ diff: "", diffTooLarge: true, parents: [] });
     expect(() => commitDetailFrom({})).toThrow();
     expect(() => commitDetailFrom({ commit: { message: "no id" } })).toThrow();
+  });
+});
+
+describe("unfinishedWork", () => {
+  const branch: GitRef = { name: "main", kind: "local_branch", target: "a".repeat(40), head: true };
+  it("is empty when nothing is unfinished", () => {
+    expect(unfinishedWork({ operation: null, conflictedFiles: 0 }, [branch], branch.target)).toEqual([]);
+    expect(unfinishedWork(null, [], null)).toEqual([]);
+  });
+
+  it("names the operation, the conflicts, and a HEAD without a branch", () => {
+    expect(unfinishedWork({ operation: "rebase", conflictedFiles: 2 }, [{ ...branch, head: false }], "b".repeat(40))).toEqual(["rebase 진행 중", "충돌 파일 2개", "HEAD 분리 (bbbbbbb)"]);
   });
 });
 

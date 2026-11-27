@@ -270,7 +270,7 @@ const MAX_PANEL_WIDTH = 900;
 function RightPanel({ panel, maximized, delegationEnabled, enabledExtensions, children }: { panel: PanelId; maximized: boolean; enabledExtensions: string[]; delegationEnabled: boolean; children: React.ReactNode }) {
   const [width, startResize] = useResizableWidth(520, MIN_PANEL_WIDTH, MAX_PANEL_WIDTH);
   const extension = panelForExtension(panel);
-  const maximizeLabel = extension?.label ?? (panel === "delegation" ? "위임 패널" : "이슈 패널");
+  const maximizeLabel = extension?.label ?? (panel === "delegation" ? "위임 패널" : panel === "graph" ? "커밋 그래프" : "이슈 패널");
   const zoom = useZoomFactor(panelZoomScope(panel));
   return (
     <aside className="right-panel" style={maximized ? undefined : { width }} data-testid="right-panel" data-maximized={maximized}>
@@ -284,7 +284,7 @@ function RightPanel({ panel, maximized, delegationEnabled, enabledExtensions, ch
             </button>
           ))}
         </nav>
-        {(extension || panel === "issues" || panel === "delegation") && (
+        {(extension || panel === "issues" || panel === "delegation" || panel === "graph") && (
           <button type="button" className="icon-button" title={`${maximizeLabel} ${maximized ? "복원" : "최대화"}`} aria-label={`${maximizeLabel} ${maximized ? "복원" : "최대화"}`} aria-expanded={maximized} onClick={() => useUiStore.setState({ panelMaximized: !maximized })} data-testid={`${panel}-${maximized ? "restore" : "maximize"}`}>
             <Icon name={maximized ? "panel" : "popOut"} />
           </button>
@@ -949,7 +949,17 @@ export function App() {
                 call={registeredCall} epoch={selectedExtensions.epoch} scopeKey={`${endpoint}:${selectedExtensions.kernel}:${selectedExtension?.scope === "local_user" ? localExtensions.generation : "repository"}`}
                 workspace={extensionWorkspace} threadId={view === "thread" ? openThreadId : null} enabled={!selectedExtension || selectedExtensions.enabledIds.includes(selectedExtension.id)}
                 skills={{ cwd: openCwd ?? null, connected, skills: window.akra.skills, listCodexSkills, onSkillsChanged }} />}
-              {panel === "graph" && <GitGraphPanel request={gatewayRequest} cwd={openCwd ?? null} onOpenThread={openThread} />}
+              {panel === "graph" && (
+                <GitGraphPanel
+                  request={gatewayRequest}
+                  cwd={openCwd ?? null}
+                  maximized={panelMaximized}
+                  // 변경 패널이 읽은 값을 쓴다. 같은 폴더일 때만이다.
+                  changes={tree.cwd === openCwd && tree.panel.phase === "loaded" && tree.panel.result.ok ? tree.panel.result.files.length : null}
+                  onOpenChanges={() => openPanel("review")}
+                  onOpenThread={openThread}
+                />
+              )}
               {panel === "kernel" && <KernelPanel onRefresh={async () => session.current?.refreshKernel()}
                 onSetParallelEnabled={async (enabled) => session.current?.setParallelEnabled(enabled)} onOpenThread={openThread}
                 onEditTasks={() => openTaskEditor()}

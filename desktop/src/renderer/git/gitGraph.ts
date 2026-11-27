@@ -218,10 +218,33 @@ export async function fetchGraphRows(request: GatewayRequest, cwd: string, atLea
   return loaded;
 }
 
-/** ref 들의 지금 지문이다. 저장소가 아니면 `null` 이다. */
-export async function fetchRefsDigest(request: GatewayRequest, cwd: string): Promise<string | null> {
+/** 작업 트리의 끝나지 않은 일이다. 상태 띠에 쓴다. */
+export interface GitWorktreeProgress {
+  /** `merge`, `rebase`, `cherry-pick`, `revert`, `bisect` 이다. */
+  operation: string | null;
+  conflictedFiles: number;
+}
+
+/** `akra/git/refs` 의 답이다. 저장소가 아니면 지문이 `null` 이다. 옛 Gateway 는 끝나지 않은 일을 주지 않는다. */
+export async function fetchRefsState(request: GatewayRequest, cwd: string): Promise<{ refsDigest: string | null; progress: GitWorktreeProgress }> {
   const state = (await request(GIT_REFS_METHOD, { cwd })) as Record<string, unknown> | null;
-  return text(state?.refsDigest) ?? null;
+  const conflicted = state?.conflictedFiles;
+  return {
+    refsDigest: text(state?.refsDigest) ?? null,
+    progress: { operation: text(state?.operationInProgress) ?? null, conflictedFiles: Number.isInteger(conflicted) && (conflicted as number) > 0 ? (conflicted as number) : 0 },
+  };
+}
+
+/**
+ * 상태 띠의 글들이다: 끝나지 않은 작업, 충돌, 브랜치 없는 HEAD. 끝나지 않은 일이 없으면 빈 목록이다. 화면은 한 줄로
+ * 잇는다.
+ */
+export function unfinishedWork(progress: GitWorktreeProgress | null, refs: readonly GitRef[], head: string | null): string[] {
+  const parts: string[] = [];
+  if (progress?.operation) parts.push(`${progress.operation} 진행 중`);
+  if (progress && progress.conflictedFiles > 0) parts.push(`충돌 파일 ${progress.conflictedFiles}개`);
+  if (head && !refs.some((ref) => ref.head)) parts.push(`HEAD 분리 (${shortSha(head)})`);
+  return parts;
 }
 
 /** Gateway 의 커밋 상세를 읽는다. 그 커밋이 없으면 `null` 이다. */
