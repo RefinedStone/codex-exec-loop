@@ -6,6 +6,7 @@ import type { AkraBridge, ConnectionState } from "../src/shared/bridge";
 import { BROWSER_TOOL_NAMES } from "../src/shared/browserAgent";
 import { EMPTY_KERNEL_VIEW } from "../src/renderer/kernel/kernelConnection";
 import { DesktopSession, FORK_RESPONSE_TIMEOUT_MS, forkBlockReason } from "../src/renderer/session/desktopSession";
+import { ForkOutcomeJournal } from "../src/renderer/session/forkOutcomeJournal";
 import { type DesktopState, mergeWorkspaceFolders, removeWorkspaceThread, renameWorkspaceThread, type SessionStore } from "../src/renderer/session/desktopStore";
 import type { Transcript } from "../src/renderer/conversation/transcript";
 
@@ -16,7 +17,7 @@ interface Sent {
   result?: unknown;
 }
 
-function harness(readOnly = false, scheduler: (callback: () => void) => void = (callback) => callback()) {
+function harness(readOnly = false, scheduler: (callback: () => void) => void = (callback) => callback(), journal?: ForkOutcomeJournal) {
   const sent: Sent[] = [];
   const requestListeners = new Set<(message: Sent) => void>();
   let readyCalls = 0;
@@ -160,7 +161,7 @@ function harness(readOnly = false, scheduler: (callback: () => void) => void = (
     applyDotLive: (live) => Object.assign(state, { lastDotLive: live }),
     getKernel: () => state.kernel ?? EMPTY_KERNEL_VIEW,
   };
-  const session = new DesktopSession(bridge, store, "test", scheduler, readOnly);
+  const session = new DesktopSession(bridge, store, "test", scheduler, readOnly, journal);
   session.start();
   const receive = (message: object) => messageListeners.forEach((listener) => listener(JSON.stringify(message)));
   /** 마지막으로 보낸 요청에 결과로 답한다. */
@@ -876,8 +877,8 @@ describe("forking a conversation (#2625)", () => {
   const sentFor = (sent: Sent[], threadId: string) => sent.filter((message) => message.params?.threadId === threadId).map((message) => message.method);
 
   /** 다른 Codex 앱이 쓰기 잠금을 가진 "locked" 를 읽기 전용으로 연다. */
-  async function openLocked() {
-    const h = harness();
+  async function openLocked(journal?: ForkOutcomeJournal) {
+    const h = harness(false, undefined, journal);
     h.emitState("connected");
     const opened = h.session.openThread("locked");
     await flush();
@@ -1088,7 +1089,8 @@ describe("forking a conversation (#2625)", () => {
       expect(sentFor(h.sent, "child")).toEqual(["thread/unsubscribe"]);
       expect(h.sent.filter((message) => message.method === "thread/fork")).toHaveLength(1);
 
-      // After the user confirms, the next fork is a new request, not the lost one.
+      // The late definitive success resolves only that attempt.
+      expect(h.session.forkOutcomeUnknown("locked")).toBe(false);
       const retry = h.session.forkThread("locked", () => false);
       expect(retry).not.toBe(forking);
       await answerBoundary(h, [turn("t1")], settle);
@@ -1100,6 +1102,45 @@ describe("forking a conversation (#2625)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps the original uncertain fork after a separately refused retry and renderer restart", async () => {
+    const data = new Map<string, string>();
+    const storage = {
+      get length() { return data.size; },
+      key: (index: number) => [...data.keys()][index] ?? null,
+      getItem: (key: string) => data.get(key) ?? null,
+      setItem: (key: string, value: string) => { data.set(key, value); },
+      removeItem: (key: string) => { data.delete(key); },
+    };
+    const h = await openLocked(new ForkOutcomeJournal(() => storage));
+    const first = h.session.forkThread("locked", () => false);
+    await answerBoundary(h, [turn("t1")]);
+    h.receive({ jsonrpc: "2.0", id: lastId(h.sent, "thread/fork"), error: { code: -32603, message: "internal error" } });
+    await expect(first).resolves.toMatchObject({ kind: "unknown" });
+    const approved = h.session.forkOutcomeSnapshot("locked")!;
+    expect(approved).not.toBe("[]");
+    const retry = h.session.forkThread("locked", () => false, approved);
+    await answerBoundary(h, [turn("t1")]);
+    h.receive({ jsonrpc: "2.0", id: lastId(h.sent, "thread/fork"), error: { code: -32600, message: "pre-execution refusal" } });
+    await expect(retry).resolves.toMatchObject({ kind: "refused" });
+    const restarted = await openLocked(new ForkOutcomeJournal(() => storage));
+    expect(restarted.session.forkOutcomeSnapshot("locked")).toBe(approved);
+    expect(restarted.session.forkOutcomeUnknown("locked")).toBe(true);
+  });
+
+  it("does not send when a different window adds an attempt during boundary reads", async () => {
+    const journal = new ForkOutcomeJournal();
+    const h = await openLocked(journal);
+    const approved = h.session.forkOutcomeSnapshot("locked")!;
+    const forking = h.session.forkThread("locked", () => false, approved);
+    await flush();
+    expect(h.sent.at(-1)?.method).toBe("thread/read");
+    expect(await journal.begin("locked", approved)).not.toBeNull();
+    await answerBoundary(h, [turn("t1")]);
+    await expect(forking).resolves.toMatchObject({ kind: "refused" });
+    expect(h.sent.some((message) => message.method === "thread/fork")).toBe(false);
+    expect(h.session.forkOutcomeUnknown("locked")).toBe(true);
   });
 
   it("refuses without creating anything when the server rejects the fork or no turn has finished", async () => {
