@@ -6,6 +6,25 @@ cd "${repo_root}"
 
 target="x86_64-pc-windows-msvc"
 
+case "${1:-}" in
+  --changed)
+    shift
+    exec node scripts/agent-plan.mjs --run --target "${target}" "$@"
+    ;;
+  --full)
+    shift
+    if [[ "$#" -ne 0 ]]; then
+      printf 'The full portable gate does not accept selective-plan arguments.\n' >&2
+      exit 2
+    fi
+    ;;
+  "") ;;
+  *)
+    printf 'Usage: check_windows_portable.sh [--full | --changed <agent-plan arguments>]\n' >&2
+    exit 2
+    ;;
+esac
+
 # Keep this CI path under Git Bash: clean-host ACL fixtures depend on the launcher.
 # Check validates production targets; the runner builds the lib test artifact only once.
 cargo check --workspace --locked --all-features --lib --bins --target "${target}"
