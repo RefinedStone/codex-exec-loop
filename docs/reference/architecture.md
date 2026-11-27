@@ -804,9 +804,11 @@ When the repository lock is held by a kernel that the Gateway runs, the TUI does
 K6-2a): `production::attach_native_tui_to_gateway_kernel` checks that the holder is not a TUI and that the
 Gateway answers a `sessions` query for the workspace, then the TUI runs on
 `composition::gateway_kernel_client_runtime::GatewayKernelClientRuntime`, a `NativeClientPort` that
-holds no kernel. Its thread stays attached (`gateway_kernel_client::watch_kernel_values`), reads
-`sessions`, `auto_follow`, and `thread_activity`, follows their events, reads them again after
-`resync`, and maps them to the core projections the TUI already draws. Core inputs other than the
+holds no kernel. Its thread stays attached (`gateway_kernel_client::watch_kernel_values`), sends
+the read-only `load_sessions` command on attach and catalog requests, reads `sessions`, `auto_follow`,
+and `thread_activity`, follows their events, and reads them again after `resync`. Initial and subsequent
+synchronization waits are bounded; healthy idle listening is not. The runtime projects connection
+readiness only after synchronization, and disconnect invalidates the ready state. Core inputs other than the
 startup check and the session list read do nothing in this slice; the TUI locks those screens and actions
 (`InlineShellCommandAvailabilityReason::KernelProtocolMissing`, `KernelClientReadsOnly`).
 

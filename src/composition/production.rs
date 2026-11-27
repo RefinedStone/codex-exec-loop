@@ -918,6 +918,7 @@ pub(crate) fn attach_native_tui_to_gateway_kernel(
         workspace.clone(),
         TUI_KERNEL_CLIENT_NAME.to_string(),
     )
+    .with_request_timeout(std::time::Duration::from_secs(10))
     .request(
         "akra/kernel/query",
         serde_json::json!({"query": {"type": "sessions"}}),
