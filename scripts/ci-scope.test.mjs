@@ -461,6 +461,19 @@ test("the fast gate waits for policy checks but leaves long jobs post-admission"
   );
 });
 
+test("selective Rust replaces full test jobs only after exact row reconciliation succeeds", () => {
+  const plan = { rust: true, portable: true, selectedRust: true };
+  const results = { scope: "success", rust_lint: "success", rust_tests: "skipped", portable_native: "skipped", selected_rust_gate: "success" };
+  assert.deepEqual(evaluateGate(plan, results), []);
+  for (const result of [undefined, "skipped", "cancelled", "failure", "in_progress"]) {
+    assert.deepEqual(evaluateGate(plan, { ...results, selected_rust_gate: result }), [{ job: "selected_rust_gate", result }]);
+  }
+  assert.deepEqual(evaluateGate({ ...plan, selectedRust: false }, results), [
+    { job: "rust_tests", result: "skipped" }, { job: "portable_native", result: "skipped" },
+  ]);
+  assert.deepEqual(evaluateGate(plan, { ...results, rust_lint: "failure" }), [{ job: "rust_lint", result: "failure" }]);
+});
+
 test("executable client validation tools under docs select the Node gate", () => {
   for (const file of ["proxy_ws_check.mjs", "multi_client_check.py", "client_count_validation.test.mjs"]) {
     const path = "docs/plan/17-akra-desktop/scripts/" + file;
@@ -523,3 +536,4 @@ test("workspace member source changes retain Rust and portable validation", () =
   assert.equal(plan.portable, true);
   assert.equal(plan.docs_only, false);
 });
+
