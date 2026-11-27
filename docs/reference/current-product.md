@@ -78,7 +78,10 @@ kernel audit records.
 
 An idle kernel that only this CLI started stops when the command ends. A kernel with remaining
 work or confirmed Gated/Auto automation stays up. The session list is not persisted between
-kernel instances, so `load_sessions` helps while that kernel remains running. The automatic follow-up
+kernel instances. A `submit_prompt` for a thread that the kernel does not know makes the kernel read
+the first page of the session list from the app-server before it decides, and the kernel stays up
+during that read. A CLI prompt to a thread from that page is therefore accepted even when no other
+client keeps the kernel up. The automatic follow-up
 settings are kept: the kernel records them (`auto_follow_configured`) and the next Gateway kernel
 restores the last record.
 
@@ -1073,8 +1076,11 @@ Akra Desktop (`desktop/`) runs from source as a development build; it has no pac
   their record is in the log (the latest 10,000 records), also across a kernel restart that wrote its
   records; a crash can lose the latest keys. A kernel without a log refuses a command with a key
   (`-32015`). A `submit_prompt` that the kernel refuses before preparation (`busy`,
-  `preparation_active`, `unknown_thread`, `foreign_workspace`, `parallel_mode`, `parallel_mode_unknown`)
-  now also answers with `rejection` and `state: rejected`. The session catalog lists the threads of
+  `preparation_active`, `foreign_workspace`, `parallel_mode`, `parallel_mode_unknown`)
+  now also answers with `rejection` and `state: rejected`. A thread that the kernel does not know is
+  not refused at once: the command is accepted, the kernel reads the session list again, and then
+  decides. If the thread is still not in the list, the operation ends as `failed` with the reason
+  `unknown_thread` (its `next` is `ask_user`), and the `prompt_submission` event reports the refusal. The session catalog lists the threads of
   every repository; `foreign_workspace` refuses a thread whose catalog `cwd` is outside the client's
   workspace and outside its parallel pool (`<name>-akra-worktrees/<hash>/akra-pool`), so no planning task of this kernel is made for it. `load_sessions` and `refresh_planning` are not recorded and
   have no receipt. While a client is attached the kernel refreshes the parallel supervisor snapshot, and the
