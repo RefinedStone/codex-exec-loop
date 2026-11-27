@@ -78,6 +78,35 @@ pub(crate) fn json_payload_contains(value: &Value, needle: &str) -> bool {
     }
 }
 
+/// Opt-in native fixture phase timings; no command arguments, paths, or environment values are logged.
+/// Spans can be nested or run on separate threads, so their totals are not additive wall time.
+pub(crate) struct NativeTestTimer {
+    label: &'static str,
+    started: Option<std::time::Instant>,
+}
+
+impl NativeTestTimer {
+    pub(crate) fn new(label: &'static str) -> Self {
+        Self {
+            label,
+            started: std::env::var_os("AKRA_NATIVE_TEST_TIMINGS")
+                .map(|_| std::time::Instant::now()),
+        }
+    }
+}
+
+impl Drop for NativeTestTimer {
+    fn drop(&mut self) {
+        if let Some(started) = self.started {
+            eprintln!(
+                "[native-profile] {} {}",
+                self.label,
+                started.elapsed().as_micros()
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,34 +176,5 @@ mod tests {
                 ("GIT_CONFIG_VALUE_0".to_string(), "false".to_string()),
             ]
         );
-    }
-}
-
-/// Opt-in native fixture phase timings; no command arguments, paths, or environment values are logged.
-/// Spans can be nested or run on separate threads, so their totals are not additive wall time.
-pub(crate) struct NativeTestTimer {
-    label: &'static str,
-    started: Option<std::time::Instant>,
-}
-
-impl NativeTestTimer {
-    pub(crate) fn new(label: &'static str) -> Self {
-        Self {
-            label,
-            started: std::env::var_os("AKRA_NATIVE_TEST_TIMINGS")
-                .map(|_| std::time::Instant::now()),
-        }
-    }
-}
-
-impl Drop for NativeTestTimer {
-    fn drop(&mut self) {
-        if let Some(started) = self.started {
-            eprintln!(
-                "[native-profile] {} {}",
-                self.label,
-                started.elapsed().as_micros()
-            );
-        }
     }
 }
