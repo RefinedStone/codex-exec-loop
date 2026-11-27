@@ -7,6 +7,24 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) const ISSUE_DRAFT_REVIEW_FEATURE: &str = "issue_draft_review";
 pub(crate) const ISSUE_ASSESSMENT_FEATURE: &str = "issue_assessment";
+pub(crate) const MAX_DELEGATION_DEPTH: u32 = 1;
+
+/// Authentication for a child submission. Never project the token into a job or log.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DelegationParentCallback {
+    pub id: String,
+    pub token: String,
+}
+
+impl std::fmt::Debug for DelegationParentCallback {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DelegationParentCallback")
+            .field("id", &self.id)
+            .field("token", &"<redacted>")
+            .finish()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -60,6 +78,10 @@ pub struct Delegation {
     pub caller: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    #[serde(default)]
+    pub depth: u32,
     pub state: State,
     pub delivery: Delivery,
     pub phase: Phase,

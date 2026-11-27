@@ -1184,6 +1184,8 @@ pub enum KernelCommand {
         session: crate::domain::delegation::ChatSession,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         task_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent_callback: Option<crate::domain::delegation::DelegationParentCallback>,
     },
     CancelDelegation {
         id: String,
@@ -1356,6 +1358,7 @@ pub enum KernelCommandInput {
         idempotency_key: String,
         session: crate::domain::delegation::ChatSession,
         task_id: Option<String>,
+        parent_callback: Option<crate::domain::delegation::DelegationParentCallback>,
     },
     CancelDelegation {
         id: String,
@@ -1789,7 +1792,19 @@ impl KernelCommand {
                 idempotency_key,
                 session,
                 task_id,
+                parent_callback,
             } => {
+                if let Some(callback) = &parent_callback {
+                    if callback.id.trim().is_empty()
+                        || callback.id.len() > 128
+                        || callback.token.len() != 64
+                        || !callback.token.bytes().all(|b| b.is_ascii_hexdigit())
+                    {
+                        return Err(KernelProtocolError::invalid_params(
+                            "invalid delegation parent callback",
+                        ));
+                    }
+                }
                 if let Some(task_id) = &task_id {
                     crate::domain::planning::evidence::validate_evidence_identifier(task_id)
                         .map_err(|_| {
@@ -1806,6 +1821,7 @@ impl KernelCommand {
                     idempotency_key,
                     session,
                     task_id,
+                    parent_callback,
                 });
             }
             Self::CancelDelegation { id } => {
