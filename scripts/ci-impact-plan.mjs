@@ -9,6 +9,7 @@ const SCHEMA = 1;
 const PLATFORMS = new Set(["linux", "macos", "windows"]);
 const LIB_KINDS = new Set(["lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"]);
 const OTHER_KINDS = new Set(["bin", "test", "bench", "example", "custom-build"]);
+const MANIFEST_INPUT = /(?:^|\/)Cargo\.(?:toml|lock)$/;
 const INFRASTRUCTURE = /^(?:Cargo\.(?:toml|lock)|rust-toolchain(?:\.toml)?|build\.rs|AGENTS\.md|(?:deny|clippy)\.toml)$|^(?:\.cargo|\.github|scripts)\//;
 
 function object(value) {
@@ -442,7 +443,7 @@ export function createValidationPlan(request) {
   for (const path of paths) {
     const legacy = classifyChangedPaths([path]);
     if (!legacy.full && legacy.node) nodeRequired = true;
-    if (INFRASTRUCTURE.test(path) || snapshots.some(([, value]) => value.ownership.fullInputs.some((pattern) => matches(path, pattern)))) {
+    if (MANIFEST_INPUT.test(path) || INFRASTRUCTURE.test(path) || snapshots.some(([, value]) => value.ownership.fullInputs.some((pattern) => matches(path, pattern)))) {
       fullReasons.add("global-input:" + path);
     }
   }
