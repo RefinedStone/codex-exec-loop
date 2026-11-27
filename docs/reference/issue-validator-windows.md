@@ -47,6 +47,16 @@ Windows x64에서 SHA-256으로 승인한 **AMD64 PE32+ Windows subsystem(2) 실
 - child가 자기 profile에 일반 payload를 쓴 뒤 정리되는 것을 확인한다. 외부 disposable 디렉터리를 가리키는 junction 생성은 같은 fixture·버퍼·최소 FILE_WRITE_ATTRIBUTES 권한의 host 제어군에서 성공했다. LPAC에서는 해당 디렉터리 open은 성공하고 **FSCTL_SET_REPARSE_POINT가 ERROR_ACCESS_DENIED(5)**로 거절됐다. profile/stage 부재와 외부 canary의 바이트·volume/file-index 보존을 확인했다. 성공한 junction을 삭제했다고 주장하지 않으며, 거절을 피하려고 권한을 넓히지 않는다. [Mount-point FSCTL 규약](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fsa/4aeefef8-92c3-4abc-af7a-a610caf8a165)을 따른다.
 - 기존 `gate_issue_publish_with_code_validators`와 실제 production runner를 연결해 Passed만 허용하고 Rejected/Crashed/TimedOut/HashMismatch/IsolationUnavailable을 게시 차단으로 확인한다.
 
+2026-11-27에 `prerelease@fa72e69a868826e6b61ec0f935260d1e5b9344a8`의 Windows runner와 fixture를
+변경하지 않은 상태에서 Windows `10.0.26200` x64, Rust 1.95.0으로 native 모듈을 다시 실행했다.
+PowerShell Full의 해당 selector는 **12 passed / 0 failed / 0 ignored**, 1.80초였다.
+`native_windows_validator_user_cancel_ends_the_owned_job_and_cleans_up`도 실제 LPAC 실행과
+취소 뒤 owned stage/profile 정리까지 통과했다. 이 모듈 결과와 전체 Full 결과는 구분한다.
+전체 실행 중 Propose fixture의 플랫폼별 lease 파일명 오류를 발견한 기록은
+[Propose 검증 기록](../validation/issue-automation-propose-flow.md)에 있다.
+기존 PowerShell inventory에만 있던 Windows validator selector는 CI Bash inventory에도 추가하고
+두 경로에서 정확히 한 번 포함되는지 정책 시험으로 검사한다.
+
 초기 profileless 생성은 오류 2, profile만 만든 제한 환경은 오류 203을 반환했다. profile과 필수 known-folder 환경을 준비한 뒤에도 console subsystem fixture는 초기화에 실패했다. 최종 지원 프로필은 실제 통과한 headless Windows-subsystem PE로 제한하며, 이 조사 과정에서 network/registry capability나 Win32k 예외를 production에 추가하지 않았다.
 
 ## 사용자 취소
@@ -57,7 +67,7 @@ Windows x64에서 SHA-256으로 승인한 **AMD64 PE32+ Windows subsystem(2) 실
 - 서비스는 검증기 실행 뒤 결과를 확정한다. 확정 전에 받은 취소는 늦게 끝난 성공을 포함한 모든 결과를 버리고 `IssuePublishBlocked::Cancelled`로 게시를 막는다. 필수·선택 검증기 모두 같다. 미리보기 오류는 `{ field: "code_validator", kind: "cancelled" }`이다.
 - 결과 확정 뒤의 취소와 모르는 ID는 `{ cancelled: false }`이다. 이미 확정한 게시의 원격 쓰기는 이 취소로 멈추지 않는다.
 - 취소한 검증의 남은 검증기는 시작하지 않는다. 격리 없는 fallback은 없다.
-- `validationId`가 없는 요청은 취소할 수 없다. Desktop 화면은 아직 `validationId`를 보내지 않는다 (제안). 같은 ID가 실행 중이면 새 게시 요청을 거절한다.
+- `validationId`가 없는 요청은 취소할 수 없다. Desktop의 이슈 수정·신규 생성 화면은 게시 요청마다 ID를 보내며, 진행 중인 요청에 「검증 취소」 단추를 표시한다 (#2858 / PR #2899). 같은 ID가 실행 중이면 새 게시 요청을 거절한다.
 
 일반 interpreter 지원, WSL 우회, 기존 Vault helper 승인 권한 재사용은 포함하지 않는다. Linux/Windows 실제 호스트 근거(#2703)는 이 문서의 실행 기록 범위만 주장한다. 취소 경로의 실제 Windows 실행은 native gate의 `native_windows_validator_user_cancel_ends_the_owned_job_and_cleans_up`이 맡는다.
 

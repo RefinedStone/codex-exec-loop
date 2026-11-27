@@ -59,12 +59,39 @@ impl FlowPolicySource {
     }
 }
 
+#[cfg(unix)]
 fn protect_policy_path(path: &Path, directory: bool) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(
         path,
         fs::Permissions::from_mode(if directory { 0o700 } else { 0o600 }),
     )?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn protect_policy_path(path: &Path, directory: bool) -> Result<()> {
+    use crate::private_fs::{
+        WINDOWS_FILE_FLAG_BACKUP_SEMANTICS, WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT,
+        WINDOWS_FILE_SHARE_ALL, WINDOWS_GENERIC_READ, WINDOWS_READ_CONTROL, WINDOWS_WRITE_DAC,
+        set_windows_private_acl, validate_windows_private_owner_and_acl,
+    };
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let flags = WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT
+        | if directory {
+            WINDOWS_FILE_FLAG_BACKUP_SEMANTICS
+        } else {
+            0
+        };
+    let handle = fs::OpenOptions::new()
+        .read(true)
+        .access_mode(WINDOWS_GENERIC_READ | WINDOWS_READ_CONTROL | WINDOWS_WRITE_DAC)
+        .share_mode(WINDOWS_FILE_SHARE_ALL)
+        .custom_flags(flags)
+        .open(path)?;
+    set_windows_private_acl(&handle, directory)?;
+    validate_windows_private_owner_and_acl(path, &handle)?;
     Ok(())
 }
 

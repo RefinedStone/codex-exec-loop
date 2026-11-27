@@ -2377,9 +2377,9 @@ fn test_parallel_runtime() -> GitParallelModeRuntimeAdapter {
 pub(crate) mod automatic_verification;
 mod distributor;
 // This suite keeps the real Git, SQLite and publication persistence boundaries.
-// The actual private persistence lease is Unix-only, so verify the coupled flow
-// on platforms that support that lease instead of replacing it with a fake.
-#[cfg(unix)]
+// Both supported platforms keep their production publication lease and private
+// persistence; only the fixture policy ACL setup differs by platform.
+#[cfg(any(unix, windows))]
 mod issue_automation_flow;
 mod orchestrator_loop;
 mod pool;

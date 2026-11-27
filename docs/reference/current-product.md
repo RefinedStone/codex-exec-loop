@@ -632,13 +632,16 @@ workspace, connection-generation, selection, and stale-response fences.
 The IA4-5 ([#2555](https://github.com/RefinedStone/codex-exec-loop/issues/2555)) regression harness
 connects real collection, decision, coordinator, feedback, and execution services to on-disk SQLite,
 slot worktrees, and a local bare Git remote. Source/provider responses, worker completion, and the
-verified-human capability are supplied by fixtures. All seven coupled-flow scenarios passed in
-Linux; they do not establish a completed live workflow.
+verified-human capability are supplied by fixtures. The original seven coupled-flow scenarios passed
+in Linux; those results do not establish a completed live workflow.
 
-The production private publication lease is Unix-only; its non-Unix implementation rejects the
-operation, so native Windows does not support this actual issue publication path. The coupled suite
-is gated with `#[cfg(unix)]`. The seven coupled-flow cases passed in an isolated WSL Ubuntu Linux
-clone, alongside the related SQLite and lifecycle regressions.
+Publication persistence uses platform-specific Unix and Windows leases. Windows uses its private
+SQLite publication journal rather than the unsupported non-Unix PrivateRuntimeLease fallback.
+The coupled suite now compiles on Unix and Windows, and its nine scenarios are registered in both
+Windows native gates. The Windows fixture prepares and validates private owner ACLs; it initializes
+planning through the real SQLite authority API rather than an unsupported direct filesystem fixture.
+The [validation record](../validation/issue-automation-propose-flow.md) separates the original Linux
+runs from current native Windows results and from the still-unexecuted live workflow.
 
 The scenarios reconstruct services against the same durable paths after registration failures or
 lost acknowledgements. They check task identity across registration recovery, durable event receipts

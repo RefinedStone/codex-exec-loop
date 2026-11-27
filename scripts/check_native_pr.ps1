@@ -205,6 +205,7 @@ function Invoke-WindowsPortableChecks {
         "private_ipc::owner",
         "filesystem::issue_publish_intent_journal::",
         "filesystem::issue_creation_journal::",
+        "application::service::parallel_mode::tests::issue_automation_flow::",
         "filesystem::issue_template::",
         "issue_draft::tests::filesystem_template::",
         "gateway::tests::issue_shared_copy_flow::",
