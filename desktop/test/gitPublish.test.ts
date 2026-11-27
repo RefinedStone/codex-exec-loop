@@ -51,6 +51,21 @@ describe("push and create a PR", () => {
     if (summary.ok) expect(summary.commits.map((item) => item.pushed)).toEqual([true]);
   });
 
+  it("requires fresh consent if the advertised push destination moved to another ancestor", async () => {
+    const reviewRoot = join(base, "review-work");
+    const destination = join(base, "reviewed.git");
+    gitIn(base, "init", "-q", "--bare", destination);
+    git("push", "-q", destination, "HEAD:refs/heads/feat/x");
+    gitIn(base, "clone", "-q", "-b", "feat/x", destination, reviewRoot);
+    const reviewed = await planPush(reviewRoot);
+    if (!reviewed.ok) throw new Error(reviewed.message);
+    const older = git("rev-parse", "HEAD~1").trim();
+    gitIn(destination, "update-ref", "refs/heads/feat/x", older);
+    // Normal Git would allow this fast-forward. The user's review, not Git's ancestry rule, must refuse it.
+    expect((await executePush(reviewed.plan)).ok).toBe(false);
+    expect(gitIn(destination, "rev-parse", "refs/heads/feat/x").trim()).toBe(older);
+  });
+
   it("does not publish annotated tags when push.followTags is enabled", async () => {
     git("tag", "-a", "local-only", "-m", "Local tag");
     git("config", "push.followTags", "true");

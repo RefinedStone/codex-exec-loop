@@ -19,6 +19,8 @@ export interface PushPlan {
   /** `origin` 의 push 주소이다. 확인 창에 보여 준다. */
   remoteUrl: string;
   commit: string;
+  /** Last fetched tip when the tracking ref identifies the exact push destination. */
+  observedRemoteCommit: string | null;
 }
 
 export interface PullRequestPlan {
@@ -52,7 +54,11 @@ export async function planPush(cwdInput: unknown): Promise<Planned<PushPlan>> {
   if (remoteUrl.includes("\n")) return refuse("push 주소가 여러 개입니다. 터미널에서 대상 주소를 확인하십시오.");
   const commit = await gitLine(cwd, "rev-parse", "--verify", "HEAD");
   if (!commit) return refuse("push 할 커밋이 없습니다.");
-  return { ok: true, plan: { cwd, branch, remoteUrl, commit } };
+  const fetchUrl = await gitLine(cwd, "remote", "get-url", "origin");
+  const refspec = await gitLine(cwd, "config", "--get-all", "remote.origin.fetch");
+  const tracked = fetchUrl === remoteUrl && (refspec === "+refs/heads/*:refs/remotes/origin/*" || refspec === "refs/heads/*:refs/remotes/origin/*");
+  const observedRemoteCommit = tracked ? await gitLine(cwd, "rev-parse", "--verify", "--quiet", "--end-of-options", "refs/remotes/origin/" + branch) : null;
+  return { ok: true, plan: { cwd, branch, remoteUrl, commit, observedRemoteCommit } };
 }
 
 /** 현재 브랜치를 `origin` 의 같은 이름 브랜치로 push 한다. 원격이 앞서 있으면 git 이 거절한다. 강제로 덮어쓰지 않는다. */
@@ -63,6 +69,13 @@ export async function executePush(plan: PushPlan): Promise<GitPublishResult> {
     return refuse("확인하는 동안 브랜치나 원격이 바뀌었습니다. 다시 확인하십시오.");
   }
   const ref = `refs/heads/${plan.branch}`;
+  if (plan.observedRemoteCommit !== null) {
+    // Contact the destination only after native confirmation; a background fetch is not consent.
+    const advertised = await runGit(plan.cwd, ["ls-remote", "--exit-code", "--refs", "--", plan.remoteUrl, ref], 4096, { timeoutMs: PUSH_TIMEOUT_MS, env: NO_PROMPT_ENV });
+    if (advertised.code !== 0 || advertised.timedOut || advertised.truncated || advertised.stdout.trimEnd() !== plan.observedRemoteCommit + "\t" + ref) {
+      return refuse("확인한 원격 커밋과 현재 목적지가 일치하지 않습니다. fetch 후 다시 확인하십시오.");
+    }
+  }
   const output = await runGit(plan.cwd, ["push", "--no-follow-tags", "--set-upstream", "origin", `${ref}:${ref}`], 1 << 16, { timeoutMs: PUSH_TIMEOUT_MS, env: NO_PROMPT_ENV });
   if (output.code !== 0) {
     return refuse(failureMessage(output, "git push 가 실패했습니다."));
