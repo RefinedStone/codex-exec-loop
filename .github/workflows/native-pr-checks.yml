@@ -67,7 +67,7 @@ jobs:
           node-version: 22
 
       - name: Test CI and agent planning policy
-        run: node --test scripts/ci-scope.test.mjs scripts/crate-boundaries.test.mjs scripts/agent-plan.test.mjs scripts/ci-performance.test.mjs scripts/native-rust-contracts.test.mjs scripts/ci-rust-test-inventory.test.mjs scripts/ci-cache.test.mjs scripts/native-confirmation-build-options.test.mjs scripts/native-contract-progress.test.mjs
+        run: node --test scripts/ci-scope.test.mjs scripts/crate-boundaries.test.mjs scripts/agent-plan.test.mjs scripts/ci-performance.test.mjs scripts/native-rust-contracts.test.mjs scripts/ci-rust-test-inventory.test.mjs scripts/ci-cache.test.mjs scripts/native-confirmation-build-options.test.mjs scripts/native-contract-progress.test.mjs scripts/ci-contract-targets.test.mjs scripts/ci-impact-plan.test.mjs
 
       - name: Classify validation scope
         id: classify
@@ -536,11 +536,6 @@ jobs:
         shell: bash
         run: node scripts/ci-performance.mjs run native-check -- cargo check --workspace --locked --all-features --lib --bins --timings --target "${{ matrix.target }}"
 
-      - name: Test workspace members on the native target
-        if: matrix.target != 'x86_64-pc-windows-msvc'
-        shell: bash
-        run: cargo test --workspace --exclude akra-ade --locked --all-features --target "${{ matrix.target }}" --timings
-
       - name: Prepare and run native contract tests
         if: matrix.target != 'x86_64-pc-windows-msvc'
         shell: bash
@@ -549,7 +544,7 @@ jobs:
           AKRA_CI_FEATURES: all
         run: |
           node scripts/ci-performance.mjs run native-contracts -- \
-            node scripts/run_native_rust_contracts.mjs --all-features \
+            node scripts/run_native_rust_contracts.mjs --include-members --all-features \
             --target "${{ matrix.target }}" --timings -- \
             'process_liveness::tests::' \
             'trusted_executable::tests::native_' \

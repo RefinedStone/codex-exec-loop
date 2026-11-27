@@ -151,10 +151,6 @@ function Invoke-WindowsPortableChecks {
         [bool]$IncludeCleanHostContracts
     )
 
-    $commonTestArguments = @(
-        "test", "--locked", "--all-features", "--lib", "--target", $windowsTarget
-    )
-
     Invoke-ExternalStep "Windows native target" "cargo" @(
         "check", "--workspace", "--locked", "--all-features", "--lib", "--bins", "--target", $windowsTarget
     )
@@ -293,11 +289,9 @@ function Invoke-WindowsPortableChecks {
             "application::service::parallel_mode::tests::automatic_verification::"
         )
     }
-    foreach ($testFilter in $testFilters) {
-        Invoke-ExternalStep "Windows contract: $testFilter" "cargo" @(
-            $commonTestArguments + @($testFilter, "--", "--nocapture")
-        )
-    }
+    Invoke-ExternalStep "Windows contracts and workspace member tests" "node" @(
+        @("scripts/run_native_rust_contracts.mjs", "--include-members", "--all-features", "--target", $windowsTarget, "--") + $testFilters
+    )
 }
 
 Push-Location $repoRoot
@@ -306,8 +300,10 @@ try {
         Invoke-ExternalStep "CI policy tests" "node" @(
             "--test",
             "scripts/ci-scope.test.mjs",
+            "scripts/ci-impact-plan.test.mjs",
             "scripts/crate-boundaries.test.mjs",
             "scripts/agent-plan.test.mjs",
+            "scripts/ci-contract-targets.test.mjs",
             "scripts/native-rust-contracts.test.mjs",
             "scripts/native-contract-progress.test.mjs",
             "scripts/npm-audit-gate.test.mjs"
@@ -322,7 +318,6 @@ try {
         Invoke-NodeAdminChecks
     }
     if ($Mode -in @("Full", "Rust", "Portable")) {
-        Invoke-ExternalStep "Workspace member tests" "cargo" @("test", "--workspace", "--exclude", "akra-ade", "--locked", "--all-features", "--target", $windowsTarget)
         Invoke-WindowsPortableChecks -IncludeCleanHostContracts ($Mode -eq "Portable")
     }
     if ($Mode -in @("Full", "Rust")) {
