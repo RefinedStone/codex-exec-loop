@@ -18,7 +18,7 @@ use anyhow::{Context, Result, bail};
 use serde_json::json;
 
 use super::adf::{adf_to_markdown, writable_adf};
-use super::issue_snapshot::{EditMeta, JiraIssueSnapshotAdapter};
+use super::issue_snapshot::JiraIssueSnapshotAdapter;
 use crate::application::port::outbound::issue_update_port::{
     IssueUpdatePort, IssueUpdateRequest, IssueUpdateResponse,
 };
@@ -62,9 +62,7 @@ impl IssueUpdatePort for JiraIssueUpdateAdapter {
         };
 
         self.reader.ensure_this_site(&issue)?;
-        let meta: EditMeta = self
-            .reader
-            .get(&format!("/rest/api/3/issue/{}/editmeta", issue.issue_id))?;
+        let meta = self.reader.edit_metadata(&issue.issue_id)?;
         if WRITTEN_FIELDS
             .iter()
             .any(|field| !meta.fields.contains_key(*field))
@@ -316,6 +314,7 @@ mod tests {
                 "Jira does not allow a summary and description edit on this issue",
             ),
             (vec![tenant(CLOUD_ID), Err(anyhow!("403"))], "403"),
+            (vec![tenant(CLOUD_ID), Ok(r#"{"fields":{"summary":{"schema":{"type":"string"}},"description":{"required":false,"schema":{"type":"string"}},"customfield_42":{"name":"Deployment","schema":{"type":"string"}}}}"#.to_string())], "Jira did not confirm which fields are required"),
             (
                 vec![tenant(CLOUD_ID), edit_meta(), Ok(moved)],
                 "the target moved to another project or issue",
