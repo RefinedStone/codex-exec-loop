@@ -617,11 +617,27 @@ pub(super) async fn export_files_page(
      * 이 mutation 역시 redirect로 끝내 browser refresh/back-button이 같은 export를 반복하지 않게 한다.
      */
     verify_form_csrf(&jar, &form.csrf_token)?;
-    let outcome = state
-        .facade
-        .export_active_files_for_edit()
-        .map_err(internal_server_error)?;
-    Ok(Redirect::to(&notice_location("/admin/controls", &outcome.notice)).into_response())
+    let outcome = state.facade.export_active_files_for_edit();
+    Ok(controls_mutation_response(
+        &state,
+        jar,
+        outcome.map(|outcome| outcome.notice),
+    ))
+}
+
+// controls 화면의 끝난 변경(파일 동기화, 프로필 저장)은 redirect 로 답하고, 거절과 실패는 controls 화면과 그 글로
+// 답한다 (plan 18 K4-9d-4).
+fn controls_mutation_response(
+    state: &AdminAppState,
+    jar: CookieJar,
+    notice: anyhow::Result<String>,
+) -> Response {
+    match notice {
+        Ok(notice) => Redirect::to(&notice_location("/admin/controls", &notice)).into_response(),
+        Err(error) => {
+            mutation_failure_page(error, |notice| controls_page_response(state, jar, notice))
+        }
+    }
 }
 
 pub(super) async fn apply_files_page(
@@ -631,17 +647,26 @@ pub(super) async fn apply_files_page(
 ) -> std::result::Result<Response, StatusCode> {
     // apply는 file-sync의 반대 방향이다. edited file을 parse해 authority를 갱신하고 redirect로 browser mutation cycle을 닫는다.
     verify_form_csrf(&jar, &form.csrf_token)?;
-    let outcome = state
-        .facade
-        .apply_exported_files()
-        .map_err(internal_server_error)?;
-    Ok(Redirect::to(&notice_location("/admin/controls", &outcome.notice)).into_response())
+    let outcome = state.facade.apply_exported_files();
+    Ok(controls_mutation_response(
+        &state,
+        jar,
+        outcome.map(|outcome| outcome.notice),
+    ))
 }
 
 pub(super) async fn controls_page(
     State(state): State<AdminAppState>,
     jar: CookieJar,
     query: Query<HashMap<String, String>>,
+) -> std::result::Result<Response, StatusCode> {
+    controls_page_response(&state, jar, query.get("notice").cloned())
+}
+
+fn controls_page_response(
+    state: &AdminAppState,
+    jar: CookieJar,
+    notice: Option<String>,
 ) -> std::result::Result<Response, StatusCode> {
     // controls page는 workspace-wide operation만 다루므로 overview-level state와 mutation form context만 렌더링한다.
     let (jar, csrf_token) = ensure_csrf_cookie(jar);
@@ -661,7 +686,7 @@ pub(super) async fn controls_page(
             current_nav: "controls",
             workspace_dir: state.facade.workspace_dir().to_string(),
             csrf_token,
-            notice: query.get("notice").cloned(),
+            notice,
             overview,
             agent_profile_config,
             agent_profile_config_json,
@@ -703,15 +728,16 @@ pub(super) async fn update_agent_profiles_page(
     verify_form_csrf(&jar, &form.csrf_token)?;
     let config = parse_parallel_agent_profile_config_json(&form.profiles_json)
         .map_err(|_| StatusCode::BAD_REQUEST)?;
-    state
+    let saved = state
         .parallel_agent_profile_port
-        .save_config(state.facade.workspace_dir(), &config)
-        .map_err(|error| internal_server_error(anyhow!(error)))?;
-    Ok(Redirect::to(&notice_location(
-        "/admin/controls",
-        "parallel agent profiles saved",
+        .save_config(state.facade.workspace_dir(), &config);
+    Ok(controls_mutation_response(
+        &state,
+        jar,
+        saved
+            .map(|()| "parallel agent profiles saved".to_string())
+            .map_err(|error| anyhow!(error)),
     ))
-    .into_response())
 }
 
 pub(super) async fn editor_page(
@@ -861,10 +887,32 @@ pub(super) async fn promote_draft_page(
     verify_draft_name_path(&draft_name)?;
     let csrf_token = form.csrf_token.clone();
     let surface = PlanningAdminSurface::from_token(form.surface.as_deref());
-    let result = state
-        .facade
-        .promote_draft_session(page_mutation_request(draft_name, form))
-        .map_err(internal_server_error)?;
+    let request = page_mutation_request(draft_name, form);
+    let load_request = PlanningAdminDraftLoadRequest {
+        draft_name: request.draft_name.clone(),
+        kind: request.kind,
+        direction_id: request.direction_id.clone(),
+    };
+    let result = match state.facade.promote_draft_session(request) {
+        Ok(result) => result,
+        // 거절과 실패는 초안 화면과 그 글로 답한다 (plan 18 K4-9d-5). 초안의 글은 이미 저장되어 있다.
+        Err(error) => {
+            return Ok(mutation_failure_page(error, |notice| {
+                let session = state
+                    .facade
+                    .load_draft_session(load_request)
+                    .map_err(internal_server_error)?;
+                render_editor_page(
+                    jar,
+                    state.facade.workspace_dir(),
+                    csrf_token,
+                    notice,
+                    surface,
+                    session,
+                )
+            }));
+        }
+    };
     let notice = if result.promoted_file_count > 0 && result.is_valid {
         Some(format!(
             "draft promoted into active planning ({} files)",
