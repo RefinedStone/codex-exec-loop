@@ -178,7 +178,19 @@ function createNpmRuntime(tempDir) {
 }
 
 function runNpm(args, runtime) {
-  return spawnSync("npm", args, {
+  // Windows npm is normally a .cmd shim, which cannot be spawned directly.
+  // Use the Node CLI entrypoint rather than enabling shell interpolation.
+  let executable = "npm";
+  let commandArgs = args;
+  if (process.platform === "win32") {
+    const cli = runtime.env.npm_execpath || path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+    if (!path.isAbsolute(cli) || !/\.(?:[cm]?js)$/i.test(cli) || !fs.statSync(cli, { throwIfNoEntry: false })?.isFile()) {
+      throw new Error("Windows npm CLI entrypoint is unavailable; invoke through npm or install its Node CLI");
+    }
+    executable = process.execPath;
+    commandArgs = [cli, ...args];
+  }
+  return spawnSync(executable, commandArgs, {
     cwd: runtime.cwd,
     encoding: "utf8",
     env: runtime.env,

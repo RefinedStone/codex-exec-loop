@@ -205,7 +205,7 @@ function runPublisher({
     path.join(packageDir, "package.json"),
     JSON.stringify({ name: packageName, version, ...packageJsonExtras }),
   );
-  const npmPath = path.join(binDir, "npm");
+  const npmPath = path.join(binDir, process.platform === "win32" ? "npm-fixture.cjs" : "npm");
   fs.writeFileSync(npmPath, fakeNpm);
   fs.chmodSync(npmPath, 0o755);
 
@@ -247,6 +247,7 @@ function runPublisher({
       env: {
         ...process.env,
         NODE_ENV: "test",
+        ...(process.platform === "win32" ? { npm_execpath: npmPath } : {}),
         PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
         NODE_AUTH_TOKEN: "fixture-token-must-not-be-printed",
         ACTIONS_ID_TOKEN_REQUEST_TOKEN: "fixture-oidc-token",
