@@ -42,6 +42,7 @@ export interface UiState {
   zooms: ZoomFactors;
   /** 새 스레드 화면이 고른 작업 폴더이다. null 이면 보낼 때 폴더를 고르게 한다. */
   homeCwd: string | null;
+  homeWorkspaceMode: "existing" | "isolated";
   /** 입력창에 쓰던 글이다. 키는 스레드 id 이고, 새 스레드 화면은 `HOME_DRAFT` 이다. 보기를 바꿔도 남는다. */
   drafts: Record<string, string>;
   toasts: Toast[];
@@ -102,6 +103,7 @@ export const useUiStore = create<UiState>(() => ({
   zoomNotice: null,
   zooms: {},
   homeCwd: null,
+  homeWorkspaceMode: "existing",
   drafts: storedDrafts(),
   toasts: [],
   remoteAgents: storedRemoteAgents(),

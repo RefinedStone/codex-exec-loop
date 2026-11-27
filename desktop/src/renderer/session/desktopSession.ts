@@ -1,3 +1,5 @@
+import { IsolatedWorkspaceStarter, type PreparedWorkspace } from "./isolatedWorkspace";
+import { samePath } from "../git/gitGraph";
 // 접속이 맺어질 때마다 initialize 를 다시 하고 Gateway 정보와 작업 폴더 목록을 읽는다 (P2 §4.5).
 // 스레드를 열면 `thread/resume` 으로 기록을 받고, 그 스레드의 알림을 화면 프레임마다 묶어 반영한다 (P3 §6.1, §7).
 // 다시 연결되면 열려 있던 스레드를 다시 resume 한다 (P3 §6.5).
@@ -229,6 +231,7 @@ export class DesktopSession {
     return () => this.versionProviderListeners.delete(listener);
   }
   private readonly client: JsonRpcClient;
+  private readonly isolatedWorkspace: IsolatedWorkspaceStarter;
   private readonly batcher: FrameBatcher<QueuedNotification>;
   private readonly unsubscribers: Array<() => void> = [];
   private readonly skillsChangedListeners = new Set<() => void>();
@@ -287,6 +290,7 @@ export class DesktopSession {
   ) {
     this.forkOutcomes = forkOutcomes;
     this.client = new JsonRpcClient((text) => bridge.send(text));
+    this.isolatedWorkspace = new IsolatedWorkspaceStarter((method, params) => this.client.request(method, params));
     this.nextTurnSettings = new NextTurnSettingsController((params) => this.client.request("model/list", params));
     this.nextTurnQueue = new NextTurnQueue(async (threadId, text) => {
       this.assertWritable();
@@ -614,9 +618,24 @@ export class DesktopSession {
   }
 
   /** 작업 폴더에서 새 스레드를 시작하고 연다. 첫 메시지는 열린 스레드에 보낸다 (P3 §6.2). */
-  async startThread(cwd: string): Promise<string> {
+  async startIsolatedThread(cwd: string): Promise<string> {
+    if (this.readOnly) throw new Error("격리 공간은 로컬 호스트에서만 만들 수 있습니다.");
+    this.assertWritable();
+    const generation = this.conversationGeneration;
+    return this.isolatedWorkspace.start(cwd, async workspace => {
+      if (generation !== this.conversationGeneration) throw new Error("대화 위치가 바뀌었습니다. 준비된 공간은 보존됩니다.");
+      return this.startThread(workspace.workspaceDir, workspace, generation);
+    });
+  }
+
+  async startThread(cwd: string, expected?: PreparedWorkspace, generation?: number): Promise<string> {
     this.assertWritable();
     const response = await this.client.request<ThreadStartResponse>("thread/start", { cwd });
+    if (expected && (!response.thread.id || !samePath(response.thread.cwd, expected.workspaceDir)
+      || (response.thread.gitInfo?.branch != null && response.thread.gitInfo.branch !== expected.branch)
+      || generation !== this.conversationGeneration)) {
+      throw new Error("격리 공간과 스레드의 연결을 확인하지 못했습니다. 준비된 공간은 보존됩니다.");
+    }
     this.nextTurnSettings.observeSnapshot(response.thread.id, response.model ?? response.thread.model, response.reasoningEffort ?? response.thread.reasoningEffort,
       undefined, { approvalPolicy: response.approvalPolicy, sandbox: response.sandbox });
     const transcript = transcriptFromThread(response.thread);

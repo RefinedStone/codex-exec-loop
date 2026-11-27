@@ -16,6 +16,7 @@ const RECENT_COUNT = 5;
 
 export function Home({ actions, onChooseFolder, onOpenThread }: { actions: ComposerActions; onChooseFolder(): Promise<string | null>; onOpenThread(threadId: string): void }) {
   const homeCwd = useUiStore((state) => state.homeCwd);
+  const workspaceMode = useUiStore((state) => state.homeWorkspaceMode);
   const folders = useDesktopStore((state) => state.folders);
   const marks = useThreadMarks();
   const recent = useMemo(() => allThreads(folders).slice(0, RECENT_COUNT), [folders]);
@@ -34,7 +35,12 @@ export function Home({ actions, onChooseFolder, onOpenThread }: { actions: Compo
         <h1>무엇을 할까요?</h1>
         <div className="home-pickers">
           <Picker icon={<Icon name="folder" size={12} />} value={homeCwd ?? CHOOSE_FOLDER} options={options} onChange={choose} />
+          <label>작업 위치 <select aria-label="작업 위치" value={workspaceMode} onChange={event => useUiStore.setState({ homeWorkspaceMode: event.target.value === "isolated" ? "isolated" : "existing" })}>
+            <option value="existing">기존 폴더</option>
+            <option value="isolated">격리 공간 (HEAD 기준)</option>
+          </select></label>
         </div>
+        {workspaceMode === "isolated" && <p className="muted">커밋된 HEAD에서 별도 브랜치와 worktree를 준비합니다. 미커밋 변경은 복사하지 않습니다.</p>}
         {/* 폴더를 바꾸면 입력창을 새로 만든다. 이전 폴더의 `@` 후보와 진행 중인 찾기를 버린다 (#2837). 초안은 저장소에 남는다. */}
         <Composer key={homeCwd ?? ""} actions={actions} home />
         {recent.length > 0 && <h3>최근 스레드</h3>}
