@@ -63,6 +63,14 @@ fn execute_inner(
     if check_cancelled() {
         return Err(TaskVerificationNotRunReason::Cancelled);
     }
+    // Fence the *claimed* recipe too: a stored automatic request must never
+    // start a repository declaration or summon a human prompt.
+    if automatic.is_some()
+        && stored.attempt.recipe
+            != crate::domain::planning::verification::TaskVerificationRecipe::GitDiffCheckV1
+    {
+        return Err(TaskVerificationNotRunReason::InvalidInput);
+    }
     authority::require_current(dependencies, stored)
         .map_err(|error| authority::not_run_reason(&error))?;
     if let Some(binding) = binding {

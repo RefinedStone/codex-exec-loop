@@ -11401,7 +11401,8 @@
     },
     "IssueWorkVerificationRecipe": {
       "enum": [
-        "git_diff_check_v1"
+        "git_diff_check_v1",
+        "repo_git_grep_v1"
       ],
       "type": "string"
     },
@@ -18036,7 +18037,8 @@
     },
     "TaskVerificationRecipe": {
       "enum": [
-        "git_diff_check_v1"
+        "git_diff_check_v1",
+        "repo_git_grep_v1"
       ],
       "type": "string"
     },

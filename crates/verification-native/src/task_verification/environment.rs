@@ -42,6 +42,16 @@ pub(super) struct HostEnvironment {
 }
 
 impl HostEnvironment {
+    pub(super) fn recipe_fingerprint(
+        &self,
+        binary: &PinnedNativeExecutable,
+        manifest: &super::TaskVerificationExecutionManifest,
+    ) -> Result<String> {
+        Ok(recipe_environment(
+            manifest.recipe,
+            &self.fingerprint(binary, manifest.source.tree_sha.len())?,
+        ))
+    }
     pub(super) fn read() -> Result<Self> {
         let mut platform_variables = Vec::new();
         #[cfg(windows)]
@@ -116,6 +126,21 @@ impl HostEnvironment {
                 akra_verification::verification::MAX_TASK_VERIFICATION_STREAM_BYTES,
             ),
         ))?))
+    }
+}
+
+pub(super) fn recipe_environment(
+    recipe: super::TaskVerificationRecipe,
+    fixed_environment: &str,
+) -> String {
+    match recipe {
+        super::TaskVerificationRecipe::GitDiffCheckV1 => fixed_environment.to_owned(),
+        // The only variable command data is read from the exact source tree.
+        // Neither varying literal is executable state shared by environment queries.
+        super::TaskVerificationRecipe::RepoGitGrepV1 => digest(
+            format!("repo-git-grep-v1:grep-quiet-no-textconv-fixed-strings:{fixed_environment}")
+                .as_bytes(),
+        ),
     }
 }
 

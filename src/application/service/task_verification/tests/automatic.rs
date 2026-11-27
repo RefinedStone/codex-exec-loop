@@ -179,8 +179,8 @@ fn automatic_wait_has_one_deadline_and_rejects_cancelled_or_replaced_input() {
 }
 
 #[test]
-fn automatic_completion_skips_unconfigured_optional_and_currently_waived_criteria() {
-    for mode in 0..3 {
+fn automatic_completion_skips_manual_recipes_unconfigured_optional_and_waived_criteria() {
+    for mode in 0..4 {
         let f = Fixture::new();
         f.service.initialize_live_owner(AT).unwrap();
         let lease = {
@@ -189,6 +189,9 @@ fn automatic_completion_skips_unconfigured_optional_and_currently_waived_criteri
             match mode {
                 0 => task.task.acceptance[0].verification_recipe = None,
                 1 => task.task.acceptance[0].essential = false,
+                3 => task.task.acceptance[0].verification_recipe = Some(
+                    crate::domain::planning::verification::TaskVerificationRecipe::RepoGitGrepV1,
+                ),
                 _ => {
                     let (reason, reason_digest) =
                         normalize_waiver_reason("Approved exception").unwrap();
@@ -251,67 +254,4 @@ fn automatic_completion_never_adopts_a_replacement_lease() {
     assert_eq!(f.spawn_calls.load(Ordering::SeqCst), 0);
 }
 
-#[test]
-fn shutdown_waits_for_admitted_policy_writes_and_rejects_later_ones() {
-    let f = Fixture::new();
-    let claim = f.start();
-    f.deliver_executed(&claim);
-    assert!(f.service.poll(Instant::now()));
-    let receipt = f
-        .repository
-        .load_host_verification("/repo", &claim.stored.attempt.attempt_id)
-        .unwrap()
-        .unwrap()
-        .receipt
-        .unwrap();
-    let entered = Arc::new(Barrier::new(2));
-    let release = Arc::new(Barrier::new(2));
-    *f.repository.failure_limit_hook.lock().unwrap() = Some({
-        let entered = entered.clone();
-        let release = release.clone();
-        Arc::new(move || {
-            entered.wait();
-            release.wait();
-        })
-    });
-    std::thread::scope(|threads| {
-        let service = f.service.clone();
-        let receipt = receipt.clone();
-        let lease = claim.stored.lease.clone();
-        let policy = threads.spawn(move || {
-            service.apply_automatic_failure_limit(
-                &receipt,
-                &lease,
-                &PostTurnContinuationGate::default().capture(),
-                Instant::now() + Duration::from_secs(5),
-            )
-        });
-        entered.wait();
-        let service = f.service.clone();
-        let (send, receive) = mpsc::channel();
-        let stop = threads.spawn(move || {
-            service.shutdown();
-            send.send(()).unwrap();
-        });
-        wait_until(|| f.service.closed.load(Ordering::Acquire));
-        assert!(
-            matches!(receive.try_recv(), Err(mpsc::TryRecvError::Empty)),
-            "shutdown cannot release ownership while a policy write is admitted"
-        );
-        release.wait();
-        policy.join().unwrap().unwrap();
-        stop.join().unwrap();
-        receive.recv_timeout(Duration::from_secs(1)).unwrap();
-    });
-    assert!(
-        f.service
-            .apply_automatic_failure_limit(
-                &receipt,
-                &claim.stored.lease,
-                &PostTurnContinuationGate::default().capture(),
-                Instant::now() + Duration::from_secs(1),
-            )
-            .is_err()
-    );
-    assert_eq!(f.repository.failure_limit_calls.load(Ordering::SeqCst), 1);
-}
+mod shutdown;

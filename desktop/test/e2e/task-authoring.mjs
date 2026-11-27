@@ -141,6 +141,10 @@ try {
   await page.locator("#task-editor-task-title").fill("User reviewed title");
   await page.getByLabel("완료 기준 추가", { exact: true }).selectOption("screen");
   await page.getByTestId("task-criterion").locator("textarea").fill("The user can see the saved task.");
+  await page.getByLabel("완료 기준 추가", { exact: true }).selectOption("command");
+  const commandCriterion = page.getByTestId("task-criterion").last();
+  await commandCriterion.locator("textarea").fill("README contains the release marker.");
+  await commandCriterion.getByLabel("호스트 검증").selectOption("repo_git_grep_v1");
   await page.getByTestId("task-editor-save").click();
   await page.getByTestId("task-editor-recover").waitFor({ timeout: 30_000 });
   await page.getByTestId("connection-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 30_000 });
@@ -151,6 +155,7 @@ try {
   assert.equal(createdCount, 1, "lost reply recovery does not duplicate a task");
   assert.equal(tasks.at(-1).fields.status, "awaiting_user");
   assert.equal(tasks.at(-1).fields.acceptance[0].channel, "screen");
+  assert.ok(tasks.at(-1).fields.acceptance.some(({ verification_recipe }) => verification_recipe === "repo_git_grep_v1"));
   assert.equal(await page.getByTestId("task-editor-select").inputValue(), "created-task-1");
 
   await page.getByTestId("task-editor-select").selectOption("task-existing");

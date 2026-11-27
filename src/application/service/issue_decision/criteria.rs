@@ -56,6 +56,9 @@ pub(super) fn confirmation_detail(criteria: &[IssueWorkCriterion]) -> String {
         };
         let recipe = match criterion.verification_recipe {
             Some(IssueWorkVerificationRecipe::GitDiffCheckV1) => "Git diff 공백·충돌 표시 검사",
+            Some(IssueWorkVerificationRecipe::RepoGitGrepV1) => {
+                "저장소 선언 문자열 검사 (매 실행 확인)"
+            }
             None => "지정하지 않음",
         };
         detail.push_str(&format!(

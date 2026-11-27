@@ -53,7 +53,7 @@ export function TaskVerificationView({ entry, task, snapshot, freshness, verific
           data-current={current && state != null && state !== "stale" && state !== "unavailable"}>
           {!current ? "마지막 조회: " : ""}{label}
         </span>
-        {onRequestVerification && entry.criterion.verification_recipe === "git_diff_check_v1" && (
+        {onRequestVerification && entry.criterion.verification_recipe && (
           <button type="button" data-testid="task-host-request" disabled={blocked !== null} title={blocked ?? undefined}
             onClick={() => { void onRequestVerification(target); }}>
             {request?.status === "sending" ? "요청 중…" : request?.status === "unknown" ? "같은 요청 다시 확인" : "호스트 검증 요청"}
@@ -62,6 +62,9 @@ export function TaskVerificationView({ entry, task, snapshot, freshness, verific
       </div>
       {(entry.criterion.verification_recipe === "git_diff_check_v1" || host?.attempt?.recipe === "git_diff_check_v1") && (
         <p className="muted">Git 변경의 공백 오류를 검사합니다. 빌드·기능 테스트의 통과 여부는 별도로 확인해야 합니다.</p>
+      )}
+      {entry.criterion.verification_recipe === "repo_git_grep_v1" && (
+        <p className="muted">호스트 확인 창에서 명령, 작업 경로와 소스를 확인해야 선언된 문자열 검사를 한 번 실행합니다.</p>
       )}
       {request && <p className={request.status === "unknown" || request.status === "rejected" ? "warning" : "muted"}
         role="status" data-testid="task-host-request-status">{request.message}</p>}

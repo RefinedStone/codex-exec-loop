@@ -23,6 +23,23 @@ gitlink, 불완전한 Git 출력, 변경 경로 4,096개 초과, 개별 blob 8 M
 
 ## 요청과 결과 조회
 
+### 저장소 선언 문자열 검사 (`repo_git_grep_v1`)
+
+`command` 기준의 두 번째 선택지는 고정 소스의 `.akra/verify-grep.json`을 읽는다.
+예: `{"path":"README.md","literal":"Installation"}`. 필드는 정확히 두 개다.
+`path`는 소스 tree의 일반 파일(최대 8 MiB)이며 각 경로 요소는 영문·숫자·점·밑줄·하이픈만
+허용한다. `literal`은 줄바꿈 없는 인쇄 가능한 ASCII 문자열(최대 256바이트)이다.
+호스트가 고정한 Git으로 `grep --quiet --no-textconv --fixed-strings -e <literal> <tree> -- <path>`를
+실행한다. 종료 코드 0은 해당 파일에서 지정 문자열을 찾았음을 뜻한다. 저장소 스크립트, 셸,
+빌드 도구, 외부 실행 파일은 선택할 수 없다.
+
+사용자가 호스트 확인 창에서 실제 argv, 비어 있는 private 작업 경로, 실행 파일 및 환경 hash,
+고정 소스·기준 tree를 확인한 한 번의 실행만 허용한다. 작업 중인 파일이 바뀌어도
+이미 준비한 명령이나 입력을 바꾸지 않는다. 취소·시간 초과·확인 창 부재는 통과가 아니다.
+기존 30초 제한에는 확인 대기 시간도 포함된다. stdout·stderr의 각 1 MiB 상한은 동일하다.
+자동 완료는 이 검사를 시작하지 않으며 `enforce`는 수동 실행의 현재 receipt 또는 면제를 요구한다.
+일반 조회, 명령 요청 및 공개 이벤트는 선언 문자열이나 실제 argv를 전달하지 않는다.
+
 `request_task_verification`은 `planning` 범위의 **Runtime 명령**이다. 현재 커널이 없는
 command-only 경로에서는 `kernel_unreachable`로 거절하며 예약을 생성하지 않는다.
 입력은 다음 다섯 필드뿐이다.

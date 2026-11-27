@@ -15,6 +15,7 @@ pub const MAX_TASK_VERIFICATION_STREAM_BYTES: u64 = 1024 * 1024;
 #[serde(rename_all = "snake_case")]
 pub enum TaskVerificationRecipe {
     GitDiffCheckV1,
+    RepoGitGrepV1,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

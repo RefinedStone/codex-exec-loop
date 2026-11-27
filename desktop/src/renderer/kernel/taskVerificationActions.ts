@@ -34,7 +34,7 @@ export function verificationBlockReason(
   if (!task || task.unavailable || task.scope.scope_id !== target.scope_id
     || task.scope.acceptance_revision !== target.expected_acceptance_revision) return "작업의 완료 기준이 바뀌었습니다. 다시 조회해 주세요.";
   const entry = task.criteria.find((item) => item.criterion.id === target.criterion_id);
-  if (!entry || entry.criterion.channel !== "command" || entry.criterion.verification_recipe !== "git_diff_check_v1") {
+  if (!entry || entry.criterion.channel !== "command" || !entry.criterion.verification_recipe) {
     return "이 기준에는 실행할 수 있는 호스트 검증이 설정되지 않았습니다.";
   }
   if (task.source?.kind !== "running_lease") return "실행 중인 작업에서 호스트 검증을 요청할 수 있습니다.";

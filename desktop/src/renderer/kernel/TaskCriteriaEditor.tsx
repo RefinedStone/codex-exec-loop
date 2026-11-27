@@ -1,5 +1,6 @@
 import type { TaskAcceptanceChannel, TaskAcceptanceCriterion } from "./protocol";
 import "./taskCriteria.css";
+import { isTaskVerificationRecipe } from "./taskVerificationRecipe";
 
 const CHANNEL_LABEL: Record<TaskAcceptanceChannel, string> = {
   command: "명령", data: "데이터", http: "HTTP", screen: "화면",
@@ -40,10 +41,11 @@ export function TaskCriteriaEditor({ value, onChange, disabled = false, idPrefix
           </div>
           {criterion.channel === "command" && <label>호스트 검증
             <select value={criterion.verification_recipe ?? ""} onChange={(event) => update(index, {
-              verification_recipe: event.target.value === "git_diff_check_v1" ? "git_diff_check_v1" : null,
+              verification_recipe: isTaskVerificationRecipe(event.target.value) ? event.target.value : null,
             })}>
               <option value="">지정하지 않음</option>
               <option value="git_diff_check_v1">Git diff 공백·충돌 표시 검사</option>
+              <option value="repo_git_grep_v1">저장소 선언 문자열 검사 (매 실행 확인)</option>
             </select>
           </label>}
           <small className="muted">기준 ID: {criterion.id}</small>

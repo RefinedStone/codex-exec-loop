@@ -152,9 +152,11 @@ dependencies = [
  "chrono",
  "libc",
  "rand 0.8.6",
+ "serde",
  "serde_json",
  "sha2",
  "tracing",
+ "windows-registry",
 ]
 
 [[package]]

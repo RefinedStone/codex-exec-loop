@@ -1,5 +1,4 @@
-//! One fixed host recipe. No shell, repository script, model turn, or remote command.
-//! This is a bounded Git whitespace/conflict-marker check, not a general test runner.
+//! Pinned Git verification. A repository declaration is data, never shell text.
 use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -13,10 +12,11 @@ use akra_verification::ports::task_verification_runner_port::{
 use akra_verification::verification::{
     MAX_TASK_VERIFICATION_STREAM_BYTES, TaskVerificationExecutionManifest,
     TaskVerificationExecutionOutcome, TaskVerificationNotRunReason as Reason,
-    TaskVerificationObservation, TaskVerificationStream,
+    TaskVerificationObservation, TaskVerificationRecipe, TaskVerificationStream,
 };
 
 mod context;
+mod declared;
 #[cfg(test)]
 mod diagnostics;
 mod environment;
@@ -63,7 +63,7 @@ impl TaskVerificationRunnerPort for GitTaskVerificationRunnerAdapter {
         // Historical receipt fields must not affect a shared current-environment
         // observation. The query compares each receipt's environment independently.
         current
-            .fingerprint(&binary, manifest.source.tree_sha.len())
+            .recipe_fingerprint(&binary, manifest)
             .map_err(|_| Reason::Unavailable)
     }
 }
@@ -73,6 +73,7 @@ struct PreparedVerification {
     binary: PinnedNativeExecutable,
     manifest: TaskVerificationExecutionManifest,
     deadline: Instant,
+    declared: Option<declared::Grep>,
 }
 
 fn prepare(
@@ -131,24 +132,36 @@ fn prepare(
         deadline,
         cancelled,
     )?;
-    let manifest = TaskVerificationExecutionManifest {
+    let declared = match request.recipe {
+        TaskVerificationRecipe::GitDiffCheckV1 => None,
+        TaskVerificationRecipe::RepoGitGrepV1 => Some(declared::Grep::read(
+            &mut context,
+            &binary,
+            &request.source.tree_sha,
+            deadline,
+            cancelled,
+        )?),
+    };
+    let command_sha256 = match &declared {
+        Some(grep) => grep.fingerprint(&binary, &request.source.tree_sha)?,
+        None => environment::command_fingerprint(&binary, &base_tree, &request.source.tree_sha)
+            .map_err(|error| preparation_unavailable("command_fingerprint", error))?,
+    };
+    let mut manifest = TaskVerificationExecutionManifest {
         recipe: request.recipe,
         base_commit_sha: request.base_commit_sha.into(),
         base_tree_sha: base_tree.clone(),
         source: request.source.clone(),
         git_binary_sha256: binary.sha256().into(),
-        command_sha256: environment::command_fingerprint(
-            &binary,
-            &base_tree,
-            &request.source.tree_sha,
-        )
-        .map_err(|error| preparation_unavailable("command_fingerprint", error))?,
+        command_sha256,
         environment_sha256: context
             .environment_fingerprint(&binary, request.source.tree_sha.len())
             .map_err(|error| preparation_unavailable("environment_fingerprint", error))?,
         configuration_sha256: environment::configuration_fingerprint(request.source.tree_sha.len())
             .map_err(|error| preparation_unavailable("configuration_fingerprint", error))?,
     };
+    manifest.environment_sha256 =
+        environment::recipe_environment(manifest.recipe, &manifest.environment_sha256);
     manifest.validate().map_err(|_| Reason::InvalidInput)?;
     binary.verify().map_err(|_| Reason::ConfigurationChanged)?;
     context.verify().map_err(|_| Reason::ConfigurationChanged)?;
@@ -160,6 +173,7 @@ fn prepare(
         binary,
         manifest,
         deadline,
+        declared,
     })
 }
 
@@ -171,103 +185,4 @@ fn preparation_unavailable(stage: &'static str, error: anyhow::Error) -> Reason 
     Reason::Unavailable
 }
 
-impl PreparedTaskVerification for PreparedVerification {
-    fn manifest(&self) -> &TaskVerificationExecutionManifest {
-        &self.manifest
-    }
-
-    fn run(mut self: Box<Self>, cancelled: &dyn Fn() -> bool) -> TaskVerificationRunOutcome {
-        if cancelled() {
-            return not_run(Reason::Cancelled);
-        }
-        if Instant::now() >= self.deadline {
-            return not_run(Reason::Unavailable);
-        }
-        if !self.environment_matches()
-            || self.context.verify().is_err()
-            || self.binary.verify().is_err()
-        {
-            return not_run(Reason::ConfigurationChanged);
-        }
-        let Ok(mut command) = self.context.command(&self.binary) else {
-            return not_run(Reason::ConfigurationChanged);
-        };
-        environment::append_diff_arguments(
-            &mut command,
-            &self.manifest.base_tree_sha,
-            &self.manifest.source.tree_sha,
-        );
-        command.stdout(Stdio::piped()).stderr(Stdio::piped());
-        if cancelled() {
-            return not_run(Reason::Cancelled);
-        }
-        if Instant::now() >= self.deadline {
-            return not_run(Reason::Unavailable);
-        }
-        let started_at = chrono::Utc::now();
-        let started = Instant::now();
-        let child = match akra_native::subprocess::spawn(&mut command) {
-            Ok(child) => child,
-            Err(_) => return not_run(Reason::SpawnFailed),
-        };
-        let output = wait_with_output_controlled(
-            child,
-            self.deadline,
-            cancelled,
-            MAX_TASK_VERIFICATION_STREAM_BYTES as usize,
-            MAX_TASK_VERIFICATION_STREAM_BYTES as usize,
-        );
-        let mut outcome = match output.termination {
-            ControlledTermination::Exited(status) => match status.code() {
-                Some(exit_code) => TaskVerificationExecutionOutcome::Exited { exit_code },
-                None => TaskVerificationExecutionOutcome::Signalled {},
-            },
-            ControlledTermination::TimedOut => TaskVerificationExecutionOutcome::TimedOut {},
-            ControlledTermination::Cancelled => TaskVerificationExecutionOutcome::Cancelled {},
-            ControlledTermination::OutputLimit => TaskVerificationExecutionOutcome::OutputLimit {},
-            ControlledTermination::IoFailure => TaskVerificationExecutionOutcome::IoFailure {},
-        };
-        if self.context.verify().is_err()
-            || self.binary.verify().is_err()
-            || !self.environment_matches()
-        {
-            outcome = TaskVerificationExecutionOutcome::IoFailure {};
-        }
-        let finished_at = chrono::Utc::now();
-        let observation = TaskVerificationObservation {
-            outcome,
-            started_at: started_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            finished_at: finished_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-            stdout: stream(&output.stdout, output.stdout_complete),
-            stderr: stream(&output.stderr, output.stderr_complete),
-        };
-        TaskVerificationRunOutcome::Executed {
-            observation: Box::new(observation),
-            stdout: output.stdout,
-            stderr: output.stderr,
-        }
-    }
-}
-
-impl PreparedVerification {
-    fn environment_matches(&self) -> bool {
-        HostEnvironment::read()
-            .and_then(|current| {
-                current.fingerprint(&self.binary, self.manifest.source.tree_sha.len())
-            })
-            .is_ok_and(|value| value == self.manifest.environment_sha256)
-    }
-}
-
-fn stream(bytes: &[u8], complete: bool) -> TaskVerificationStream {
-    TaskVerificationStream {
-        sha256: digest(bytes),
-        size_bytes: bytes.len() as u64,
-        complete,
-    }
-}
-
-fn not_run(reason: Reason) -> TaskVerificationRunOutcome {
-    TaskVerificationRunOutcome::NotRun { reason }
-}
+mod execution;
