@@ -1,12 +1,14 @@
 use chrono::DateTime;
 
 use super::*;
-use crate::domain::planning::evidence::{
+use crate::evidence::{
     MAX_TASK_EVIDENCE_ATTEMPTS_PER_CRITERION, MAX_TASK_EVIDENCE_REVISION, TaskEvidenceError,
     validate_evidence_identifier, validate_evidence_request_id, validate_evidence_token,
 };
 
-pub(crate) fn validate_time(value: &str) -> Result<(), TaskEvidenceError> {
+/// Checks the bounded RFC3339 timestamp used in persisted verification transitions.
+/// A valid timestamp supplies no execution or delivery authority.
+pub fn validate_time(value: &str) -> Result<(), TaskEvidenceError> {
     if value.len() > 128 || DateTime::parse_from_rfc3339(value).is_err() {
         return Err(TaskEvidenceError::Invalid);
     }

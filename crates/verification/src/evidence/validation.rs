@@ -2,7 +2,7 @@ use chrono::DateTime;
 use sha2::{Digest, Sha256};
 
 use super::*;
-use crate::domain::planning::{TaskAcceptanceCriterion, normalize_task_acceptance};
+use crate::acceptance::{TaskAcceptanceCriterion, normalize_task_acceptance};
 
 pub fn validate_evidence_identifier(value: &str) -> Result<(), TaskEvidenceError> {
     // E1 permits internal whitespace in criterion ids. Hashing, rather than restricting their
