@@ -1424,6 +1424,7 @@ The Gateway records the external documents that a thread mentions, without a mod
   For a normal `origin` tracking layout with the same fetch and push URL, the push dialog includes
   the last fetched destination SHA if known. After confirmation Desktop checks the advertised SHA
   and refuses if it changed. This is a preflight for ordinary pushes, not an atomic force lease.
+  [Graph base realignment](git-base-realignment.md) combines a reviewed local base reset and ordered picks in one journal record.
   The separate operator-only protected rewrite workflow is documented in
   [Protected Git destinations](git-protected-destinations.md). It uses an explicit fetch and an exact SHA lease.
   The "그래프" side panel (plan 27 G1, G2) shows the commit graph of the open thread's folder, read-only. It reads
