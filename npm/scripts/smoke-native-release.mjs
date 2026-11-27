@@ -8,6 +8,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolvePlatformConfig } from "../lib/platform.js";
 import { cleanupVerifiedReleaseAssets, extractVerifiedArchive, findAndVerifyArchive } from "./verify-native-release-assets.mjs";
+import { findAndVerifyLegacyArchive } from "./native-release/legacy.mjs";
 
 export function isolatedEnvironment(root, platform = process.platform, inherited = process.env) {
   const home = path.join(root, "profile");
@@ -33,16 +34,16 @@ function launcherFixture(bundle, root, platform = process.platform, run = spawnS
   mkdirSync(env.HOME, { recursive: true });
   const windows = platform === "win32";
   const launcher = path.join(bundle, windows ? "akra.cmd" : "akra");
-  function invoke(args, expected) {
+  function invoke(args, expected, input) {
     // All arguments are fixed literals below. A variable expansion supplies the
     // quoted absolute launcher; no caller-controlled shell command is assembled.
     const command = windows ? env.ComSpec : launcher;
     const argv = windows ? ["/d", "/v:off", "/s", "/c", '""%AKRA_SMOKE_LAUNCHER%" ' + args.join(" ") + '"'] : args;
     const childEnv = windows ? { ...env, AKRA_SMOKE_LAUNCHER: launcher } : env;
     const result = run(command, argv, { cwd, env: childEnv, windowsHide: true,
-      windowsVerbatimArguments: windows, encoding: "utf8", timeout: 30_000, maxBuffer: 1024 * 1024 });
+      windowsVerbatimArguments: windows, encoding: "utf8", input, timeout: 30_000, maxBuffer: 1024 * 1024 });
     if (result.error) throw result.error;
-    assert.equal(result.status, 0, "release launcher failed: " + args[0]);
+    assert.equal(result.status, 0, "release launcher failed (" + path.basename(bundle) + "): " + args.join(" "));
     assert.ok(result.stdout.includes(expected), "unexpected release launcher output: " + args[0]);
     return result.stdout;
   }
@@ -93,10 +94,38 @@ export function smokeUpgrade(previousBundle, candidateBundle, root, platform = p
   readMode(candidate, "observe");
 }
 
+export function smokeLegacyUpgrade(previous, candidate) {
+  const title = "Synthetic legacy upgrade task";
+  const description = "Disposable release compatibility fixture";
+  const list = JSON.stringify({ version: 1, op: "list_tasks", limit: 20 });
+  previous.invoke(["--help"], "Usage: akra");
+  previous.invoke(["doctor"], "health:");
+  const initial = JSON.parse(previous.invoke(["planning-tool", "run"], "", list));
+  assert.equal(initial.ok, true, "legacy planning initialization failed");
+  assert.deepEqual(initial.tasks, [], "legacy fixture must start with no tasks");
+  const created = JSON.parse(previous.invoke(["planning-tool", "run"], "", JSON.stringify({
+    version: 1, op: "create_task", apply: true, title, description,
+    status: "ready", depends_on: [], blocked_by: [],
+  })));
+  assert.equal(created.ok, true, "legacy task creation failed");
+  assert.equal(created.committed_task_ids.length, 1, "legacy must commit one task");
+  const id = created.committed_task_ids[0];
+  const before = JSON.parse(previous.invoke(["planning-tool", "run"], "", list));
+  assert.equal(before.ok, true);
+  assert.equal(before.tasks.length, 1);
+  assert.equal(before.tasks[0].id, id);
+  const after = JSON.parse(candidate.invoke(["planning-tool", "run"], "", list));
+  assert.equal(after.ok, true, "candidate cannot read the legacy authority");
+  assert.equal(after.tasks.length, 1, "candidate lost or duplicated the legacy task");
+  assert.equal(after.tasks[0].id, id, "candidate changed the legacy task identity");
+  assert.equal(after.tasks[0].title, title);
+  assert.equal(after.tasks[0].description, description);
+}
+
 export async function smokeArchive({ directory, version, target, profile = "release", previous }) {
   const host = resolvePlatformConfig();
   if (!host || host.targetTriple !== target) throw new Error("release smoke requires the matching native OS/architecture");
-  if (previous && previous.version.replace(/^v/, "") === version.replace(/^v/, "")) {
+  if (previous && !previous.legacy && previous.version.replace(/^v/, "") === version.replace(/^v/, "")) {
     throw new Error("upgrade smoke requires a different previous release version");
   }
   const verified = await findAndVerifyArchive(path.resolve(directory), version, target, profile);
@@ -106,11 +135,18 @@ export async function smokeArchive({ directory, version, target, profile = "rele
     root = mkdtempSync(path.join(tmpdir(), "akra release smoke "));
     const bundle = extractVerifiedArchive(verified, path.join(root, "installed archive"));
     if (previous) {
-      const old = await findAndVerifyArchive(path.resolve(previous.directory), previous.version, target, "release");
+      const old = previous.legacy
+        ? await findAndVerifyLegacyArchive(path.resolve(previous.directory), previous.version, target)
+        : await findAndVerifyArchive(path.resolve(previous.directory), previous.version, target, "release");
       archives.set("previous", old);
       const oldBundle = extractVerifiedArchive(old, path.join(root, "previous archive"));
-      smokeUpgrade(oldBundle, bundle, root);
-      console.log("verified previous release profile upgrade: " + previous.version + " -> " + version + " " + target);
+      if (previous.legacy) {
+        smokeLegacyUpgrade(launcherFixture(oldBundle, root), launcherFixture(bundle, root));
+        console.log("verified published legacy task preservation: " + previous.version + " -> " + version + " " + target);
+      } else {
+        smokeUpgrade(oldBundle, bundle, root);
+        console.log("verified previous release profile upgrade: " + previous.version + " -> " + version + " " + target);
+      }
     } else {
       smokeLauncher(bundle, root);
       console.log("verified native archive launcher and isolated profile: " + target);
@@ -123,10 +159,10 @@ export async function smokeArchive({ directory, version, target, profile = "rele
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const [directory, version, target, profile = "release", ...extra] = process.argv.slice(2);
-  const previous = extra.length === 3 && extra[0] === "--previous" && extra[1] && extra[2]
-    ? { directory: extra[1], version: extra[2] } : undefined;
+  const previous = extra.length === 3 && ["--previous", "--previous-legacy"].includes(extra[0]) && extra[1] && extra[2]
+    ? { directory: extra[1], version: extra[2], legacy: extra[0] === "--previous-legacy" } : undefined;
   if (!directory || !version || !target || !["release", "debug"].includes(profile) || (extra.length && !previous)) {
-    console.error("Usage: node npm/scripts/smoke-native-release.mjs <assets-dir> <version> <target> [release|debug] [--previous <assets-dir> <version>]");
+    console.error("Usage: node npm/scripts/smoke-native-release.mjs <assets-dir> <version> <target> [release|debug] [--previous|--previous-legacy <assets-dir> <version>]");
     process.exitCode = 1;
   } else {
     await smokeArchive({ directory, version, target, profile, previous }).catch(error => {
