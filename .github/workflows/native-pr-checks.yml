@@ -833,13 +833,31 @@ jobs:
       - name: Clear restored Cargo timing diagnostics
         run: node scripts/ci-cache.mjs clear-timings
 
+      - name: Reuse timestamps of unchanged cached source inputs
+        if: steps.rust_cache_policy.outcome == 'success'
+        run: node scripts/ci-cache-inputs.mjs prepare
+
+      - name: Record restored selected cache metrics
+        if: always() && steps.rust_cache_policy.outcome == 'success'
+        continue-on-error: true
+        env:
+          AKRA_CI_CACHE_REGISTRY_PRIMARY: ${{ steps.restore_registry.outputs.cache-primary-key }}
+          AKRA_CI_CACHE_REGISTRY_MATCHED: ${{ steps.restore_registry.outputs.cache-matched-key }}
+          AKRA_CI_CACHE_REGISTRY_HIT: ${{ steps.restore_registry.outputs.cache-hit }}
+          AKRA_CI_CACHE_REGISTRY_OUTCOME: ${{ steps.restore_registry.outcome }}
+          AKRA_CI_CACHE_TARGET_PRIMARY: ${{ steps.restore_target.outputs.cache-primary-key }}
+          AKRA_CI_CACHE_TARGET_MATCHED: ${{ steps.restore_target.outputs.cache-matched-key }}
+          AKRA_CI_CACHE_TARGET_HIT: ${{ steps.restore_target.outputs.cache-hit }}
+          AKRA_CI_CACHE_TARGET_OUTCOME: ${{ steps.restore_target.outcome }}
+        run: node scripts/ci-cache.mjs record restored
+
       - name: Execute exact planned package and target
         env:
           AKRA_CI_PLAN_HASH: ${{ needs.scope.outputs.impact-plan-hash }}
           AKRA_CI_ROW_ID: ${{ matrix.rowId }}
         run: node scripts/ci-workflow-plan.mjs run --row "$AKRA_CI_ROW_ID"
 
-      - name: Record selected cache restoration
+      - name: Record completed selected cache metrics
         if: always() && steps.rust_cache_policy.outcome == 'success'
         continue-on-error: true
         env:

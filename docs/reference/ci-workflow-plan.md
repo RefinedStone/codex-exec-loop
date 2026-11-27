@@ -61,3 +61,9 @@ node --test scripts/agent-plan.test.mjs scripts/ci-plan-inputs.test.mjs scripts/
 ```
 
 Windows tunnel 중단 후 이 연결 코드는 임시 실행 환경에서 작성했다. 실제 Actions의 새로운 선택 matrix 실행, Windows/macOS 실행과 전체 통합 SHA 성공은 아직 인수하지 않았다. 현재 PR은 이 제한을 명시하는 Draft로 제공하며, #2911의 전체 성능 인수 완료로 계산하지 않는다.
+
+## Cache integration
+
+This workflow builds on the verified input timestamp policy in PR #2935 (#2866). The selected matrix restores compatible caches, clears old diagnostics, prepares only byte-identical source timestamps, and records both restored and completed cache metrics. It never seals or saves PR target caches. Existing trusted full-job writers retain their sealed-input requirement.
+
+Cache namespaces remain separated by implicit/explicit target and feature set. Linux selected explicit-target rows and portable default-feature rows currently have no equivalent trusted full-job target-cache producer; they can be cold even when the registry cache is warm. This is a remaining measurement/producer-alignment item, not evidence of a warm selected cache.
