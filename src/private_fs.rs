@@ -24,16 +24,6 @@ pub(crate) fn validate_windows_path_identity(
     validate_windows_owner(path, opened)
 }
 
-/// A shared OS temporary parent may gain children during verification. Require the
-/// current owner and stable directory identity without requiring an owner-only DACL.
-/// This policy must not be used for files, stores, or owned temporary children.
-pub(crate) fn validate_windows_shared_directory_path_identity(
-    path: &Path,
-    opened: &File,
-) -> Result<()> {
-    validate_windows_shared_directory_with_security(path, opened, validate_windows_owner)
-}
-
 /// Shared private temporary roots additionally require a protected owner-only DACL
 /// on both handles. Keep this stricter boundary separate from the shared OS Temp parent.
 pub(crate) fn validate_windows_shared_private_directory(path: &Path, opened: &File) -> Result<()> {
@@ -938,7 +928,13 @@ mod shared_directory_tests {
             .unwrap();
         let before = windows_file_identity_snapshot(&opened).unwrap();
 
-        validate_windows_shared_directory_path_identity(&directory.0, &opened).unwrap();
+        // This test-only positive control isolates owner/identity from the production private DACL.
+        validate_windows_shared_directory_with_security(
+            &directory.0,
+            &opened,
+            validate_windows_owner,
+        )
+        .unwrap();
         let error = validate_windows_shared_private_directory(&directory.0, &opened).unwrap_err();
         assert!(
             format!("{error:#}").contains("dacl_protected=false"),
