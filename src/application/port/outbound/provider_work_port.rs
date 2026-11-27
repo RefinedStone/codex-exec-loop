@@ -3,6 +3,15 @@ use crate::domain::provider_credentials::{ConnectionMetadata, CredentialResult, 
 use crate::domain::provider_work::{JiraSummary, LinearIssue, ProviderLinkRequest};
 
 pub trait ProviderWorkApiPort: Send + Sync {
+    fn jira_draft_ids(
+        &self,
+        _metadata: &ConnectionMetadata,
+        _token: &SecretToken,
+        _key: &str,
+    ) -> CredentialResult<(String, String, String)> {
+        Err(crate::domain::provider_credentials::ProviderCredentialError::Unsupported)
+    }
+
     fn jira_summary(
         &self,
         metadata: &ConnectionMetadata,

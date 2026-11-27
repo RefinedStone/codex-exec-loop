@@ -201,7 +201,9 @@ export interface JiraSummary {
 }
 
 /** Jira 업무 패널의 renderer facade이다. 인증과 HTTP는 Gateway가 소유한다. */
+export interface JiraDraftCoordinate { readonly connection:import("./providerCredentials").ConnectionRef; readonly cloudId:string; readonly projectId:string; readonly issueId:string }
 export interface JiraBridge extends ProviderConnectionBridge {
+  draftTarget(key:string): Promise<JiraDraftCoordinate>;
   currentVersion(request: { readonly key: string; readonly url: string }): Promise<{ version: string }>;
   summary(): Promise<JiraSummary>;
   issuePrompt(key: string): Promise<string>;

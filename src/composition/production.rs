@@ -561,7 +561,7 @@ pub(crate) fn build_gateway_backend(
         kernels,
         mcp_hub,
         work_context,
-        providers,
+        providers: providers.clone(),
         git_graph: Arc::new(GitGraphService::new(Arc::new(GitHistoryAdapter))),
         git_operations: build_git_operations(turn_activity.clone()),
         turn_activity,
@@ -584,7 +584,7 @@ pub(crate) fn build_gateway_backend(
         ),
         dots: build_dots()?,
         chats: build_chats()?,
-        issue_drafts: build_issue_drafts()?,
+        issue_drafts: build_issue_drafts(providers.clone())?,
         delegations: Arc::new(build_delegations()),
     })
 }
@@ -628,8 +628,9 @@ pub(crate) fn build_issue_creation_journal() -> Arc<
     )
 }
 
-fn build_issue_drafts()
--> Result<Arc<dyn crate::application::port::inbound::issue_draft_port::IssueDraftPort>> {
+fn build_issue_drafts(
+    providers: super::provider_credentials::ProviderServices,
+) -> Result<Arc<dyn crate::application::port::inbound::issue_draft_port::IssueDraftPort>> {
     use crate::adapter::outbound::filesystem::evidence_vault_store::FilesystemEvidenceVaultStoreAdapter;
     use crate::adapter::outbound::filesystem::issue_automation_policy::FilesystemIssueAutomationPolicySourceAdapter;
     use crate::adapter::outbound::filesystem::issue_policy::FilesystemIssuePolicySourceAdapter;
@@ -651,6 +652,7 @@ fn build_issue_drafts()
     let vault = Arc::new(FilesystemEvidenceVaultStoreAdapter::new(vault_root));
     let snapshot = Arc::new(GithubIssueSnapshotAdapter::new(akra_home.clone()));
     let journal = build_issue_publish_journal();
+    let jira_router = super::jira_draft::router(providers, journal.clone(), vault.clone());
     // Creation and updates share the same ordering owner and restore-link mutex.
     let publisher = Arc::new(
         IssueJournaledPublishService::new(
@@ -682,7 +684,7 @@ fn build_issue_drafts()
                 Arc::new(crate::adapter::outbound::vault_key_store::OsVaultKeyStoreAdapter::new()),
             ),
         ),
-    ).with_creation(creator)
+    ).with_jira(jira_router).with_creation(creator)
         .with_automation_policy(Arc::new(IssueAutomationPolicyService::new(Arc::new(
             FilesystemIssueAutomationPolicySourceAdapter::new(),
         ))))))

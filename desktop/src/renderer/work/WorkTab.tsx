@@ -67,7 +67,8 @@ export function WorkTab({ reviewJobs, request, onHandOff, onLinearHandOff }: {
   }), [request]);
   useEffect(() => { providers.start(); return () => providers.dispose(); }, [providers]);
   const [source, setSource] = useState<WorkSource>("GitHub");
-  const currentRepository = useGitHubRepository(useDesktopStore(openThreadCwd));
+  const workFolder = useDesktopStore(openThreadCwd);
+  const currentRepository = useGitHubRepository(workFolder);
   // 고치는 중인 이슈이다 (#2426). 그 글은 이 패널에만 있고 대화 입력창으로 가지 않는다.
   const [editing, setEditing] = useState<IssueDraftTarget | null>(null);
   const [creating, setCreating] = useState<IssueCreationTarget | null>(null);
@@ -114,7 +115,7 @@ export function WorkTab({ reviewJobs, request, onHandOff, onLinearHandOff }: {
           }}
         />
       )}
-      {source === "Jira" && <JiraPanel jira={providers.jira} onHandOff={async (issue) => onHandOff(await providers.jira.issuePrompt(issue.key))} />}
+      {source === "Jira" && <JiraPanel jira={providers.jira} onEdit={workFolder ? async issue => { const jira=await providers.jira.draftTarget(issue.key); setEditing({cwd:workFolder,jira,displayKey:issue.key}); } : undefined} onHandOff={async (issue) => onHandOff(await providers.jira.issuePrompt(issue.key))} />}
       {source === "Notion" && <NotionPanel request={request} notion={window.akra.notion} onHandOff={onHandOff} />}
       {source === "Linear" && <LinearPanel linear={providers.linear} onHandOff={async (issue) => onLinearHandOff(await providers.linear.issuePrompt(issue.id))} />}
     </div>

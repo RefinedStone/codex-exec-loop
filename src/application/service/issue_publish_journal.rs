@@ -261,10 +261,30 @@ impl IssueJournaledPublishService {
     /// 결과를 모르는 의도마다 원격을 다시 읽어 상태를 정한다. 시작할 때와 사용자가 다시 확인할 때 부른다.
     /// 읽기만 한다. 쓰기를 보내지 않는다. 이 작업 폴더의 모든 의도를 돌려준다.
     pub fn reconcile(&self, workspace_dir: &str) -> Result<Vec<IssuePublishIntentRecord>> {
+        self.reconcile_scoped(workspace_dir, None)
+    }
+
+    /// Limit recovery to the selected issue; never send another provider's intent through this adapter.
+    pub fn reconcile_issue(
+        &self,
+        workspace_dir: &str,
+        issue: &IssueReference,
+    ) -> Result<Vec<IssuePublishIntentRecord>> {
+        self.reconcile_scoped(workspace_dir, Some(issue))
+    }
+
+    fn reconcile_scoped(
+        &self,
+        workspace_dir: &str,
+        selected: Option<&IssueReference>,
+    ) -> Result<Vec<IssuePublishIntentRecord>> {
         let _publishing = self.lock();
         let lease = self.journal.acquire_publication_lease(workspace_dir)?;
         lease.verify_identity()?;
         let mut records = self.journal.load(workspace_dir)?;
+        if let Some(issue) = selected {
+            records.retain(|r| r.issue.same_remote_issue(issue));
+        }
         for record in &mut records {
             if record.state.is_unresolved() {
                 let next = record.clone().reconciled(self.observe(&record.issue));

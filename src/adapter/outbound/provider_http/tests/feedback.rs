@@ -40,6 +40,38 @@ fn body() -> Value {
 }
 
 #[test]
+fn jira_draft_put_requires_current_send_authority_and_sends_only_approved_fields() {
+    let (adapter, http, token) = fixture();
+    let lease = lease(token);
+    let shared = json!({"fields":{"summary":"synthetic masked title","description":body()}});
+    let bytes = serde_json::to_vec(&shared).unwrap();
+    assert!(
+        adapter
+            .put_jira_draft(&lease, "100/../101", &bytes, authorization(true))
+            .is_err()
+    );
+    assert!(
+        adapter
+            .put_jira_draft(&lease, "100", &bytes, authorization(false))
+            .is_err()
+    );
+    assert!(http.calls.lock().unwrap().is_empty());
+    http.answer(Value::Null);
+    adapter
+        .put_jira_draft(&lease, "100", &bytes, authorization(true))
+        .unwrap();
+    let calls = http.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        calls[0].url,
+        "https://jira.example:8443/jira/rest/api/3/issue/100"
+    );
+    assert_eq!(calls[0].method, HttpMethod::Put);
+    assert_eq!(calls[0].expected, ExpectedResponse::NoContent);
+    assert_eq!(calls[0].body.as_ref(), Some(&shared));
+}
+
+#[test]
 fn feedback_wire_uses_post_201_put_200_and_post_empty_204_without_retry() {
     let (adapter, http, token) = fixture();
     let lease = lease(token);

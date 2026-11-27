@@ -228,3 +228,13 @@ PR에 기록한다. 이 문서는 실제 Jira 계정이나 모델을 호출한 �
 
 위 문서는 2026-11-23 구현 검토에 사용했다. 이 구현의 허용 범위와 거절 조건은
 공급자 API 전체 기능보다 좁으며, 정책과 typed adapter 계약으로 고정한다.
+
+### Jira Cloud masked drafts
+
+With an active work folder, open a Cloud issue in the Jira work panel and choose **마스킹 초안 열기**.
+The Gateway resolves the display key to the current connection revision, tenant, project ID, and issue ID.
+The editor reuses the local masking preview and explicit publish approval. Jira edit metadata and the
+current target are part of the approval basis; an unsupported required field or unsupported ADF in
+the current description blocks publication. Only the approved summary and description are sent.
+If the write response is lost, use the result check: it rereads the designated issue, never resends a PUT.
+Server/Data Center and Linear are not Jira Cloud draft targets.
