@@ -330,3 +330,23 @@ test("tracked files beneath an install output always remain content inputs", () 
     assert.notEqual(after.localChangeId, before.localChangeId);
   } finally { fixture.cleanup(); }
 });
+
+for (const flag of ["--assume-unchanged", "--skip-worktree"]) {
+  test("refuses hidden tracked Rust changes before clean or docs-only planning: " + flag, () => {
+    const fixture = createPlanFixture();
+    try {
+      fixtureGit(fixture.cwd, ["update-index", flag, "src/lib.rs"]);
+      writeFixtureFile(fixture.cwd, "src/lib.rs", 'compile_error!("hidden");\n');
+      assert.equal(fixtureGit(fixture.cwd, ["status", "--porcelain"]), "");
+      assert.throws(() => assertCleanPlanCheckout({ cwd: fixture.cwd, environment: fixture.environment }), /assume-unchanged or skip-worktree/);
+      writeFixtureFile(fixture.cwd, "README.md", "# documentation\n");
+      const index = readFileSync(join(fixture.cwd, ".git/index"));
+      assert.throws(() => collect(fixture), /assume-unchanged or skip-worktree/);
+      assert.throws(() => capture(fixture), /assume-unchanged or skip-worktree/);
+      assert.deepEqual(readFileSync(join(fixture.cwd, ".git/index")), index);
+      fixtureGit(fixture.cwd, ["update-index", "--no-assume-unchanged", "src/lib.rs"]);
+      fixtureGit(fixture.cwd, ["update-index", "--no-skip-worktree", "src/lib.rs"]);
+      assert.equal(createValidationPlan(collect(fixture)).mode, "full");
+    } finally { fixture.cleanup(); }
+  });
+}
