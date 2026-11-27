@@ -36,6 +36,9 @@ pub(crate) struct GatewayKernelClientRuntime {
     workspace_directory: String,
     snapshot: AppSnapshot,
     startup_generation: u64,
+    startup_workspace: Option<String>,
+    synchronized: bool,
+    refresh: Option<tokio::sync::mpsc::Sender<()>>,
     updates: Receiver<KernelClientUpdate>,
 }
 
@@ -43,8 +46,11 @@ impl GatewayKernelClientRuntime {
     /// Gateway 에 붙어 값을 읽는 스레드를 띄운다. 스레드는 연결이 끊기면 다시 붙고, 이 값이 사라지면 끝난다.
     pub(crate) fn attach(workspace_directory: String) -> Self {
         let (sender, updates) = mpsc::channel();
-        spawn_kernel_value_watcher(workspace_directory.clone(), TUI_KERNEL_CLIENT_NAME, sender);
-        Self::with_updates(workspace_directory, updates)
+        let refresh =
+            spawn_kernel_value_watcher(workspace_directory.clone(), TUI_KERNEL_CLIENT_NAME, sender);
+        let mut client = Self::with_updates(workspace_directory, updates);
+        client.refresh = Some(refresh);
+        client
     }
 
     fn with_updates(workspace_directory: String, updates: Receiver<KernelClientUpdate>) -> Self {
@@ -54,6 +60,9 @@ impl GatewayKernelClientRuntime {
             workspace_directory,
             snapshot,
             startup_generation: 0,
+            startup_workspace: None,
+            synchronized: false,
+            refresh: None,
             updates,
         }
     }
@@ -70,16 +79,24 @@ impl GatewayKernelClientRuntime {
         self.snapshot.revision += 1;
         match update {
             KernelClientUpdate::Value(value) => self.apply_value(value),
+            KernelClientUpdate::Synchronized => {
+                self.synchronized = true;
+                self.publish_startup(self.ready_snapshot())
+            }
             KernelClientUpdate::Disconnected(reason) => {
+                self.synchronized = false;
+                let message = format!(
+                    "lost the connection to the Akra Gateway kernel ({reason}); reconnecting"
+                );
                 self.snapshot.session_catalog = SessionCatalogSnapshot::Failed {
-                    message: format!(
-                        "lost the connection to the Akra Gateway kernel ({reason}); reconnecting"
-                    ),
+                    message: message.clone(),
                 };
-                vec![
+                let mut events = vec![
                     AppEvent::SessionCatalogChanged(self.snapshot.session_catalog.clone()),
                     AppEvent::ThreadActivityChanged(Vec::new()),
-                ]
+                ];
+                events.extend(self.publish_startup(StartupSnapshot::Failed { message }));
+                events
             }
         }
     }
@@ -118,28 +135,44 @@ impl GatewayKernelClientRuntime {
         }
     }
 
-    fn startup_ready(&mut self, workspace_directory: String) -> Vec<AppEvent> {
-        self.startup_generation += 1;
+    fn ready_snapshot(&self) -> StartupSnapshot {
         let ready = |detail: &str| StartupDiagnosticSnapshot {
             ok: true,
             detail: detail.to_string(),
         };
-        let snapshot = StartupSnapshot::Ready(Box::new(StartupReadySnapshot {
-            cwd: workspace_directory.clone(),
+        let not_checked = || StartupDiagnosticSnapshot {
+            ok: false,
+            detail: "not checked by the read-only Gateway kernel client".to_string(),
+        };
+        StartupSnapshot::Ready(Box::new(StartupReadySnapshot {
+            cwd: self
+                .startup_workspace
+                .clone()
+                .unwrap_or_else(|| self.workspace_directory.clone()),
             workspace_path: self.workspace_directory.clone(),
+            // Read-only kernel projection is usable; provider diagnostics were not performed.
             can_continue: true,
-            codex_binary: ready("the Akra Gateway runs codex"),
+            codex_binary: not_checked(),
             workspace: ready(&self.workspace_directory),
-            app_server_initialize: ready("attached to the Akra Gateway kernel"),
-            account: ready("checked by the Akra Gateway"),
+            app_server_initialize: StartupDiagnosticSnapshot {
+                ok: false,
+                detail: "Gateway kernel synchronized; app-server initialize not checked"
+                    .to_string(),
+            },
+            account: not_checked(),
             attachment: StartupAttachmentSnapshot {
                 mode_label: "gateway kernel client".to_string(),
                 recovery_anchor_label: "Akra Gateway".to_string(),
             },
-            // A warning would mark the runtime degraded. The attachment label names this client instead.
             warnings: Vec::new(),
             schema_snapshot: String::new(),
-        }));
+        }))
+    }
+
+    fn publish_startup(&mut self, snapshot: StartupSnapshot) -> Vec<AppEvent> {
+        let Some(workspace_directory) = self.startup_workspace.clone() else {
+            return Vec::new();
+        };
         self.snapshot.startup = snapshot.clone();
         vec![AppEvent::StartupChanged {
             correlation: StartupCheckCorrelation {
@@ -148,6 +181,17 @@ impl GatewayKernelClientRuntime {
             },
             snapshot,
         }]
+    }
+
+    fn startup_requested(&mut self, workspace_directory: String) -> Vec<AppEvent> {
+        self.startup_generation += 1;
+        self.startup_workspace = Some(workspace_directory);
+        let snapshot = if self.synchronized {
+            self.ready_snapshot()
+        } else {
+            StartupSnapshot::Loading
+        };
+        self.publish_startup(snapshot)
     }
 }
 
@@ -225,8 +269,15 @@ impl NativeClientPort for GatewayKernelClientRuntime {
             NativeClientEvent::Core(input) => match *input {
                 CoreInput::Command(AppCommand::RunStartupChecks {
                     workspace_directory,
-                }) => self.startup_ready(workspace_directory),
-                CoreInput::Command(AppCommand::LoadSessionCatalog(_)) => {
+                }) => self.startup_requested(workspace_directory),
+                CoreInput::Command(AppCommand::LoadSessionCatalog(intent)) => {
+                    // Initial sync ensures a load; explicit refresh requests are coalesced.
+                    if (intent.mode == crate::core::app::SessionCatalogLoadMode::Refresh
+                        || matches!(self.snapshot.session_catalog, SessionCatalogSnapshot::Idle))
+                        && let Some(refresh) = &self.refresh
+                    {
+                        let _ = refresh.try_send(());
+                    }
                     vec![AppEvent::SessionCatalogChanged(
                         self.snapshot.session_catalog.clone(),
                     )]
@@ -374,6 +425,7 @@ pub(crate) mod tests {
         for value in values {
             sender.send(KernelClientUpdate::Value(value)).unwrap();
         }
+        sender.send(KernelClientUpdate::Synchronized).unwrap();
         drop(sender);
         GatewayKernelClientRuntime::with_updates(workspace_directory.to_string(), updates)
     }
@@ -448,8 +500,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn startup_is_ready_without_a_local_app_server_and_a_lost_connection_shows_in_the_session_list()
-    {
+    fn startup_waits_for_sync_and_lost_connection_is_not_ready() {
         let (sender, updates) = mpsc::channel();
         let mut client = GatewayKernelClientRuntime::with_updates("/repo".to_string(), updates);
 
@@ -462,9 +513,17 @@ pub(crate) mod tests {
         };
         assert!(matches!(
             started.events.as_slice(),
-            [AppEvent::StartupChanged { snapshot: StartupSnapshot::Ready(ready), .. }]
-                if ready.can_continue && ready.attachment.mode_label == "gateway kernel client"
+            [AppEvent::StartupChanged {
+                snapshot: StartupSnapshot::Loading,
+                ..
+            }]
         ));
+        sender.send(KernelClientUpdate::Synchronized).unwrap();
+        client.run_host_cycle(Instant::now(), Duration::ZERO, 16);
+        assert!(
+            matches!(client.snapshot().startup, StartupSnapshot::Ready(ready)
+            if ready.can_continue && !ready.account.ok && ready.attachment.mode_label == "gateway kernel client")
+        );
 
         sender
             .send(KernelClientUpdate::Disconnected("closed".to_string()))
@@ -474,6 +533,29 @@ pub(crate) mod tests {
             client.snapshot().session_catalog,
             SessionCatalogSnapshot::Failed { message } if message.contains("reconnecting")
         ));
+        assert!(
+            matches!(client.snapshot().startup, StartupSnapshot::Failed { message } if message.contains("reconnecting"))
+        );
+        sender.send(KernelClientUpdate::Synchronized).unwrap();
+        client.run_host_cycle(Instant::now(), Duration::ZERO, 16);
+        assert!(matches!(
+            client.snapshot().startup,
+            StartupSnapshot::Ready(_)
+        ));
         assert!(client.is_gateway_kernel_client());
+    }
+
+    #[test]
+    fn explicit_catalog_load_is_forwarded_to_the_watcher() {
+        let (_sender, updates) = mpsc::channel();
+        let (refresh, mut requests) = tokio::sync::mpsc::channel(1);
+        let mut client = GatewayKernelClientRuntime::with_updates("/repo".to_string(), updates);
+        client.refresh = Some(refresh);
+        client.dispatch_client_event(NativeClientEvent::core(CoreInput::Command(
+            AppCommand::LoadSessionCatalog(crate::core::app::SessionCatalogLoadIntent::refresh(
+                10, "/repo",
+            )),
+        )));
+        assert!(requests.try_recv().is_ok());
     }
 }

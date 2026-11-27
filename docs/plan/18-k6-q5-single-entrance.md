@@ -444,18 +444,21 @@ K6-2 는 PR 하나로 끝나지 않는다. TUI 는 `NativeClientPort` 하나로 
   않고 `GatewayKernelClientRuntime` 으로 연다 (`production::attach_native_tui_to_gateway_kernel`). 답이 없으면 지금처럼
   잠금 오류로 끝난다. 잠금이 비어 있으면 지금처럼 자기 커널로 연다.
 - client: 스레드 하나가 Gateway 에 붙어 있는다 (`akra/kernel/attach`, client 이름 `akra-tui`, transient 아님). `sessions`,
-  `auto_follow`, `thread_activity` 를 읽고 그 이벤트를 따라간다. `resync` 면 다시 읽는다. 연결이 끊기면 세션 목록에
-  이유를 보이고 1초 뒤 다시 붙는다. 값은 TUI 가 이미 그리는 core 의 투영으로 바꾼다 (`SessionCatalogChanged`,
-  `ThreadActivityChanged`, `conversation_runtime.auto_follow`). 시작 점검은 자기 app-server 없이 Ready 이다
-  (attachment `gateway kernel client`).
+  `auto_follow`, `thread_activity` 를 읽고 그 이벤트를 따라간다. 첫 연결과 세션 목록 새로 고침 요청에서 읽기 명령
+  `load_sessions` 와 조회를 보낸다. 기존 명령은 ensure-loaded 이므로 이미 Ready 인 provider 목록의 강제 재조회는
+  보장하지 않는다. `resync` 면 조회를 다시 보낸다. pipe/socket 연결과 WebSocket handshake 는 5초, attach 와 초기 조회,
+  이후 동기화는 각 15초 상한을 둔다. 시작 전 탐색 조회도 10초 상한을 둔다. 정상 연결의 이벤트 대기에는 제한 시간이 없다.
+  연결이 끊기면 시작 점검과 세션 목록에 실패/재접속 이유를 보이고 1초 뒤 다시 붙는다. 초기 조회가 모두 응답한 뒤에만
+  읽기 전용 연결을 Ready 로 표시하며, 직접 하지 않은 app-server/account 진단은 미확인으로 표시한다.
+  값은 TUI 의 core 투영으로 바꾼다 (`SessionCatalogChanged`, `ThreadActivityChanged`, `conversation_runtime.auto_follow`).
 - 잠금 (Q-M5-1 의 답): 프로토콜에 조회나 명령이 없는 화면(`:work`, `:parallel`, `:peek`, `:reviews`, `:queue`,
   `:directions`, `:doctor`, `:planning`, `:reset`)은 `KernelProtocolMissing` ("not in the kernel protocol yet; use Akra
   Desktop or the admin web")으로 잠근다. 화면의 코드는 그대로이다. 프로토콜에 명령은 있지만 이 조각이 아직 잇지 않은
   것(`:turns`, `:stop`, `:new`, 프롬프트, 세션 열기와 이름 바꾸기)은 `KernelClientReadsOnly` ("read-only Gateway kernel
   client")로 거절한다. 팔레트는 LOCKED 와 이유를 보이고, 직접 친 명령은 상태 줄과 대화 기록에 이유를 남긴다.
 
-확인: 가짜 wire 시험 (붙은 뒤 세 값을 읽고, 다른 이벤트는 넘기고, `resync` 에 다시 읽는다). client 시험 둘 (값이 세션
-목록·thread 요약·자동 후속 값이 된다, 시작 점검은 Ready 이고 끊김은 세션 목록에 보인다). 잠금 표 시험. 시작 판정 시험
+검증 범위: 가짜 wire 시험 (Idle 목록의 로드 명령, 세 값 조회, 갱신/재동기화, attach/초기 조회 제한 시간, 정상 idle 연결).
+client 시험 (세션/활동/자동 후속 투영, 동기화 전 Loading, 단절 후 Failed, 재연결 후 Ready, 새로 고침 전달). 잠금 표 시험. 시작 판정 시험
 (TUI 가 쥔 잠금과 Gateway 가 없는 경우는 지금처럼 오류). TestBackend 화면 시험: 팔레트의 LOCKED 이유, `:queue` 의 거절
 상태 줄, 프롬프트 거절, 커널의 세션 목록 (`[running]`). 모델 턴은 없다.
 

@@ -1118,7 +1118,11 @@ Akra Desktop (`desktop/`) runs from source as a development build; it has no pac
   (`:work`, `:parallel`, `:peek`, `:reviews`, `:queue`, `:directions`, `:doctor`, `:planning`, `:reset`)
   are LOCKED with `not in the kernel protocol yet; use Akra Desktop or the admin web`, and prompts,
   opening or renaming a session, `:turns`, `:stop`, and `:new` show `read-only Gateway kernel client`.
-  A lost Gateway connection shows in the session list and the client reconnects every second.
+  On attach and an explicit catalog request, the client sends the existing read-only `load_sessions`
+  command and queries the values; this is ensure-loaded, not a forced provider refresh of a ready catalog.
+  Connection/handshake and initial/sync requests have bounded deadlines, unlike healthy idle listening.
+  Read-only readiness follows initial synchronization, and provider/account diagnostics are not claimed
+  to have run. A lost connection invalidates readiness and the session list; the client reconnects every second.
 - One Gateway runs per user: a second instance exits with `another akra-gateway is already running`.
   Child processes are contained (Windows job objects) and end with the Gateway.
 - `AKRA_GATEWAY_RECORD=1` records each session's text frames as JSONL under the user-private
