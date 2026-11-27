@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": 1,
+  "revision": 2,
   "baselineSha": "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
   "rootPackage": "akra-ade",
   "packages": [
@@ -30,13 +30,15 @@
     {
       "name": "akra-issue-core",
       "manifest": "crates/issue-core/Cargo.toml",
-      "state": "planned",
+      "state": "active",
       "workspaceDependencies": [],
       "consumerCoverage": "full",
       "sourcePrefixes": [
         "crates/issue-core/"
       ],
-      "externalInputs": []
+      "externalInputs": [
+        "schema/akra-issue-policy.example.toml"
+      ]
     },
     {
       "name": "akra-native",
@@ -252,6 +254,66 @@
       ],
       "features": "default-and-all",
       "ignored": "preserve"
+    },
+    {
+      "source": "src/application/service/issue_policy.rs",
+      "destination": "crates/issue-core/src/policy.rs",
+      "owner": "akra-issue-core",
+      "kind": "service-and-unit-tests",
+      "oldTestPrefix": "application::service::issue_policy::",
+      "newTestPrefix": "policy::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/application/port/outbound/issue_policy_source_port.rs",
+      "destination": "crates/issue-core/src/issue_policy_source_port.rs",
+      "owner": "akra-issue-core",
+      "kind": "outbound-port",
+      "oldTestPrefix": "application::port::outbound::issue_policy_source_port::",
+      "newTestPrefix": "issue_policy_source_port::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/application/service/issue_template.rs",
+      "destination": "crates/issue-core/src/template.rs",
+      "owner": "akra-issue-core",
+      "kind": "service-and-unit-tests",
+      "oldTestPrefix": "application::service::issue_template::",
+      "newTestPrefix": "template::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/application/port/outbound/issue_template_source_port.rs",
+      "destination": "crates/issue-core/src/issue_template_source_port.rs",
+      "owner": "akra-issue-core",
+      "kind": "outbound-port",
+      "oldTestPrefix": "application::port::outbound::issue_template_source_port::",
+      "newTestPrefix": "issue_template_source_port::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
     }
   ],
   "nativeCandidates": [
@@ -383,7 +445,7 @@
     {
       "name": "IssueValidationPassed",
       "owner": "akra-issue-core",
-      "source": "src/domain/issue_validation.rs",
+      "source": "crates/issue-core/src/issue_validation.rs",
       "privateFields": [
         "shared_copy"
       ],

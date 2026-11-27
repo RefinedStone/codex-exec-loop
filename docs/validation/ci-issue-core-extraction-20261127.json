@@ -1,0 +1,356 @@
+{
+  "schemaVersion": 1,
+  "baselineSha": "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
+  "sourceSha": "c2031a72eb31d1048e0ac98070de5313d869854a",
+  "sourceState": "uncommitted issue-core extraction",
+  "capturedAt": "2026-11-27T06:59:07.016Z",
+  "platform": "win32",
+  "arch": "x64",
+  "rustc": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.95.0\nLLVM version: 22.1.2\n",
+  "lockSha256": "0b938d989f40daa8824c624f27b5555963c63aa52f72b7d33f218bb9af4fe9cc",
+  "registrySha256": "e4242b9c5ef6e9213be32a6f722c22a92196f678403395816a1a41d9c302483b",
+  "incremental": "1",
+  "jobs": 8,
+  "features": "default (issue-core defines no optional features)",
+  "profile": "test",
+  "samplesPerCondition": 1,
+  "records": [
+    {
+      "label": "warm-after-public-api",
+      "elapsedMs": 886.1507,
+      "command": [
+        "C:/Users/dorani/.rustup/toolchains/1.95.0-x86_64-pc-windows-msvc/bin/cargo.exe",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "akra-issue-core",
+        "--lib",
+        "--no-run",
+        "--timings",
+        "-v",
+        "--message-format=json-render-diagnostics"
+      ],
+      "artifactCount": 50,
+      "freshArtifacts": 49,
+      "workspaceArtifacts": [
+        {
+          "packageId": "path+file:///C:/dev/worktrees/akra-ci2903-20261127/crates/issue-core#akra-issue-core@0.1.0",
+          "fresh": false,
+          "target": "akra_issue_core"
+        }
+      ],
+      "executable": "C:/dev/tmp/akra-ci2903-target-20261127\\debug\\deps\\akra_issue_core-bf6cebb5b94b99a2.exe"
+    },
+    {
+      "label": "unchanged",
+      "elapsedMs": 196.39960000000008,
+      "command": [
+        "C:/Users/dorani/.rustup/toolchains/1.95.0-x86_64-pc-windows-msvc/bin/cargo.exe",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "akra-issue-core",
+        "--lib",
+        "--no-run",
+        "--timings",
+        "-v",
+        "--message-format=json-render-diagnostics"
+      ],
+      "artifactCount": 50,
+      "freshArtifacts": 50,
+      "workspaceArtifacts": [
+        {
+          "packageId": "path+file:///C:/dev/worktrees/akra-ci2903-20261127/crates/issue-core#akra-issue-core@0.1.0",
+          "fresh": true,
+          "target": "akra_issue_core"
+        }
+      ],
+      "executable": "C:/dev/tmp/akra-ci2903-target-20261127\\debug\\deps\\akra_issue_core-bf6cebb5b94b99a2.exe"
+    },
+    {
+      "label": "small-domain-edit",
+      "elapsedMs": 1055.1398000000002,
+      "command": [
+        "C:/Users/dorani/.rustup/toolchains/1.95.0-x86_64-pc-windows-msvc/bin/cargo.exe",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "akra-issue-core",
+        "--lib",
+        "--no-run",
+        "--timings",
+        "-v",
+        "--message-format=json-render-diagnostics"
+      ],
+      "artifactCount": 50,
+      "freshArtifacts": 49,
+      "workspaceArtifacts": [
+        {
+          "packageId": "path+file:///C:/dev/worktrees/akra-ci2903-20261127/crates/issue-core#akra-issue-core@0.1.0",
+          "fresh": false,
+          "target": "akra_issue_core"
+        }
+      ],
+      "executable": "C:/dev/tmp/akra-ci2903-target-20261127\\debug\\deps\\akra_issue_core-bf6cebb5b94b99a2.exe"
+    },
+    {
+      "label": "reset-after-probe",
+      "elapsedMs": 980.8858999999998,
+      "command": [
+        "C:/Users/dorani/.rustup/toolchains/1.95.0-x86_64-pc-windows-msvc/bin/cargo.exe",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "akra-issue-core",
+        "--lib",
+        "--no-run",
+        "--timings",
+        "-v",
+        "--message-format=json-render-diagnostics"
+      ],
+      "artifactCount": 50,
+      "freshArtifacts": 49,
+      "workspaceArtifacts": [
+        {
+          "packageId": "path+file:///C:/dev/worktrees/akra-ci2903-20261127/crates/issue-core#akra-issue-core@0.1.0",
+          "fresh": false,
+          "target": "akra_issue_core"
+        }
+      ],
+      "executable": "C:/dev/tmp/akra-ci2903-target-20261127\\debug\\deps\\akra_issue_core-bf6cebb5b94b99a2.exe"
+    }
+  ],
+  "inventory": {
+    "baselineRoot": 6418,
+    "baselineIgnored": 24,
+    "moved": 53,
+    "newCrate": 53,
+    "newCrateIgnored": 0,
+    "retainedRootExpected": 6365,
+    "retainedIgnoredExpected": 24,
+    "transferred": [
+      {
+        "old": "application::service::issue_policy::tests::each_span_action_is_read_for_each_class",
+        "new": "policy::tests::each_span_action_is_read_for_each_class"
+      },
+      {
+        "old": "application::service::issue_policy::tests::invalid_approved_code_validators_block_the_user_file",
+        "new": "policy::tests::invalid_approved_code_validators_block_the_user_file"
+      },
+      {
+        "old": "application::service::issue_policy::tests::invalid_files_block_instead_of_falling_back_to_defaults",
+        "new": "policy::tests::invalid_files_block_instead_of_falling_back_to_defaults"
+      },
+      {
+        "old": "application::service::issue_policy::tests::mandatory_rules_can_be_stated_but_not_turned_off",
+        "new": "policy::tests::mandatory_rules_can_be_stated_but_not_turned_off"
+      },
+      {
+        "old": "application::service::issue_policy::tests::no_files_give_the_builtin_policy",
+        "new": "policy::tests::no_files_give_the_builtin_policy"
+      },
+      {
+        "old": "application::service::issue_policy::tests::project_file_selects_code_validators_but_only_the_user_file_approves_them",
+        "new": "policy::tests::project_file_selects_code_validators_but_only_the_user_file_approves_them"
+      },
+      {
+        "old": "application::service::issue_policy::tests::project_value_wins_over_user_value_and_other_values_are_inherited",
+        "new": "policy::tests::project_value_wins_over_user_value_and_other_values_are_inherited"
+      },
+      {
+        "old": "application::service::issue_policy::tests::publish_and_ai_handoff_policies_are_separate",
+        "new": "policy::tests::publish_and_ai_handoff_policies_are_separate"
+      },
+      {
+        "old": "application::service::issue_policy::tests::service_reads_both_files_and_blocks_when_one_is_unreadable",
+        "new": "policy::tests::service_reads_both_files_and_blocks_when_one_is_unreadable"
+      },
+      {
+        "old": "application::service::issue_policy::tests::shipped_example_is_a_valid_project_policy",
+        "new": "policy::tests::shipped_example_is_a_valid_project_policy"
+      },
+      {
+        "old": "application::service::issue_template::tests::a_draft_needs_review_when_the_template_changed_before_publish",
+        "new": "template::tests::a_draft_needs_review_when_the_template_changed_before_publish"
+      },
+      {
+        "old": "application::service::issue_template::tests::a_template_that_cannot_be_parsed_is_invalid_and_keeps_its_version",
+        "new": "template::tests::a_template_that_cannot_be_parsed_is_invalid_and_keeps_its_version"
+      },
+      {
+        "old": "application::service::issue_template::tests::issue_form_returns_required_inputs_and_separates_unsupported_ones",
+        "new": "template::tests::issue_form_returns_required_inputs_and_separates_unsupported_ones"
+      },
+      {
+        "old": "application::service::issue_template::tests::markdown_template_returns_path_version_and_heading_sections",
+        "new": "template::tests::markdown_template_returns_path_version_and_heading_sections"
+      },
+      {
+        "old": "application::service::issue_template::tests::markdown_templates_share_fence_rules_and_preserve_csharp_labels",
+        "new": "template::tests::markdown_templates_share_fence_rules_and_preserve_csharp_labels"
+      },
+      {
+        "old": "application::service::issue_template::tests::required_multiple_dropdowns_are_explicitly_unsupported",
+        "new": "template::tests::required_multiple_dropdowns_are_explicitly_unsupported"
+      },
+      {
+        "old": "application::service::issue_template::tests::service_distinguishes_no_template_missing_and_unreadable",
+        "new": "template::tests::service_distinguishes_no_template_missing_and_unreadable"
+      },
+      {
+        "old": "application::service::issue_template::tests::template_version_changes_only_when_the_contents_change",
+        "new": "template::tests::template_version_changes_only_when_the_contents_change"
+      },
+      {
+        "old": "domain::issue_markdown::tests::comment_only_and_mixed_lines_expose_different_path_uncertainty",
+        "new": "issue_markdown::tests::comment_only_and_mixed_lines_expose_different_path_uncertainty"
+      },
+      {
+        "old": "domain::issue_markdown::tests::comments_never_supply_hidden_headings_or_list_text",
+        "new": "issue_markdown::tests::comments_never_supply_hidden_headings_or_list_text"
+      },
+      {
+        "old": "domain::issue_markdown::tests::every_comment_close_and_reopen_on_a_line_preserves_hidden_state",
+        "new": "issue_markdown::tests::every_comment_close_and_reopen_on_a_line_preserves_hidden_state"
+      },
+      {
+        "old": "domain::issue_markdown::tests::headings_preserve_literal_hashes_and_ignore_indented_code",
+        "new": "issue_markdown::tests::headings_preserve_literal_hashes_and_ignore_indented_code"
+      },
+      {
+        "old": "domain::issue_markdown::tests::inline_code_comment_markers_are_literal_and_do_not_hide_following_headings",
+        "new": "issue_markdown::tests::inline_code_comment_markers_are_literal_and_do_not_hide_following_headings"
+      },
+      {
+        "old": "domain::issue_markdown::tests::only_matching_long_enough_fences_end_code",
+        "new": "issue_markdown::tests::only_matching_long_enough_fences_end_code"
+      },
+      {
+        "old": "domain::issue_markdown::tests::unclosed_fences_and_nonempty_closing_lines_keep_headings_hidden",
+        "new": "issue_markdown::tests::unclosed_fences_and_nonempty_closing_lines_keep_headings_hidden"
+      },
+      {
+        "old": "domain::issue_masking::tests::a_fully_removed_group_keeps_its_restorable_marker",
+        "new": "issue_masking::tests::a_fully_removed_group_keeps_its_restorable_marker"
+      },
+      {
+        "old": "domain::issue_masking::tests::adjacent_groups_keep_distinct_markers_and_removal_placeholders",
+        "new": "issue_masking::tests::adjacent_groups_keep_distinct_markers_and_removal_placeholders"
+      },
+      {
+        "old": "domain::issue_masking::tests::confirmation_decisions_cannot_weaken_a_remove_policy",
+        "new": "issue_masking::tests::confirmation_decisions_cannot_weaken_a_remove_policy"
+      },
+      {
+        "old": "domain::issue_masking::tests::invalid_utf8_ranges_take_precedence_over_pending_confirmation",
+        "new": "issue_masking::tests::invalid_utf8_ranges_take_precedence_over_pending_confirmation"
+      },
+      {
+        "old": "domain::issue_masking::tests::mixed_overlap_plans_absolute_ranges_without_restorable_plaintext",
+        "new": "issue_masking::tests::mixed_overlap_plans_absolute_ranges_without_restorable_plaintext"
+      },
+      {
+        "old": "domain::issue_masking::tests::removed_input_markers_still_reserve_their_numbers",
+        "new": "issue_masking::tests::removed_input_markers_still_reserve_their_numbers"
+      },
+      {
+        "old": "domain::issue_publish_intent::tests::a_reread_settles_only_unresolved_intents",
+        "new": "issue_publish_intent::tests::a_reread_settles_only_unresolved_intents"
+      },
+      {
+        "old": "domain::issue_publish_intent::tests::binding_attempt_preserves_missing_and_existing_expectations_in_the_journal",
+        "new": "issue_publish_intent::tests::binding_attempt_preserves_missing_and_existing_expectations_in_the_journal"
+      },
+      {
+        "old": "domain::issue_publish_intent::tests::binding_generation_suffix_preserves_legacy_hash_binding_strictly",
+        "new": "issue_publish_intent::tests::binding_generation_suffix_preserves_legacy_hash_binding_strictly"
+      },
+      {
+        "old": "domain::issue_publish_intent::tests::equal_shared_copies_have_distinct_restore_versions_per_intent",
+        "new": "issue_publish_intent::tests::equal_shared_copies_have_distinct_restore_versions_per_intent"
+      },
+      {
+        "old": "domain::issue_publish_intent::tests::mismatched_write_response_survives_serialization_and_rereads",
+        "new": "issue_publish_intent::tests::mismatched_write_response_survives_serialization_and_rereads"
+      },
+      {
+        "old": "domain::issue_publish_intent::tests::the_journal_line_holds_fingerprints_and_no_text",
+        "new": "issue_publish_intent::tests::the_journal_line_holds_fingerprints_and_no_text"
+      },
+      {
+        "old": "domain::issue_review::tests::missing_empty_or_repeated_excerpt_is_not_applied",
+        "new": "issue_review::tests::missing_empty_or_repeated_excerpt_is_not_applied"
+      },
+      {
+        "old": "domain::issue_review::tests::overlapping_excerpts_are_ambiguous_including_multibyte_text",
+        "new": "issue_review::tests::overlapping_excerpts_are_ambiguous_including_multibyte_text"
+      },
+      {
+        "old": "domain::issue_review::tests::suggestion_replaces_one_excerpt_of_its_field_only",
+        "new": "issue_review::tests::suggestion_replaces_one_excerpt_of_its_field_only"
+      },
+      {
+        "old": "domain::issue_template::tests::a_changed_template_version_requests_review",
+        "new": "issue_template::tests::a_changed_template_version_requests_review"
+      },
+      {
+        "old": "domain::issue_template::tests::a_template_that_cannot_be_read_now_requests_review",
+        "new": "issue_template::tests::a_template_that_cannot_be_read_now_requests_review"
+      },
+      {
+        "old": "domain::issue_template::tests::the_same_template_version_needs_no_review",
+        "new": "issue_template::tests::the_same_template_version_needs_no_review"
+      },
+      {
+        "old": "domain::issue_validation::tests::each_broken_rule_returns_an_error_for_its_field",
+        "new": "issue_validation::tests::each_broken_rule_returns_an_error_for_its_field"
+      },
+      {
+        "old": "domain::issue_validation::tests::empty_requirements_only_check_the_title",
+        "new": "issue_validation::tests::empty_requirements_only_check_the_title"
+      },
+      {
+        "old": "domain::issue_validation::tests::examples_cannot_satisfy_required_sections_and_csharp_is_a_real_heading",
+        "new": "issue_validation::tests::examples_cannot_satisfy_required_sections_and_csharp_is_a_real_heading"
+      },
+      {
+        "old": "domain::issue_validation::tests::missing_required_field_and_section_are_reported",
+        "new": "issue_validation::tests::missing_required_field_and_section_are_reported"
+      },
+      {
+        "old": "domain::issue_validation::tests::same_issue_and_requirements_give_the_same_result",
+        "new": "issue_validation::tests::same_issue_and_requirements_give_the_same_result"
+      },
+      {
+        "old": "domain::issue_validation::tests::section_holds_its_subsections_and_ignores_headings_in_code_fences",
+        "new": "issue_validation::tests::section_holds_its_subsections_and_ignores_headings_in_code_fences"
+      },
+      {
+        "old": "domain::issue_validation::tests::valid_issue_passes_and_keeps_the_validated_text",
+        "new": "issue_validation::tests::valid_issue_passes_and_keeps_the_validated_text"
+      },
+      {
+        "old": "domain::issue_work::tests::a_write_approval_authorizes_one_operation_on_one_issue",
+        "new": "issue_work::tests::a_write_approval_authorizes_one_operation_on_one_issue"
+      },
+      {
+        "old": "domain::issue_work::tests::field_hash_representation_and_version_are_pinned",
+        "new": "issue_work::tests::field_hash_representation_and_version_are_pinned"
+      },
+      {
+        "old": "domain::issue_work::tests::field_hash_uses_exact_field_values",
+        "new": "issue_work::tests::field_hash_uses_exact_field_values"
+      }
+    ]
+  },
+  "scope": "independent crate build, not full workspace or CI performance",
+  "limitations": [
+    "No claim that root integration validation can be omitted. Root consumer coverage remains full.",
+    "Cold 7.30s initial sample used all-features, no optional features, before the explicit shared Markdown export.",
+    "No Linux/macOS or hosted CI comparison. N=1, no percentile inference."
+  ]
+}

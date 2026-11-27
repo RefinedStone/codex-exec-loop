@@ -5,8 +5,8 @@
  * 초안 검증과 게시 직전 검증은 둘 다 `validate_issue` 를 부른다. `IssueValidationPassed` 는 이 모듈만
  * 만든다: 필드가 비공개이고 `Deserialize` 가 없다. LLM 제안이나 클라이언트 입력은 이 값을 만들 수 없다.
  */
-use crate::domain::issue_markdown::IssueMarkdownHeadings;
-use crate::domain::issue_work::IssueSharedCopy;
+use crate::issue_markdown::IssueMarkdownHeadings;
+use crate::issue_work::IssueSharedCopy;
 
 /// GitHub 이슈 폼이 빈 답 대신 본문에 쓰는 글이다. 빈 값으로 본다.
 const NO_RESPONSE_PLACEHOLDER: &str = "_No response_";

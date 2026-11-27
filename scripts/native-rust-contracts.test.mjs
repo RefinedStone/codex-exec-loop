@@ -136,6 +136,6 @@ test("Windows portable entrypoint retains the complete inventory including Vault
   assert.ok(filters.includes("provider_http"));
   assert.ok(filters.includes("adapter::outbound::jira::issue_source::tests::"));
   assert.ok(filters.includes("application::service::issue_collection::tests::jira::"));
-  assert.match(shell, /cargo check --locked --all-features/);
+  assert.match(shell, /cargo check --workspace --locked --all-features/);
   assert.match(shell, /run_native_rust_contracts\.mjs/);
 });

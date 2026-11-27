@@ -55,6 +55,7 @@ const NODE_PATHS = [
 const RUST_EMBEDDED_ADMIN_TEMPLATES = [/^templates\/admin\/.*\.html$/];
 
 const RUST_PATHS = [
+  /^crates\//,
   /^src\//,
   /^tests\//,
   /^benches\//,
