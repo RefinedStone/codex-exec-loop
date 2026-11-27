@@ -14,7 +14,7 @@ use crate::application::port::outbound::work_context_store_port::{
     ResourceVersionCheck, WORK_CONTEXT_SCOPE_EXCLUDE, WORK_CONTEXT_SCOPE_PIN, WorkContextLink,
     WorkContextStorePort, preference_scope_kind,
 };
-use crate::domain::work_context::{ContextPreference, ExternalResourceRef};
+use crate::domain::work_context::{ContextManifest, ContextPreference, ExternalResourceRef};
 
 const DIRECTORY: &str = "work-context";
 const FILE: &str = "ledger.sqlite";
@@ -53,6 +53,12 @@ CREATE TABLE IF NOT EXISTS read_versions (
     resource_id INTEGER NOT NULL REFERENCES resources (id),
     version TEXT NOT NULL,
     PRIMARY KEY (scope_kind, scope_id, resource_id)
+);
+CREATE TABLE IF NOT EXISTS context_manifests (
+    repository TEXT NOT NULL,
+    id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (repository, id)
 );
 CREATE TABLE IF NOT EXISTS ledger_migrations (
     name TEXT PRIMARY KEY
@@ -140,6 +146,62 @@ fn migrate_jira_identity(connection: &mut Connection) -> Result<()> {
 }
 
 impl WorkContextStorePort for SqliteWorkContextStore {
+    fn save_manifest(&self, repository: &str, manifest: &ContextManifest) -> Result<()> {
+        manifest.validate()?;
+        let payload = serde_json::to_string(manifest)?;
+        self.with_connection(|connection| {
+            let tx =
+                connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let existing: Option<String> = tx
+                .query_row(
+                    "SELECT payload FROM context_manifests WHERE repository=?1 AND id=?2",
+                    params![repository, manifest.id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(existing) = existing {
+                anyhow::ensure!(existing == payload, "stored manifest identity mismatch");
+            } else {
+                let count: i64 = tx.query_row(
+                    "SELECT count(*) FROM context_manifests WHERE repository=?1",
+                    [repository],
+                    |row| row.get(0),
+                )?;
+                anyhow::ensure!(count < 1000, "manifest retention limit reached");
+                tx.execute(
+                    "INSERT INTO context_manifests (repository,id,payload) VALUES (?1,?2,?3)",
+                    params![repository, manifest.id, payload],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    fn load_manifest(&self, repository: &str, id: &str) -> Result<Option<ContextManifest>> {
+        self.with_connection(|connection| {
+            let payload: Option<String> = connection
+                .query_row(
+                    "SELECT payload FROM context_manifests WHERE repository=?1 AND id=?2",
+                    params![repository, id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            payload
+                .map(|payload| {
+                    anyhow::ensure!(
+                        payload.len() <= 1024 * 1024 + 1024,
+                        "stored manifest exceeds storage limit"
+                    );
+                    let manifest: ContextManifest = serde_json::from_str(&payload)?;
+                    manifest.validate()?;
+                    anyhow::ensure!(manifest.id == id, "stored manifest id mismatch");
+                    Ok(manifest)
+                })
+                .transpose()
+        })
+    }
+
     fn set_repository_preference(
         &self,
         repository: &str,
@@ -344,6 +406,41 @@ mod tests {
             url: format!("https://example.test/{key}"),
             title_hint: title.map(str::to_string),
         }
+    }
+
+    #[test]
+    fn manifest_versions_remain_immutable_after_reopen() {
+        use crate::domain::work_context::ContextManifestEntry;
+        let (store, directory) = store("immutable-manifests");
+        let entry = |version: &str| ContextManifestEntry {
+            kind: "github".into(),
+            key: "owner/repo#1".into(),
+            selected: true,
+            reason: "task_link".into(),
+            observed_version: Some(version.into()),
+        };
+        let first = ContextManifest::capture("scope".into(), vec![entry("v1")]).unwrap();
+        let second = ContextManifest::capture("scope".into(), vec![entry("v2")]).unwrap();
+        assert!(second.clone().compare(Some(&first)).unwrap().changed);
+        store.save_manifest("repo-a", &first).unwrap();
+        store.save_manifest("repo-a", &second).unwrap();
+        store.save_manifest("repo-a", &first).unwrap();
+        drop(store);
+        let reopened = SqliteWorkContextStore::at(directory.join(FILE));
+        assert_eq!(
+            reopened.load_manifest("repo-a", &first.id).unwrap(),
+            Some(first.clone())
+        );
+        assert_eq!(reopened.load_manifest("repo-b", &first.id).unwrap(), None);
+        assert_eq!(
+            reopened.load_manifest("repo-a", &second.id).unwrap(),
+            Some(second)
+        );
+        let mut tampered = first;
+        tampered.entries[0].selected = false;
+        assert!(reopened.save_manifest("repo-a", &tampered).is_err());
+        drop(reopened);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

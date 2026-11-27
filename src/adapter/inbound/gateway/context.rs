@@ -31,6 +31,7 @@ const CONTEXT_LIST_METHOD: &str = "akra/context/list";
 const CONTEXT_REFRESH_SCOPE_METHOD: &str = "akra/context/refreshScope";
 const CONTEXT_MARK_SCOPE_READ_METHOD: &str = "akra/context/markScopeRead";
 const CONTEXT_SELECT_METHOD: &str = "akra/context/select";
+const CONTEXT_MANIFEST_METHOD: &str = "akra/context/manifest";
 const CONTEXT_PREFERENCE_METHOD: &str = "akra/context/setPreference";
 
 /// `attach` 에 `source` 가 없으면 사람이 이은 것으로 본다.
@@ -93,6 +94,16 @@ struct SelectionParams {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ManifestParams {
+    cwd: String,
+    task_id: Option<String>,
+    #[serde(default)]
+    paths: Vec<String>,
+    previous_id: Option<String>,
+}
+
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PreferenceParams {
     cwd: String,
@@ -135,6 +146,26 @@ pub(super) fn spawn_request(
 
 fn respond(context: &dyn WorkContextPort, id: Value, method: &str, text: &str) -> String {
     // Selection is a cached metadata projection; preferences never execute a model.
+    if method == CONTEXT_MANIFEST_METHOD {
+        let Some(params) = params::<ManifestParams>(text) else {
+            return error_response(
+                id,
+                JSON_RPC_INVALID_PARAMS,
+                "cwd, optional taskId, paths and previousId are required",
+            );
+        };
+        return match context.capture_manifest(
+            &ContextSelectionRequest {
+                cwd: params.cwd,
+                task_id: params.task_id,
+                paths: params.paths,
+            },
+            params.previous_id.as_deref(),
+        ) {
+            Ok(comparison) => json!({"jsonrpc":"2.0", "id":id, "result":comparison}).to_string(),
+            Err(error) => error_response(id, WORK_CONTEXT_ERROR, &format!("{error:#}")),
+        };
+    }
     if method == CONTEXT_SELECT_METHOD {
         let Some(params) = params::<SelectionParams>(text) else {
             return error_response(

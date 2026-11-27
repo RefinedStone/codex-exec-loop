@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::domain::work_context::{ContextPreference, ExternalResourceRef};
+use crate::domain::work_context::{ContextManifest, ContextPreference, ExternalResourceRef};
 
 /*
  * 작업 컨텍스트 장부이다 (plan 22). 외부 문서와, 그 문서가 어느 범위(스레드 등)에서 나왔는지를 저장한다.
@@ -45,6 +45,14 @@ pub struct ResourceVersionCheck {
 }
 
 pub trait WorkContextStorePort: Send + Sync {
+    fn save_manifest(&self, _repository: &str, _manifest: &ContextManifest) -> Result<()> {
+        anyhow::bail!("context manifest storage unavailable")
+    }
+
+    fn load_manifest(&self, _repository: &str, _id: &str) -> Result<Option<ContextManifest>> {
+        anyhow::bail!("context manifest storage unavailable")
+    }
+
     /// Replace the explicit choice atomically; automatic removes both choices.
     fn set_repository_preference(
         &self,
