@@ -1,0 +1,551 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-27T06:51:58.806Z",
+  "issue": "https://github.com/RefinedStone/codex-exec-loop/issues/2867",
+  "sourceRevision": "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
+  "scope": "pre-extraction Windows default-feature libtest compilation baseline",
+  "environment": {
+    "schemaVersion": 1,
+    "recordedAt": "2026-11-27T06:34:52.212Z",
+    "sourceRevision": "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
+    "worktree": "C:\\dev\\worktrees\\akra-ci2867-20261127",
+    "targetDirectory": "C:/dev/tmp/akra-ci2867-baseline-20261127",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--offline",
+      "--lib",
+      "--no-run",
+      "--timings",
+      "-v",
+      "--message-format=json-render-diagnostics"
+    ],
+    "features": "default",
+    "profile": "test (inherits dev)",
+    "cargoIncremental": 1,
+    "jobs": 8,
+    "rustc": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.95.0\nLLVM version: 22.1.2",
+    "cargo": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)",
+    "node": "v24.13.0",
+    "os": "win32",
+    "release": "10.0.26200",
+    "architecture": "x64",
+    "cpu": "AMD Ryzen 9 7900X3D 12-Core Processor          ",
+    "logicalCpus": 24,
+    "totalMemoryBytes": 67767197696,
+    "freeMemoryBytes": 35702169600,
+    "registryState": "existing download cache; dedicated target starts empty",
+    "lockSha256": "464b779fd83435ad56d2e54d8ac3a29a39941b87d9f3fea87da9b2f25cfb7160",
+    "manifestSha256": "f92034ced102fe3b01b4888e9da6a18b61ff1342b1071e68f1ed6a1a9b929145",
+    "sourceInventorySha256": "2fbbc89412c620ed1a7de580729c613e44292eeb833d2c87f67ea5458c2e15c7",
+    "representativeEdits": {
+      "domain": "src/domain/issue_validation.rs",
+      "adapter": "src/adapter/outbound/git/task_verification.rs"
+    }
+  },
+  "measurementDefinitions": {
+    "cargoCommandSeconds": "ci-performance.mjs child-process wall time; excludes its own Node startup",
+    "wrapperWallSeconds": "outer Node wrapper wall time including ci-performance.mjs startup",
+    "rootCompilationSeconds": "akra-ade lib(test) unit duration from stable Cargo --timings HTML; includes link",
+    "cargoStatusLines": "Compiling/Fresh display lines; not the count of Cargo build graph units",
+    "artifactMessageCounts": "observed complete JSON compiler-artifact lines in merged stdout/stderr; not a total-unit inventory",
+    "rootPhaseTiming": "Cargo timing sections were null; frontend, codegen and link cannot be separated",
+    "median": "one observation per condition; median equals that observation; no variance or percentile estimate",
+    "testExecutionSeconds": "zero because --no-run; this measurement does not assess test execution speed"
+  },
+  "load": {
+    "largeRustBuilds": "one coordinated build at a time; other agents waited",
+    "concurrentSmallWork": "Node policy fixtures and a dependency-free Cargo cache fixture also ran; the latter overlapped the last seconds of small-adapter",
+    "machineIdle": false,
+    "cpuUtilizationSampled": false,
+    "peakMemorySampled": false,
+    "warning": "general desktop applications remained active; free memory before/after is not peak memory"
+  },
+  "metadata": {
+    "command": [
+      "cargo",
+      "metadata",
+      "--format-version=1",
+      "--locked",
+      "--offline",
+      "--no-deps"
+    ],
+    "resolveComplete": false,
+    "packages": [
+      {
+        "name": "akra-ade",
+        "manifestPath": "Cargo.toml",
+        "targets": [
+          {
+            "name": "akra_ade",
+            "kind": [
+              "lib"
+            ],
+            "test": true
+          },
+          {
+            "name": "akra",
+            "kind": [
+              "bin"
+            ],
+            "test": true
+          },
+          {
+            "name": "akra-ade",
+            "kind": [
+              "bin"
+            ],
+            "test": true
+          },
+          {
+            "name": "akra-admin",
+            "kind": [
+              "bin"
+            ],
+            "test": true
+          },
+          {
+            "name": "akra-gateway",
+            "kind": [
+              "bin"
+            ],
+            "test": true
+          },
+          {
+            "name": "akra-telegram",
+            "kind": [
+              "bin"
+            ],
+            "test": true
+          },
+          {
+            "name": "architecture_boundaries",
+            "kind": [
+              "test"
+            ],
+            "test": true
+          },
+          {
+            "name": "binary_entrypoints",
+            "kind": [
+              "test"
+            ],
+            "test": true
+          },
+          {
+            "name": "gateway_relay",
+            "kind": [
+              "test"
+            ],
+            "test": true
+          },
+          {
+            "name": "issue_automation_policy_invariants",
+            "kind": [
+              "test"
+            ],
+            "test": true
+          },
+          {
+            "name": "issue_automation_policy_schema",
+            "kind": [
+              "test"
+            ],
+            "test": true
+          },
+          {
+            "name": "kernel_cli",
+            "kind": [
+              "test"
+            ],
+            "test": true
+          },
+          {
+            "name": "native_validation_scripts",
+            "kind": [
+              "test"
+            ],
+            "test": true
+          },
+          {
+            "name": "repository_hygiene",
+            "kind": [
+              "test"
+            ],
+            "test": true
+          },
+          {
+            "name": "tui_terminal_disconnect",
+            "kind": [
+              "test"
+            ],
+            "test": true
+          }
+        ]
+      }
+    ],
+    "sha256": "4d16aae5dea0d5fe9729540b2fec2210b6727c664ea935f2e31550d90e59a15f"
+  },
+  "patches": [
+    {
+      "scenario": "small-domain",
+      "path": "src/domain/issue_validation.rs",
+      "append": "\n// Local CI baseline probe: domain only; no behavior change.\n",
+      "sha256": "48919b8216f9772aebad1b4cb81823b840b94a0f4877109ff7e9bffc84de16d2",
+      "patch": "diff --git a/src/domain/issue_validation.rs b/src/domain/issue_validation.rs\nindex 903241048..c67026849 100644\n--- a/src/domain/issue_validation.rs\n+++ b/src/domain/issue_validation.rs\n@@ -352,3 +352,5 @@ mod tests {\n         }\n     }\n }\n+\n+// Local CI baseline probe: domain only; no behavior change.\n"
+    },
+    {
+      "scenario": "small-adapter",
+      "path": "src/adapter/outbound/git/task_verification.rs",
+      "append": "\n// Local CI baseline probe: adapter only; no behavior change.\n",
+      "sha256": "61a7a0433656a79ade7f82f831456bd1a403422c21ebbc5b0b01478c8ed89c1c",
+      "patch": "diff --git a/src/adapter/outbound/git/task_verification.rs b/src/adapter/outbound/git/task_verification.rs\nindex ef124ea4e..da9cc14a6 100644\n--- a/src/adapter/outbound/git/task_verification.rs\n+++ b/src/adapter/outbound/git/task_verification.rs\n@@ -271,3 +271,5 @@ fn stream(bytes: &[u8], complete: bool) -> TaskVerificationStream {\n fn not_run(reason: Reason) -> TaskVerificationRunOutcome {\n     TaskVerificationRunOutcome::NotRun { reason }\n }\n+\n+// Local CI baseline probe: adapter only; no behavior change.\n"
+    }
+  ],
+  "sourceRestored": true,
+  "sourceStatusBeforeReport": "",
+  "testInventory": {
+    "method": "libtest --list --format terse / --list --ignored --format terse",
+    "listed": 6418,
+    "ignored": 24,
+    "allListSha256": "d91e86ee8715653f31d680e5b72a1cd6b50461570954bc8cf32ab87eca14e561",
+    "ignoredListSha256": "c69c918b4257620f58fb681b4840a9af63684aa1552a6b8c0293eaa53e6f3bfa",
+    "scope": "Windows default features; lib tests only; inventory collection executes no test body"
+  },
+  "targetAfter": {
+    "bytes": 5987186982,
+    "files": 3223,
+    "measuredAt": "2026-11-27T06:51:58.806Z",
+    "deleted": false
+  },
+  "records": [
+    {
+      "scenario": "cold",
+      "includedInFourScenarioComparison": true,
+      "sampleCount": 1,
+      "startedAt": "2026-11-27T06:35:14.225Z",
+      "finishedAt": "2026-11-27T06:37:56.857Z",
+      "cargoCommandSeconds": 162.6318021,
+      "cargoCommandMedianSeconds": 162.6318021,
+      "wrapperWallSeconds": 162.6875987,
+      "rootCompilationSeconds": 135.8,
+      "rootCompilationStartSeconds": 26.76,
+      "rootFrontendSeconds": null,
+      "rootCodegenSeconds": null,
+      "rootLinkSeconds": null,
+      "testExecutionSeconds": 0,
+      "testCasesExecuted": 0,
+      "exitCode": 0,
+      "compilingStatusLines": 289,
+      "freshStatusLines": 0,
+      "cargoTimingUnits": 369,
+      "rootCargoTimingUnit": {
+        "i": 4,
+        "name": "akra-ade",
+        "version": "1.3.5",
+        "mode": "todo",
+        "target": " akra_ade \"lib\" (test)",
+        "features": [],
+        "start": 26.76,
+        "duration": 135.8,
+        "unblocked_units": [],
+        "unblocked_rmeta_units": [],
+        "sections": null
+      },
+      "observedCompilerArtifactMessages": {
+        "total": 332,
+        "built": 332,
+        "fresh": 0
+      },
+      "rootArtifact": {
+        "package": "akra-ade",
+        "target": "akra_ade",
+        "kind": [
+          "lib"
+        ],
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": "line-tables-only",
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "fresh": false
+      },
+      "sourcePatchSha256": null,
+      "freeMemoryBeforeBytes": 35715723264,
+      "freeMemoryAfterBytes": 34550853632,
+      "cargoDiagnostics": [
+        "   Compiling akra-ade v1.3.5 ($CHECKOUT)",
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 42s"
+      ],
+      "rawLogSha256": "3e1a0bb03bbe8ea1572ee6c988bf0730a58f3fe79d2893109d2bd6c07e12b91c",
+      "cargoTimingHtmlSha256": "3b5dae5c4035ded0dd4befbc0dd24357edb90d6555d1f8863e8e404bfe4cba6e"
+    },
+    {
+      "scenario": "unchanged",
+      "includedInFourScenarioComparison": true,
+      "sampleCount": 1,
+      "startedAt": "2026-11-27T06:39:58.566Z",
+      "finishedAt": "2026-11-27T06:39:59.043Z",
+      "cargoCommandSeconds": 0.4764638,
+      "cargoCommandMedianSeconds": 0.4764638,
+      "wrapperWallSeconds": 0.5193355000000001,
+      "rootCompilationSeconds": 0,
+      "rootCompilationStartSeconds": 0,
+      "rootFrontendSeconds": null,
+      "rootCodegenSeconds": null,
+      "rootLinkSeconds": null,
+      "testExecutionSeconds": 0,
+      "testCasesExecuted": 0,
+      "exitCode": 0,
+      "compilingStatusLines": 0,
+      "freshStatusLines": 289,
+      "cargoTimingUnits": 369,
+      "rootCargoTimingUnit": {
+        "i": 4,
+        "name": "akra-ade",
+        "version": "1.3.5",
+        "mode": "todo",
+        "target": " akra_ade \"lib\" (test)",
+        "features": [],
+        "start": 0,
+        "duration": 0,
+        "unblocked_units": [],
+        "unblocked_rmeta_units": [],
+        "sections": null
+      },
+      "observedCompilerArtifactMessages": {
+        "total": 332,
+        "built": 0,
+        "fresh": 332
+      },
+      "rootArtifact": {
+        "package": "akra-ade",
+        "target": "akra_ade",
+        "kind": [
+          "lib"
+        ],
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": "line-tables-only",
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "fresh": true
+      },
+      "sourcePatchSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "freeMemoryBeforeBytes": 35637612544,
+      "freeMemoryAfterBytes": 35599101952,
+      "cargoDiagnostics": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s"
+      ],
+      "rawLogSha256": "ba7c528cde53b1098e5acad5943f4fcec33ef6483b5d3a4e7a13da1b0b95c458",
+      "cargoTimingHtmlSha256": "d6bc67db4ed31e49d7d5ad17c5c5801dcb7c2055908f2580489f49a8a9124110"
+    },
+    {
+      "scenario": "small-domain",
+      "includedInFourScenarioComparison": true,
+      "sampleCount": 1,
+      "startedAt": "2026-11-27T06:39:59.148Z",
+      "finishedAt": "2026-11-27T06:40:32.574Z",
+      "cargoCommandSeconds": 33.4255822,
+      "cargoCommandMedianSeconds": 33.4255822,
+      "wrapperWallSeconds": 33.4683016,
+      "rootCompilationSeconds": 32.99,
+      "rootCompilationStartSeconds": 0.37,
+      "rootFrontendSeconds": null,
+      "rootCodegenSeconds": null,
+      "rootLinkSeconds": null,
+      "testExecutionSeconds": 0,
+      "testCasesExecuted": 0,
+      "exitCode": 0,
+      "compilingStatusLines": 1,
+      "freshStatusLines": 288,
+      "cargoTimingUnits": 369,
+      "rootCargoTimingUnit": {
+        "i": 4,
+        "name": "akra-ade",
+        "version": "1.3.5",
+        "mode": "todo",
+        "target": " akra_ade \"lib\" (test)",
+        "features": [],
+        "start": 0.37,
+        "duration": 32.99,
+        "unblocked_units": [],
+        "unblocked_rmeta_units": [],
+        "sections": null
+      },
+      "observedCompilerArtifactMessages": {
+        "total": 332,
+        "built": 1,
+        "fresh": 331
+      },
+      "rootArtifact": {
+        "package": "akra-ade",
+        "target": "akra_ade",
+        "kind": [
+          "lib"
+        ],
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": "line-tables-only",
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "fresh": false
+      },
+      "sourcePatchSha256": "48919b8216f9772aebad1b4cb81823b840b94a0f4877109ff7e9bffc84de16d2",
+      "freeMemoryBeforeBytes": 35635822592,
+      "freeMemoryAfterBytes": 34259005440,
+      "cargoDiagnostics": [
+        "       Dirty akra-ade v1.3.5 ($CHECKOUT): the file `src\\domain\\issue_validation.rs` has changed (13440235199.053377300s, 4m 18s after last build at 13440234941.002313500s)",
+        "   Compiling akra-ade v1.3.5 ($CHECKOUT)",
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 33.36s"
+      ],
+      "rawLogSha256": "0bce8984d371dd8549937533541b34128388f6a7bcbfd230e0405910d5cbdc11",
+      "cargoTimingHtmlSha256": "4501995e493cdace8a8e09b4fe84053819f3233666c1cc66a214395ffefb112b"
+    },
+    {
+      "scenario": "reset-baseline-before-adapter",
+      "includedInFourScenarioComparison": false,
+      "sampleCount": 1,
+      "startedAt": "2026-11-27T06:40:32.690Z",
+      "finishedAt": "2026-11-27T06:41:06.063Z",
+      "cargoCommandSeconds": 33.372806000000004,
+      "cargoCommandMedianSeconds": 33.372806000000004,
+      "wrapperWallSeconds": 33.4148289,
+      "rootCompilationSeconds": 32.92,
+      "rootCompilationStartSeconds": 0.39,
+      "rootFrontendSeconds": null,
+      "rootCodegenSeconds": null,
+      "rootLinkSeconds": null,
+      "testExecutionSeconds": 0,
+      "testCasesExecuted": 0,
+      "exitCode": 0,
+      "compilingStatusLines": 1,
+      "freshStatusLines": 288,
+      "cargoTimingUnits": 369,
+      "rootCargoTimingUnit": {
+        "i": 4,
+        "name": "akra-ade",
+        "version": "1.3.5",
+        "mode": "todo",
+        "target": " akra_ade \"lib\" (test)",
+        "features": [],
+        "start": 0.39,
+        "duration": 32.92,
+        "unblocked_units": [],
+        "unblocked_rmeta_units": [],
+        "sections": null
+      },
+      "observedCompilerArtifactMessages": {
+        "total": 331,
+        "built": 1,
+        "fresh": 330
+      },
+      "rootArtifact": {
+        "package": "akra-ade",
+        "target": "akra_ade",
+        "kind": [
+          "lib"
+        ],
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": "line-tables-only",
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "fresh": false
+      },
+      "sourcePatchSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "freeMemoryBeforeBytes": 34259496960,
+      "freeMemoryAfterBytes": 34117722112,
+      "cargoDiagnostics": [
+        "       Dirty akra-ade v1.3.5 ($CHECKOUT): the file `src\\domain\\issue_validation.rs` has changed (13440235232.583234300s, 33s after last build at 13440235199.538361000s)",
+        "   Compiling akra-ade v1.3.5 ($CHECKOUT)",
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 33.30s"
+      ],
+      "rawLogSha256": "bc1e5c5ac2f638c5f11e9401d7016b1992a6dcf4ddb2f514d27e627b1715a165",
+      "cargoTimingHtmlSha256": "858703eb1c89009a5e4f2e89817c15a22d782540a5b90df0cbbc60dbb086a9b8"
+    },
+    {
+      "scenario": "small-adapter",
+      "includedInFourScenarioComparison": true,
+      "sampleCount": 1,
+      "startedAt": "2026-11-27T06:41:06.168Z",
+      "finishedAt": "2026-11-27T06:41:39.598Z",
+      "cargoCommandSeconds": 33.4296457,
+      "cargoCommandMedianSeconds": 33.4296457,
+      "wrapperWallSeconds": 33.4732772,
+      "rootCompilationSeconds": 32.96,
+      "rootCompilationStartSeconds": 0.41,
+      "rootFrontendSeconds": null,
+      "rootCodegenSeconds": null,
+      "rootLinkSeconds": null,
+      "testExecutionSeconds": 0,
+      "testCasesExecuted": 0,
+      "exitCode": 0,
+      "compilingStatusLines": 1,
+      "freshStatusLines": 288,
+      "cargoTimingUnits": 369,
+      "rootCargoTimingUnit": {
+        "i": 4,
+        "name": "akra-ade",
+        "version": "1.3.5",
+        "mode": "todo",
+        "target": " akra_ade \"lib\" (test)",
+        "features": [],
+        "start": 0.41,
+        "duration": 32.96,
+        "unblocked_units": [],
+        "unblocked_rmeta_units": [],
+        "sections": null
+      },
+      "observedCompilerArtifactMessages": {
+        "total": 332,
+        "built": 1,
+        "fresh": 331
+      },
+      "rootArtifact": {
+        "package": "akra-ade",
+        "target": "akra_ade",
+        "kind": [
+          "lib"
+        ],
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": "line-tables-only",
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "fresh": false
+      },
+      "sourcePatchSha256": "61a7a0433656a79ade7f82f831456bd1a403422c21ebbc5b0b01478c8ed89c1c",
+      "freeMemoryBeforeBytes": 34117509120,
+      "freeMemoryAfterBytes": 33983320064,
+      "cargoDiagnostics": [
+        "       Dirty akra-ade v1.3.5 ($CHECKOUT): the file `src\\adapter\\outbound\\git\\task_verification.rs` has changed (13440235266.071333500s, 33s after last build at 13440235233.098527500s)",
+        "   Compiling akra-ade v1.3.5 ($CHECKOUT)",
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 33.36s"
+      ],
+      "rawLogSha256": "434d7abdf389576aa555a0e038a40b95c5d15b0727c430d9e48434dd9bfe8550",
+      "cargoTimingHtmlSha256": "844495d7b3c5bb5be55080f1b4e440bb4bd54f007bf480398c32b3dbbd2cbc85"
+    }
+  ],
+  "limits": [
+    "one sample per condition",
+    "cold target with warm registry download cache",
+    "Windows default-feature libtest compilation only; no bin/integration/all-features/full-CI measurement",
+    "comments trigger compile invalidation but do not model changed behavior",
+    "Cargo --timings exposes no frontend/codegen/link phase split for these samples",
+    "no peak memory or CPU utilization measurement",
+    "baseline after adapter retains its compiled comment probe; source bytes were restored without another build",
+    "no remote CI run was requested"
+  ]
+}
