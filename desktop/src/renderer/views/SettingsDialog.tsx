@@ -125,6 +125,13 @@ function settingsRows(settings: AppSettings, theme: string): Row[] {
     },
     ...fontRows,
     {
+      id: "next-prompt",
+      section: "대화",
+      label: "다음 입력 예측",
+      hint: "도구 없이 정제된 문맥만 처리하는 연결이 없어 제안을 요청하지 않습니다. 직접 입력하거나 다음 턴을 예약할 수 있습니다.",
+      control: <span className="muted">미지원</span>,
+    },
+    {
       id: "notify-mode",
       section: "알림",
       label: "운영체제 알림",

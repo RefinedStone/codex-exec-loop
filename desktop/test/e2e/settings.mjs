@@ -59,6 +59,12 @@ try {
   await app.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById("open-settings")?.click());
   await page.getByTestId("settings").waitFor({ timeout: 5_000 });
   check("the app menu opens the settings", true);
+  await page.getByTestId("settings-search").fill("다음 입력 예측");
+  const prediction = page.getByTestId("settings-row-next-prompt");
+  await prediction.waitFor();
+  check("prediction support is visible without a toggle promising an unsafe route",
+    (await prediction.getByText("미지원", { exact: true }).count()) === 1 && (await prediction.getByRole("button").count()) === 0);
+  await page.getByTestId("settings-search").fill("");
 
   // 글자 크기: 대화 글자를 두 단계 키운다.
   const reading = page.getByTestId("settings-font-reading");

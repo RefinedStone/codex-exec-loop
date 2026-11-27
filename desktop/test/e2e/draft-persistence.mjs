@@ -1,6 +1,6 @@
 // 화면 시험 (#2839): 스레드의 초안이 앱을 다시 열어도 남고, 대화 영역에서 친 글자는 입력창으로 간다.
 // 실제 codex 와 턴은 쓰지 않는다 (가짜 Gateway). userData 는 임시 폴더를 쓴다.
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -20,7 +20,19 @@ const check = (name, ok, detail = "") => {
 
 const userData = mkdtempSync(join(tmpdir(), "akra-e2e-drafts-"));
 const endpoint = fake.uniqueTestEndpoint();
-const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, fake.APPROVAL_TURN_RECORDING]);
+const predictions = join(userData, "stale-prediction.jsonl");
+const threadId = "01a1abfb-8f0a-7581-a8e4-c2953347f470";
+const method = "thread/prediction/updated";
+writeFileSync(predictions, [
+  ["client", { method: "fixture/prediction" }],
+  ["gateway", { method, params: { threadId, sourceTurnId: "old", result: { type: "completed", text: "보내면 안 되는 제안" } } }],
+  // Ordered barrier: the following name update proves the preceding late notification arrived.
+  ["gateway", { method: "thread/name/updated", params: { threadId, threadName: "알림 수신 확인" } }],
+].map(([direction, frame]) => JSON.stringify({ direction, text: JSON.stringify(frame) })).join("\n"));
+const handshakes = [];
+const gateway = await fake.startFakeGateway(endpoint, [predictions, fake.APPROVAL_THREAD_LIST_RECORDING, fake.APPROVAL_TURN_RECORDING], {
+  onRequest(name, params) { if (name === "initialize") handshakes.push(params.capabilities); },
+});
 const env = { ...process.env, AKRA_GATEWAY_ENDPOINT: endpoint, AKRA_DESKTOP_HIDDEN: "1", AKRA_DESKTOP_USER_DATA: userData };
 delete env.ELECTRON_RUN_AS_NODE;
 
@@ -42,6 +54,14 @@ async function withApp(run) {
 try {
   await withApp(async (page) => {
     const input = page.getByTestId("composer-input");
+    check("Desktop requests suppression on the stable connection", handshakes.at(-1)?.experimentalApi === false
+      && handshakes.at(-1)?.optOutNotificationMethods?.includes(method));
+    await page.evaluate(() => window.akra.send(JSON.stringify({ method: "fixture/prediction" })));
+    await page.getByTestId("thread-entry").filter({ hasText: "알림 수신 확인" }).waitFor();
+    await input.press("Tab");
+    await input.press("Enter");
+    check("an unsolicited prediction neither fills nor sends an empty draft", await input.inputValue() === ""
+      && !gateway.receivedMethods.some(name => ["thread/prediction/request", "thread/sample", "turn/start", "turn/steer"].includes(name)));
     await input.fill("아직 보내지 않은 초안");
     // 입력창 밖(대화 영역)을 누르고 글자를 치면 입력창으로 간다.
     await page.getByTestId("conversation").click({ position: { x: 5, y: 5 } });
