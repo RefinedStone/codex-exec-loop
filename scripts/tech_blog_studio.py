@@ -358,7 +358,7 @@ class Studio:
             self.add_figure(a, data)
         else:
             raise ValueError("지원하지 않는 편집 요청입니다.")
-        a.update(revision=a["revision"] + 1, updated=now())
+        a.update(revision=a["revision"] + 1, updated=a["exported"]["at"] if action == "export" else now())
         self.store(a)
         return present(a)
 
@@ -373,6 +373,11 @@ class Studio:
         day = time.strftime("%Y-%m-%d", time.localtime(shown.get("created") or shown.get("updated") or now()))
         slug = shown.get("slug") or shown["id"][:8]
         relative = f"blog/{day}-{slug}"
+        names = ["post.md", *(f["path"] for f in a["figures"])]
+        exported = {"path": f"{relative}/post.md", "edition": a.get("edition", 1), "at": now(), "files": names}
+        # Include the exact final revision and timestamp before any filesystem side effects.
+        check_response_size(present({**a, "exported": exported, "revision": a["revision"] + 1,
+                                     "updated": exported["at"]}))
         folder = self.repo
         for part in relative.split("/"):
             folder = folder / part
@@ -384,7 +389,6 @@ class Studio:
             if not stat.S_ISDIR(info.st_mode):
                 raise ValueError(EXPORT_BLOCKED)
         post = folder / "post.md"
-        names = ["post.md", *(f["path"] for f in a["figures"])]
         if not all(regular_or_missing(folder / name) for name in names):
             raise ValueError(EXPORT_BLOCKED)
         owned = post.exists() and front_matter_id(post) == a["id"]
@@ -400,7 +404,7 @@ class Studio:
             if row:
                 write_file(folder, figure["path"], row[0])
         write_file(folder, "post.md", ("\n".join(head) + shown["draft"].rstrip() + "\n").encode("utf-8"))
-        a["exported"] = {"path": f"{relative}/post.md", "edition": a.get("edition", 1), "at": now(), "files": names}
+        a["exported"] = exported
 
     def idle(self):
         if self.running():
