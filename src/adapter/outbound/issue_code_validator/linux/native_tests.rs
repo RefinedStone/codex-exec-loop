@@ -1,6 +1,7 @@
 //! Native capability evidence; an unavailable namespace is a failure, never a skip.
 use super::super::SandboxedIssueCodeValidatorRunnerAdapter;
 use super::*;
+use crate::application::port::outbound::issue_code_validator_runner_port::IssueCodeValidatorRunnerPort;
 use crate::application::service::issue_code_validator::gate_issue_publish_with_code_validators;
 use crate::application::service::issue_validation::IssuePublishBlocked;
 use crate::domain::issue_policy::{
@@ -11,10 +12,10 @@ use crate::domain::issue_work::IssueSharedCopy;
 use std::net::{TcpListener, TcpStream};
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::{SocketAddr, UnixListener, UnixStream};
+use std::sync::{Arc, mpsc};
 
 mod descendants;
 
-/// 이 시험들은 취소하지 않는다. 취소 경로는 `collect` 시험과 서비스 시험이 본다.
 fn run(request: &IssueCodeValidatorRunRequest) -> Outcome {
     super::run(request, &IssueCodeValidatorCancellation::new())
 }
@@ -117,13 +118,57 @@ fn native_profile_timeout_removes_observed_detached_descendants() {
         "#!/usr/bin/python3\nimport os, signal, time\nif os.fork() == 0:\n    os.setsid()\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\nwhile True: time.sleep(10)\n",
     );
     request.timeout = Duration::from_secs(2);
-    let observer = descendants::Observer::start();
+    let observer = descendants::Observer::start(|_| {});
     let started = Instant::now();
     let outcome = run(&request);
     let observed = observer.finish();
     assert_eq!(outcome, Outcome::NotRun(NotRun::TimedOut));
     assert!(started.elapsed() < Duration::from_secs(8));
     observed.assert_detached_validator_was_seen_and_stopped();
+}
+
+#[test]
+#[ignore = "requires native Linux, system bubblewrap and all declared namespaces"]
+fn native_profile_cancel_stops_live_fixture_and_removes_staging() {
+    const SCRIPT: &str = "#!/bin/sh\n/bin/sleep 60 &\nwait\n";
+    let (_source, mut request) = fixture(SCRIPT);
+    request.timeout = Duration::from_secs(15);
+    let cancellation = Arc::new(IssueCodeValidatorCancellation::new());
+    let observer_cancel = Arc::clone(&cancellation);
+    let (staged, evidence) = mpsc::sync_channel(1);
+    let mut staged = Some(staged);
+    let observer = descendants::Observer::start(move |observed| {
+        if staged.is_none() || !observed.has_waiting_fixture_with_child() {
+            return;
+        }
+        // Find the live stage for this exact fixture, never a different process's files.
+        let prefix = format!("akra-validator-{}-", std::process::id());
+        let stage = fs::read_dir("/tmp")
+            .expect("read staging parent")
+            .map(|entry| entry.expect("read staging entry"))
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+            .map(|entry| entry.path())
+            .find(|path| {
+                fs::read(path.join("validator")).is_ok_and(|bytes| bytes == SCRIPT.as_bytes())
+                    && path.join("input.json").is_file()
+            })
+            .expect("the running fixture must have an executable and input staged");
+        staged.take().unwrap().send(stage).unwrap();
+        assert!(observer_cancel.cancel());
+    });
+
+    let outcome = SandboxedIssueCodeValidatorRunnerAdapter::new().run(request, &cancellation);
+    let observed = observer.finish();
+    assert_eq!(outcome, Outcome::NotRun(NotRun::Cancelled));
+    observed.assert_stopped();
+    let stage = evidence
+        .try_recv()
+        .expect("no live fixture stage was observed");
+    assert_eq!(
+        fs::symlink_metadata(stage).unwrap_err().kind(),
+        io::ErrorKind::NotFound,
+        "the real runner must remove its staging directory before returning"
+    );
 }
 
 #[test]

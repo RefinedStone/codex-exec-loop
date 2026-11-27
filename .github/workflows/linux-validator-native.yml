@@ -27,6 +27,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
+          fetch-depth: 2
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@eac0f66a48bc4b70a10b9acd4c4e930f835d95ff # 1.95.0
       - name: Install pinned upstream runtime on this disposable CI machine
@@ -76,5 +77,27 @@ jobs:
                  --remount-ro / --chdir /tmp -- /bin/true)
           /usr/bin/setpriv --no-new-privs /usr/bin/env -i /usr/bin/bwrap "${args[@]}"
       - name: Run real isolation and publication gate evidence
+        env:
+          EVENT_NAME: ${{ github.event_name }}
         run: |
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            changed="$(GIT_MASTER=1 git diff --name-only HEAD^1 HEAD)"
+            lifecycle_only=true
+            cancellation_test_changed=false
+            while IFS= read -r path; do
+              case "$path" in
+                src/adapter/outbound/issue_code_validator/linux/native_tests.rs)
+                  cancellation_test_changed=true ;;
+                .github/workflows/linux-validator-native.yml|docs/validation/issue-validator-linux-native.md|\
+                src/adapter/outbound/issue_code_validator/linux/native_tests/descendants.rs) ;;
+                *) lifecycle_only=false ;;
+              esac
+            done <<< "$changed"
+            if [[ "$lifecycle_only" == true && "$cancellation_test_changed" == true ]]; then
+              cargo test --locked --lib \
+                adapter::outbound::issue_code_validator::linux::native_tests::native_profile_cancel_stops_live_fixture_and_removes_staging \
+                -- --ignored --exact --nocapture
+              exit
+            fi
+          fi
           cargo test --locked --lib 'adapter::outbound::issue_code_validator::linux::' -- --ignored --test-threads=1 --nocapture

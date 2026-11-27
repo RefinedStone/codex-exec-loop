@@ -14,6 +14,8 @@ struct Identity {
     session: u32,
     validator: bool,
     detached_validator_child: bool,
+    fixture_shell: bool,
+    fixture_sleep: bool,
 }
 
 fn process_stat(pid: u32) -> io::Result<Option<Identity>> {
@@ -41,6 +43,8 @@ fn process_stat(pid: u32) -> io::Result<Option<Identity>> {
             .map_err(|_| invalid())?,
         validator: false,
         detached_validator_child: false,
+        fixture_shell: false,
+        fixture_sleep: false,
     }))
 }
 
@@ -50,6 +54,12 @@ fn identity(pid: u32) -> Option<Identity> {
     entry.validator = command
         .split(|value| *value == 0)
         .any(|value| value == b"/validator");
+    let mut args = command.split(|value| *value == 0);
+    match args.next() {
+        Some(b"/bin/sh") => entry.fixture_shell = args.next() == Some(b"/validator"),
+        Some(b"/bin/sleep") => entry.fixture_sleep = args.next() == Some(b"60"),
+        _ => {}
+    }
     Some(entry)
 }
 
@@ -64,6 +74,16 @@ fn children(path: &str) -> Vec<u32> {
 pub(super) struct Observed(BTreeMap<u32, Identity>);
 
 impl Observed {
+    pub(super) fn has_waiting_fixture_with_child(&self) -> bool {
+        self.0.values().any(|entry| {
+            entry.fixture_sleep
+                && self
+                    .0
+                    .get(&entry.parent)
+                    .is_some_and(|parent| parent.fixture_shell)
+        })
+    }
+
     pub(super) fn assert_detached_validator_was_seen_and_stopped(self) {
         assert!(
             self.0.values().filter(|entry| entry.validator).count() >= 2,
@@ -73,6 +93,10 @@ impl Observed {
             self.0.values().any(|entry| entry.detached_validator_child),
             "a child of an observed validator must have detached with setsid"
         );
+        self.assert_stopped();
+    }
+
+    pub(super) fn assert_stopped(&self) {
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             let running = self
@@ -102,7 +126,7 @@ pub(super) struct Observer {
 }
 
 impl Observer {
-    pub(super) fn start() -> Self {
+    pub(super) fn start(mut on_sample: impl FnMut(&Observed) + Send + 'static) -> Self {
         // SAFETY: gettid has no preconditions; the observer is read-only.
         let tid = unsafe { libc::gettid() };
         let root = format!("/proc/self/task/{tid}/children");
@@ -110,8 +134,9 @@ impl Observer {
         let stopped = Arc::new(AtomicBool::new(false));
         let stop = stopped.clone();
         let thread = thread::spawn(move || {
-            let mut owned = BTreeMap::<u32, Identity>::new();
+            let mut observed = Observed(BTreeMap::new());
             while !stop.load(Ordering::SeqCst) {
+                let owned = &mut observed.0;
                 let mut pending = children(&root)
                     .into_iter()
                     .filter(|pid| !baseline.contains(pid))
@@ -142,9 +167,10 @@ impl Observer {
                         owned.insert(pid, entry);
                     }
                 }
+                on_sample(&observed);
                 thread::sleep(Duration::from_millis(10));
             }
-            Observed(owned)
+            observed
         });
         Self { stopped, thread }
     }
