@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -4839,6 +4840,34 @@ fn shell_chrome_state_has_one_typed_reducer_writer() {
 
 #[test]
 fn shell_chrome_writer_and_router_analyzers_reject_escape_fixtures() {
+    let scoped_structs = shell_chrome_writer_audit(
+        r#"
+struct Holder { app: NativeTuiApp }
+fn outer(holder: &mut Holder) {
+    {
+        struct Holder { app: OtherApp }
+        fn unrelated(holder: &mut Holder) {
+            holder.app.shell.chrome.session_state = 1;
+        }
+    }
+    holder.app.shell.chrome.session_state = SessionState::Idle;
+}
+fn second(holder: &mut Holder) {
+    holder.app.shell.chrome.session_state = SessionState::Idle;
+}
+"#,
+    )
+    .expect("nested struct scope fixture should parse");
+    assert_eq!(
+        scoped_structs
+            .field_writes
+            .iter()
+            .map(|finding| finding.owner.as_str())
+            .collect::<Vec<_>>(),
+        ["outer", "second"],
+        "nested struct shadowing must be restored without leaking to later scopes"
+    );
+
     let harmless = r#"
 fn render(app: &App) {
     let _ = (&app.shell.chrome.startup_state, app.shell.chrome.selected_session_index);
@@ -20464,6 +20493,34 @@ impl ShellStructDefinition {
 
 type ShellStructFields = HashMap<String, ShellStructDefinition>;
 
+// Save only declarations introduced by this scope. The complete crate registry can
+// contain thousands of parsed types and must not be deep-cloned for every block.
+fn extend_scoped_struct_fields(
+    fields: &mut ShellStructFields,
+    declarations: ShellStructFields,
+) -> Vec<(String, Option<ShellStructDefinition>)> {
+    declarations
+        .into_iter()
+        .map(|(name, definition)| {
+            let previous = fields.insert(name.clone(), definition);
+            (name, previous)
+        })
+        .collect()
+}
+
+fn restore_scoped_struct_fields(
+    fields: &mut ShellStructFields,
+    previous: Vec<(String, Option<ShellStructDefinition>)>,
+) {
+    for (name, definition) in previous {
+        if let Some(definition) = definition {
+            fields.insert(name, definition);
+        } else {
+            fields.remove(&name);
+        }
+    }
+}
+
 fn shell_member_key(member: &syn::Member) -> String {
     match member {
         syn::Member::Named(member) => member.to_string(),
@@ -21034,14 +21091,19 @@ fn shell_chrome_writer_audit_with_registries(
         &syntax,
         module_path,
     ));
-    let mut qualified_function_returns = known_function_returns.clone();
-    if !qualified_function_returns.materialized {
+    let qualified_function_returns = if known_function_returns.materialized {
+        // The production registry already includes every source file. Auditing
+        // reads it without modifying it, so all files can share the same value.
+        Cow::Borrowed(known_function_returns)
+    } else {
+        let mut returns = known_function_returns.clone();
         extend_qualified_function_returns(
-            &mut qualified_function_returns,
+            &mut returns,
             qualified_function_returns_declared_in_file(&syntax, module_path),
         );
-        qualified_function_returns.materialize_trait_defaults(&qualified_type_aliases);
-    }
+        returns.materialize_trait_defaults(&qualified_type_aliases);
+        Cow::Owned(returns)
+    };
     let mut visitor = ShellChromeWriterVisitor {
         allow_native_app_dispatch_seam,
         struct_fields,
@@ -21055,7 +21117,7 @@ fn shell_chrome_writer_audit_with_registries(
 }
 
 #[derive(Default)]
-struct ShellChromeWriterVisitor {
+struct ShellChromeWriterVisitor<'registry> {
     owner: Option<String>,
     impl_authority: Option<ShellAuthorityKind>,
     impl_authority_mutable: bool,
@@ -21067,7 +21129,7 @@ struct ShellChromeWriterVisitor {
     type_aliases: ShellTypeAliases,
     qualified_type_aliases: ShellQualifiedTypeAliases,
     function_returns: ShellFunctionReturns,
-    qualified_function_returns: ShellQualifiedFunctionReturns,
+    qualified_function_returns: Cow<'registry, ShellQualifiedFunctionReturns>,
     closure_bindings: HashMap<String, syn::ExprClosure>,
     struct_fields: ShellStructFields,
     struct_imports: ShellStructImports,
@@ -21077,7 +21139,7 @@ struct ShellChromeWriterVisitor {
     audit: ShellChromeWriterAudit,
 }
 
-impl ShellChromeWriterVisitor {
+impl ShellChromeWriterVisitor<'_> {
     fn finding(&self, line: usize, detail: impl Into<String>) -> RuntimeWriterFinding {
         RuntimeWriterFinding {
             owner: self.owner.clone().unwrap_or_else(|| "<module>".to_string()),
@@ -23709,7 +23771,6 @@ impl ShellChromeWriterVisitor {
         let previous_aliases = self.type_aliases.clone();
         let previous_returns = self.function_returns.clone();
         let previous_closures = self.closure_bindings.clone();
-        let previous_structs = self.struct_fields.clone();
         let previous_imports = self.struct_imports.clone();
         let previous_absolute_imports = self.absolute_imports.clone();
         let previous_path_shadows = self.path_shadows.clone();
@@ -23726,8 +23787,10 @@ impl ShellChromeWriterVisitor {
         self.extend_imported_type_aliases();
         self.function_returns
             .extend(function_returns_declared_in_statements(&block.stmts));
-        self.struct_fields
-            .extend(struct_fields_declared_in_statements(&block.stmts));
+        let previous_structs = extend_scoped_struct_fields(
+            &mut self.struct_fields,
+            struct_fields_declared_in_statements(&block.stmts),
+        );
         for statement in &block.stmts {
             self.visit_stmt(statement);
         }
@@ -23739,7 +23802,7 @@ impl ShellChromeWriterVisitor {
         self.type_aliases = previous_aliases;
         self.function_returns = previous_returns;
         self.closure_bindings = previous_closures;
-        self.struct_fields = previous_structs;
+        restore_scoped_struct_fields(&mut self.struct_fields, previous_structs);
         self.struct_imports = previous_imports;
         self.absolute_imports = previous_absolute_imports;
         self.path_shadows = previous_path_shadows;
@@ -23952,11 +24015,10 @@ impl ShellChromeWriterVisitor {
     }
 }
 
-impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
+impl<'ast> Visit<'ast> for ShellChromeWriterVisitor<'_> {
     fn visit_file(&mut self, file: &'ast syn::File) {
         let previous_aliases = self.type_aliases.clone();
         let previous_returns = self.function_returns.clone();
-        let previous_structs = self.struct_fields.clone();
         let previous_imports = self.struct_imports.clone();
         let previous_absolute_imports = self.absolute_imports.clone();
         let previous_path_shadows = self.path_shadows.clone();
@@ -23973,14 +24035,16 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         self.extend_imported_type_aliases();
         self.function_returns
             .extend(function_returns_declared_in_items(&file.items));
-        self.struct_fields
-            .extend(struct_fields_declared_in_items(&file.items));
+        let previous_structs = extend_scoped_struct_fields(
+            &mut self.struct_fields,
+            struct_fields_declared_in_items(&file.items),
+        );
         for item in &file.items {
             self.visit_item(item);
         }
         self.type_aliases = previous_aliases;
         self.function_returns = previous_returns;
-        self.struct_fields = previous_structs;
+        restore_scoped_struct_fields(&mut self.struct_fields, previous_structs);
         self.struct_imports = previous_imports;
         self.absolute_imports = previous_absolute_imports;
         self.path_shadows = previous_path_shadows;
@@ -24010,7 +24074,6 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         };
         let previous_aliases = self.type_aliases.clone();
         let previous_returns = self.function_returns.clone();
-        let previous_structs = self.struct_fields.clone();
         let previous_imports = self.struct_imports.clone();
         let previous_absolute_imports = self.absolute_imports.clone();
         let previous_path_shadows = self.path_shadows.clone();
@@ -24023,14 +24086,16 @@ impl<'ast> Visit<'ast> for ShellChromeWriterVisitor {
         self.extend_imported_type_aliases();
         self.function_returns
             .extend(function_returns_declared_in_items(items));
-        self.struct_fields
-            .extend(struct_fields_declared_in_items(items));
+        let previous_structs = extend_scoped_struct_fields(
+            &mut self.struct_fields,
+            struct_fields_declared_in_items(items),
+        );
         for item in items {
             self.visit_item(item);
         }
         self.type_aliases = previous_aliases;
         self.function_returns = previous_returns;
-        self.struct_fields = previous_structs;
+        restore_scoped_struct_fields(&mut self.struct_fields, previous_structs);
         self.struct_imports = previous_imports;
         self.absolute_imports = previous_absolute_imports;
         self.path_shadows = previous_path_shadows;
