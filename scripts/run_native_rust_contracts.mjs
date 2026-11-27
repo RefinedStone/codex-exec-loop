@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { performance } from "node:perf_hooks";
+import { runStreamingCommand } from "./ci-process-progress.mjs";
 import { dirname, posix, resolve, win32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -68,11 +71,23 @@ export function testRuntimeEnvironment(executable, env = process.env, platform =
   };
 }
 
-export function runNativeContracts(argv, {
+export function createContractProgressWriter({cwd = root, env = process.env, write = (text) => process.stdout.write(text)} = {}) {
+  const file = resolve(cwd, env.AKRA_NATIVE_PROGRESS_FILE || ("artifacts/ci-performance/native-contracts-" + process.pid + ".jsonl"));
+  return (event) => {
+    const line = JSON.stringify({schemaVersion:1, sourceSha:env.GITHUB_SHA ?? null, at:new Date().toISOString(), ...event});
+    mkdirSync(dirname(file), {recursive:true});
+    appendFileSync(file, line + "\n", "utf8");
+    write("AKRA_NATIVE_PROGRESS " + line + "\n");
+  };
+}
+
+export async function runNativeContracts(argv, {
   run = spawnSync,
   cwd = root,
   env = process.env,
   write = (text) => process.stdout.write(text),
+  stream = run === spawnSync ? runStreamingCommand : undefined,
+  record = createContractProgressWriter({cwd, env, write}),
 } = {}) {
   const { options, filters } = parseContractArguments(argv);
   const invoke = (command, args, runtimeEnv = env) => {
@@ -107,22 +122,41 @@ export function runNativeContracts(argv, {
   }
 
   write(`Prepared one library test executable for ${filters.length} native contract filters.\n`);
-  for (const filter of filters) {
-    write(`\n==> Native contract: ${filter}\n`);
-    const output = invoke(executable, [filter, "--nocapture"], runtimeEnv);
-    write(output);
-    const summary = output.match(/^test result: ok\. (\d+) passed; 0 failed;/m);
-    if (!summary || Number(summary[1]) === 0) {
-      throw new Error(`Native contract must run at least one passing, non-ignored test: ${filter}`);
+  for (const [index, filter] of filters.entries()) {
+    write("\n==> Native contract: " + filter + "\n");
+    const started = performance.now();
+    record({phase:"started", filter, index:index + 1, total:filters.length});
+    try {
+      let output;
+      if (stream) {
+        const result = await stream(executable, [filter, "--nocapture"], {cwd, env:runtimeEnv, write});
+        if (result.aborted || result.status !== 0 || result.signal) {
+          const error = new Error(executable + " failed (" + (result.signal ?? result.status) + ").");
+          error.cancelled = Boolean(result.aborted || result.signal);
+          throw error;
+        }
+        output = result.stdout ?? "";
+      } else {
+        output = invoke(executable, [filter, "--nocapture"], runtimeEnv);
+        write(output);
+      }
+      const summaries = [...output.matchAll(/^test result: ok\. (\d+) passed; 0 failed;/gm)];
+      const summary = summaries.at(-1);
+      if (!summary || Number(summary[1]) === 0) {
+        throw new Error("Native contract must run at least one passing, non-ignored test: " + filter);
+      }
+      record({phase:"finished", filter, status:"passed", passed:Number(summary[1]), durationMs:Math.round(performance.now() - started)});
+    } catch (error) {
+      record({phase:"finished", filter, status:error.cancelled ? "cancelled" : "failed", durationMs:Math.round(performance.now() - started)});
+      throw error;
     }
   }
+
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  try {
-    runNativeContracts(process.argv.slice(2));
-  } catch (error) {
+  runNativeContracts(process.argv.slice(2)).catch((error) => {
     console.error(error.message);
     process.exitCode = 1;
-  }
+  });
 }

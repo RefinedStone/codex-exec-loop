@@ -18,14 +18,15 @@ const artifact = (executable, changes = {}) => ({
 });
 const json = (value) => JSON.stringify(value) + "\n";
 
-test("prepares once and executes every filter with identical build options and environment", () => {
+test("prepares once and executes every filter with identical build options and environment", async () => {
   const calls = [];
   const options = ["--all-features", "--target", "native-host", "--profile", "debugging",
     "--target-dir", "target with spaces", "--timings"];
   const env = { CARGO_TARGET_DIR: "external target", AKRA_FIXTURE: "1", PATH: "original-bin" };
-  runNativeContracts([...options, "--", "first::", "second::"], {
+  await runNativeContracts([...options, "--", "first::", "second::"], {
     env,
     write() {},
+    record() {},
     run(command, args, settings) {
       calls.push({ command, args, settings });
       if (command === "cargo") return { status: 0, stdout: json(artifact("/target/debug/deps/akra-tests")) };
@@ -66,11 +67,12 @@ test("only accepts the unique Akra lib test artifact, not dependencies or produc
   assert.throws(() => libraryTestExecutable("not cargo json\n"));
 });
 
-test("missing filters, all-ignored results, failing builds and failed or signalled tests fail closed", () => {
+test("missing filters, all-ignored results, failing builds and failed or signalled tests fail closed", async () => {
   const check = ({ buildStatus = 0, listing = "one::test: test\n", testResult = {} } = {}) => {
     const calls = [];
     const operation = () => runNativeContracts(["--", "one::"], {
       write() {},
+    record() {},
       run(command, args) {
         calls.push(args);
         if (command === "cargo") return { status: buildStatus, stdout: json(artifact("/test")) };
@@ -88,7 +90,7 @@ test("missing filters, all-ignored results, failing builds and failed or signall
     { testResult: { error: new Error("spawn failed") } },
   ]) {
     const { operation, calls } = check(scenario);
-    assert.throws(operation);
+    await assert.rejects(operation);
     if (scenario.buildStatus) assert.equal(calls.length, 1);
     if (scenario.listing) assert.equal(calls.length, 2);
   }
