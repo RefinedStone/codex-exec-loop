@@ -26227,7 +26227,8 @@ fn git_commands_go_through_one_environment_isolating_builder() {
     const RAW_GIT: &str = "Command::new(\"git\")";
     let allowed_raw_git = [
         // the production hardening boundary and its own poisoned-environment tests
-        ("src/git_subprocess.rs", None),
+        ("crates/verification-native/src/git_command.rs", Some(5)),
+        ("crates/verification-native/src/test_support.rs", Some(1)),
         // the one test builder per crate
         ("src/test_utils.rs", Some(1)),
         ("tests/native_validation_scripts.rs", Some(1)),
@@ -26236,7 +26237,7 @@ fn git_commands_go_through_one_environment_isolating_builder() {
         ("tests/architecture_boundaries.rs", None),
     ];
     let mut violations = Vec::new();
-    for root in ["src", "tests"] {
+    for root in ["src", "tests", "crates"] {
         for file in rust_files_under(Path::new(root)) {
             let path = file.to_string_lossy().replace('\\', "/");
             let source = fs::read_to_string(&file).expect("rust source should load");

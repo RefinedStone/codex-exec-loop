@@ -1,0 +1,22 @@
+[package]
+name = "akra-verification-native"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license-file = "../../LICENSE"
+description = "Pinned native Git verification adapter and host Git execution policy"
+
+[dependencies]
+akra-native = { path = "../native" }
+akra-verification = { path = "../verification" }
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+serde_json = "1.0"
+sha2 = "0.10"
+tracing = "0.1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+rand = "0.8"

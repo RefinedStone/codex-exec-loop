@@ -4,8 +4,8 @@ use std::time::Instant;
 
 use super::context::{PrivateGitContext, text_line};
 use super::environment::{MAX_BLOB_BYTES, MAX_PATHS, MAX_TOTAL_BYTES, valid_oid};
-use crate::domain::planning::verification::TaskVerificationNotRunReason as Reason;
-use crate::trusted_executable::PinnedNativeExecutable;
+use akra_native::trusted_executable::PinnedNativeExecutable;
+use akra_verification::verification::TaskVerificationNotRunReason as Reason;
 
 const MAX_DIFF_METADATA_BYTES: usize = 1024 * 1024;
 const MAX_PATH_BYTES: usize = 4096;

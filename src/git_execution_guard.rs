@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -8,11 +7,10 @@ use crate::{git_subprocess, subprocess};
 
 const MAX_GIT_CONFIG_STDOUT_BYTES: usize = 256 * 1024;
 const MAX_GIT_CONFIG_STDERR_BYTES: usize = 64 * 1024;
-const MAX_REPORTED_EXECUTION_KEYS: usize = 64;
-const MAX_GIT_CONFIG_KEY_BYTES: usize = 4 * 1024;
-const MAX_REPORTED_CONFIG_KEY_BYTES: usize = 256;
-pub(crate) const EXECUTABLE_CONFIG_SECTION_REGEX: &str =
-    "^(filter\\.|merge\\.|diff\\.|interactive\\.|core\\.|tar\\.|mergetool\\.|difftool\\.)";
+use akra_verification_native::git_config::{
+    EXECUTABLE_CONFIG_SECTION_REGEX, config_key_enables_external_execution,
+    validate_host_git_execution_config_keys,
+};
 
 pub(crate) fn ensure_git_command_execution_config_safe(
     program: &str,
@@ -280,101 +278,15 @@ fn ensure_host_git_execution_config_safe_with_policy(
     validate_execution_config_keys_with_policy(&output.stdout, allow_verified_core_worktree)
 }
 
-/// Reuse the same policy when an audited caller owns a stricter process deadline.
-pub(crate) fn validate_host_git_execution_config_keys(payload: &[u8]) -> Result<()> {
-    validate_execution_config_keys_with_policy(payload, false)
-}
-
 fn validate_execution_config_keys_with_policy(
     payload: &[u8],
     allow_verified_core_worktree: bool,
 ) -> Result<()> {
-    let unsafe_keys =
-        unsafe_execution_config_keys_with_policy(payload, allow_verified_core_worktree)?;
-    if !unsafe_keys.is_empty() {
-        let labels = unsafe_keys
-            .iter()
-            .map(|key| escaped_config_key_label(key))
-            .collect::<Vec<_>>();
-        bail!(
-            "host Git mutation is blocked by executable repository configuration: {}",
-            labels.join(", ")
-        );
+    if allow_verified_core_worktree {
+        akra_verification_native::git_config::validate_submodule_config_keys_after_worktree_validation(payload)
+    } else {
+        validate_host_git_execution_config_keys(payload)
     }
-    Ok(())
-}
-
-#[cfg(test)]
-fn unsafe_execution_config_keys(payload: &[u8]) -> Result<Vec<String>> {
-    unsafe_execution_config_keys_with_policy(payload, false)
-}
-
-fn unsafe_execution_config_keys_with_policy(
-    payload: &[u8],
-    allow_verified_core_worktree: bool,
-) -> Result<Vec<String>> {
-    let mut unsafe_keys = BTreeSet::new();
-    for record in payload.split(|byte| *byte == 0) {
-        if record.is_empty() {
-            continue;
-        }
-        if record.len() > MAX_GIT_CONFIG_KEY_BYTES {
-            bail!("host Git execution-config audit returned an oversized key");
-        }
-        let key = std::str::from_utf8(record)
-            .context("host Git execution-config audit returned a non-UTF-8 key")?
-            .to_ascii_lowercase();
-        if config_key_enables_external_execution(&key)
-            && !(allow_verified_core_worktree && key == "core.worktree")
-        {
-            unsafe_keys.insert(key);
-            if unsafe_keys.len() > MAX_REPORTED_EXECUTION_KEYS {
-                bail!("host Git execution-config audit found too many executable keys");
-            }
-        }
-    }
-    Ok(unsafe_keys.into_iter().collect())
-}
-
-fn escaped_config_key_label(key: &str) -> String {
-    let retained_bytes = MAX_REPORTED_CONFIG_KEY_BYTES.saturating_sub(3);
-    let mut label = String::new();
-    let mut truncated = false;
-    for character in key.chars().flat_map(char::escape_default) {
-        if label.len().saturating_add(character.len_utf8()) > retained_bytes {
-            truncated = true;
-            break;
-        }
-        label.push(character);
-    }
-    if truncated {
-        label.push_str("...");
-    }
-    label
-}
-
-fn config_key_enables_external_execution(key: &str) -> bool {
-    matches!(
-        key,
-        "diff.external" | "interactive.difffilter" | "core.alternaterefscommand" | "core.worktree"
-    ) || scoped_key(key, "filter", "clean")
-        || scoped_key(key, "filter", "smudge")
-        || scoped_key(key, "filter", "process")
-        || scoped_key(key, "filter", "required")
-        || scoped_key(key, "merge", "driver")
-        || scoped_key(key, "diff", "command")
-        || scoped_key(key, "diff", "textconv")
-        || scoped_key(key, "tar", "command")
-        || scoped_key(key, "mergetool", "cmd")
-        || scoped_key(key, "difftool", "cmd")
-}
-
-fn scoped_key(key: &str, section: &str, variable: &str) -> bool {
-    key.strip_prefix(section)
-        .and_then(|key| key.strip_prefix('.'))
-        .and_then(|key| key.strip_suffix(variable))
-        .and_then(|key| key.strip_suffix('.'))
-        .is_some_and(|subsection| !subsection.is_empty())
 }
 
 #[cfg(test)]
@@ -384,10 +296,8 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::{
-        MAX_GIT_CONFIG_KEY_BYTES, MAX_REPORTED_CONFIG_KEY_BYTES,
-        config_key_enables_external_execution, ensure_host_git_execution_config_safe,
-        escaped_config_key_label, git_command_can_execute_repository_configuration,
-        git_repo_context, unsafe_execution_config_keys,
+        ensure_host_git_execution_config_safe, git_command_can_execute_repository_configuration,
+        git_repo_context,
     };
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -413,68 +323,6 @@ mod tests {
             ),
             Some(PathBuf::from("workspace").join("remote.git"))
         );
-    }
-
-    #[test]
-    fn executable_config_key_vocabulary_is_explicit_and_value_free() {
-        for key in [
-            "filter.hostile.clean",
-            "filter.hostile.smudge",
-            "filter.hostile.process",
-            "filter.hostile.required",
-            "merge.hostile.driver",
-            "diff.external",
-            "diff.hostile.command",
-            "diff.hostile.textconv",
-            "interactive.diffFilter",
-            "core.alternateRefsCommand",
-            "core.worktree",
-            "tar.hostile.command",
-            "mergetool.hostile.cmd",
-            "difftool.hostile.cmd",
-        ] {
-            assert!(
-                config_key_enables_external_execution(&key.to_ascii_lowercase()),
-                "{key} must remain in the executable-config denylist"
-            );
-        }
-        for key in [
-            "credential.helper",
-            "url.ssh.insteadof",
-            "core.sshcommand",
-            "core.hooksPath",
-            "core.fsmonitor",
-            "submodule.child.update",
-            "submodule.child.url",
-            "diff.algorithm",
-        ] {
-            assert!(
-                !config_key_enables_external_execution(&key.to_ascii_lowercase()),
-                "{key} should not expand this mutation-specific denylist"
-            );
-        }
-
-        let keys = unsafe_execution_config_keys(
-            b"filter.hostile.smudge\0merge.hostile.driver\0filter.hostile.smudge\0",
-        )
-        .expect("NUL key stream should parse");
-        assert_eq!(keys, ["filter.hostile.smudge", "merge.hostile.driver"]);
-
-        let escaped = escaped_config_key_label("filter.hostile\nname.smudge");
-        assert_eq!(escaped, "filter.hostile\\nname.smudge");
-        assert!(!escaped.contains('\n'));
-        let bounded = escaped_config_key_label(&format!(
-            "filter.{}.smudge",
-            "long-name".repeat(MAX_REPORTED_CONFIG_KEY_BYTES)
-        ));
-        assert!(bounded.len() <= MAX_REPORTED_CONFIG_KEY_BYTES);
-        assert!(bounded.ends_with("..."));
-
-        let oversized = format!("filter.{}.smudge", "x".repeat(MAX_GIT_CONFIG_KEY_BYTES));
-        let payload = format!("{oversized}\0");
-        let error = unsafe_execution_config_keys(payload.as_bytes())
-            .expect_err("oversized config keys must fail before diagnostic rendering");
-        assert!(error.to_string().contains("oversized key"));
     }
 
     #[test]

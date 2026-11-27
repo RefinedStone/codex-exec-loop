@@ -14,6 +14,7 @@ default-run = "akra"
 tokio-console = ["dep:console-subscriber", "tokio/tracing"]
 
 [dependencies]
+akra-verification-native = { path = "crates/verification-native" }
 akra-verification = { path = "crates/verification" }
 akra-issue-core = { path = "crates/issue-core" }
 akra-native = { path = "crates/native" }
