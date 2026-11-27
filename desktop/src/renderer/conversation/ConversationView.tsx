@@ -300,27 +300,18 @@ function ThreadConversation({ threadId, onLoadOlder, onDraftTask, onQuote, onFor
   const transcript = useConversationStore((state) => state.transcript);
   const transcriptError = useConversationStore((state) => state.transcriptError);
   const scrollRef = useRef<HTMLElement>(null);
-  const [taskSelection, setTaskSelection] = useState<TaskDraftSource | null>(null);
-  useEffect(() => {
-    if (!onDraftTask) return;
-    const changed = () => {
-      const root = scrollRef.current;
-      const selection = window.getSelection();
-      if (!root || !selection || selection.isCollapsed || !selection.rangeCount
-        || !root.contains(selection.anchorNode) || !root.contains(selection.focusNode)) {
-        setTaskSelection(null);
-        return;
-      }
-      const text = selection.toString().trim();
-      if (!text || text.length > 32_768) { setTaskSelection(null); return; }
-      const range = selection.getRangeAt(0);
-      const turnIds = [...root.querySelectorAll<HTMLElement>("[data-turn-id]")]
-        .filter((turn) => range.intersectsNode(turn)).map((turn) => turn.dataset.turnId!);
-      setTaskSelection({ text, threadId, turnIds });
-    };
-    document.addEventListener("selectionchange", changed);
-    return () => document.removeEventListener("selectionchange", changed);
-  }, [onDraftTask, threadId]);
+  // Snapshot before the context menu takes focus, not from selectionchange.
+  const taskSource = (root: HTMLElement): TaskDraftSource | null => {
+    const selection = window.getSelection();
+    if (!onDraftTask || !selection || selection.isCollapsed || selection.rangeCount !== 1
+      || !root.contains(selection.anchorNode) || !root.contains(selection.focusNode)) return null;
+    const text = selection.toString().trim();
+    if (!text || text.length > 32_768) return null;
+    const range = selection.getRangeAt(0);
+    const turnIds = [...root.querySelectorAll<HTMLElement>("[data-turn-id]")]
+      .filter(turn => range.intersectsNode(turn)).map(turn => turn.dataset.turnId!);
+    return turnIds.length ? { text, threadId, turnIds } : null;
+  };
   // 스레드를 새로 열면 맨 아래(최근 턴)부터 보여 준다.
   const followBottom = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
@@ -500,13 +491,6 @@ function ThreadConversation({ threadId, onLoadOlder, onDraftTask, onQuote, onFor
 
   return (
     <div className="conversation-wrap">
-      {onDraftTask && <div className="conversation-task-action">
-        <button type="button" disabled={!taskSelection} data-testid="draft-task-from-selection"
-          onMouseDown={(event) => event.preventDefault()} onClick={() => taskSelection && onDraftTask(taskSelection)}>
-          선택한 내용으로 작업 만들기
-        </button>
-        <span className="muted">대화에서 필요한 부분을 선택하세요.</span>
-      </div>}
       {findOpen && (
         <div className="find-bar" role="search" data-testid="find-bar">
           <input
@@ -538,6 +522,9 @@ function ThreadConversation({ threadId, onLoadOlder, onDraftTask, onQuote, onFor
         </div>
       )}
       {menu && <ConversationMenu target={menu} onQuote={onQuote} onFork={onFork} onClose={closeMenu}
+        onDraftTask={onDraftTask && ((source) => {
+          if (source.threadId === threadId) onDraftTask(source);
+        })}
         onFind={() => {
           useUiStore.setState({ findOpen: true, overlay: null });
           requestAnimationFrame(() => document.querySelector<HTMLInputElement>("[data-find-input]")?.select());
@@ -547,7 +534,18 @@ function ThreadConversation({ threadId, onLoadOlder, onDraftTask, onQuote, onFor
           const target = scrollRef.current && conversationMenuTarget(event, scrollRef.current);
           if (!target) return;
           event.preventDefault();
-          setMenu(target);
+          setMenu({ ...target, taskSource: taskSource(scrollRef.current!) });
+        }}
+        tabIndex={0}
+        onKeyDown={(event) => {
+          if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+          if (!scrollRef.current) return;
+          const rect = scrollRef.current.getBoundingClientRect();
+          const source = taskSource(scrollRef.current);
+          if (!source) return;
+          event.preventDefault();
+          setMenu({ x: rect.left + 12, y: rect.top + 12, selection: source.text,
+            messageCopy: null, code: null, link: null, taskSource: source });
         }}>
         <div className="column">
           {transcript.olderTurnsCursor && (

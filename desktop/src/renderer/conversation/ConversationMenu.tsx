@@ -4,12 +4,14 @@ import { useEffect, useRef } from "react";
 
 import { useFittedMenuPosition } from "../views/menuPosition";
 import { copyText } from "./copyText";
+import type { TaskDraftSource } from "../kernel/TaskEditor";
 
 export interface ConversationMenuTarget {
   x: number;
   y: number;
   /** 대화 안에서 고른 글이다. 없으면 빈 글이다. */
   selection: string;
+  taskSource?: TaskDraftSource | null;
   /** 누른 자리의 메시지에 있는 복사 단추이다. 원문(Markdown)을 복사한다. */
   messageCopy: HTMLButtonElement | null;
   /** 누른 자리의 코드 블록 글이다. */
@@ -35,16 +37,18 @@ export function conversationMenuTarget(event: { clientX: number; clientY: number
   };
 }
 
-export function ConversationMenu({ target, onQuote, onFind, onFork, onClose }: {
+export function ConversationMenu({ target, onQuote, onFind, onFork, onDraftTask, onClose }: {
   target: ConversationMenuTarget;
   onQuote?(text: string): void;
   onFind(): void;
   onFork?(): void;
+  onDraftTask?(source: TaskDraftSource): void;
   onClose(): void;
 }) {
   const menu = useRef<HTMLUListElement>(null);
   const position = useFittedMenuPosition(menu, target);
   useEffect(() => {
+    const previous = document.activeElement;
     menu.current?.querySelector<HTMLButtonElement>("button")?.focus();
     const close = (event: Event) => {
       if (event instanceof KeyboardEvent ? event.key === "Escape" : !menu.current?.contains(event.target as Node)) onClose();
@@ -56,6 +60,7 @@ export function ConversationMenu({ target, onQuote, onFind, onFork, onClose }: {
       window.removeEventListener("pointerdown", close, true);
       window.removeEventListener("keydown", close);
       window.removeEventListener("blur", onClose);
+      if (previous instanceof HTMLElement && previous.isConnected && document.activeElement === document.body) previous.focus({ preventScroll: true });
     };
   }, [onClose]);
   const item = (label: string, testId: string, action: () => void) => (
@@ -65,7 +70,17 @@ export function ConversationMenu({ target, onQuote, onFind, onFork, onClose }: {
   );
   const { selection, messageCopy, code, link } = target;
   return (
-    <ul ref={menu} className="conversation-menu" role="menu" aria-label="대화 메뉴" style={{ left: position.x, top: position.y }} data-testid="conversation-menu">
+    <ul ref={menu} className="conversation-menu" role="menu" onKeyDown={(event) => {
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+      const buttons = Array.from(menu.current?.querySelectorAll<HTMLButtonElement>("button") ?? []);
+      if (!buttons.length) return;
+      event.preventDefault();
+      const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
+        : (current + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+      buttons[next]?.focus();
+    }} aria-label="대화 메뉴" style={{ left: position.x, top: position.y }} data-testid="conversation-menu">
+      {target.taskSource && onDraftTask && item("선택한 내용으로 작업 만들기", "draft-task-from-selection", () => onDraftTask(target.taskSource!))}
       {selection && onQuote && item("선택한 글 인용", "conversation-menu-quote", () => onQuote(selection))}
       {selection && item("선택한 글 복사", "conversation-menu-copy-selection", () => copyText(selection, "선택한 글을 복사했습니다"))}
       {link && item("링크 주소 복사", "conversation-menu-copy-link", () => copyText(link, "링크 주소를 복사했습니다"))}
