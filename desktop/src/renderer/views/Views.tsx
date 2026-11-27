@@ -1,5 +1,7 @@
 // 대화 밖의 화면이다 (R10): 새 스레드(홈), 현황판, 검색과 명령, 단축키 목록, 알림.
 import { useEffect, useMemo, useState } from "react";
+import { isAttentionPreferenceEvent, readAttentionPreference, writeAttentionPreference, type AttentionPreference, type AttentionPreferenceField } from "../kernel/attentionPreferences";
+import type { AttentionItem } from "../../shared/kernel-protocol/generated";
 
 import { command, type CommandId, COMMANDS, commandForKey, PALETTE_ORDER } from "../../shared/commands";
 
@@ -93,6 +95,46 @@ function FleetCard({ thread, mark, onOpenThread }: { thread: ListedThread; mark:
   );
 }
 
+function KernelAttentionList({ kernel, items, onOpenThread }: { kernel: string | null; items: readonly AttentionItem[] | null; onOpenThread(id: string): void }) {
+  const [, update] = useState(0);
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    const refresh = (event: StorageEvent) => { if (isAttentionPreferenceEvent(event.key)) update(value => value + 1); };
+    window.addEventListener("storage", refresh);
+    const timer = window.setInterval(() => update(value => value + 1), 30_000);
+    return () => { window.removeEventListener("storage", refresh); window.clearInterval(timer); };
+  }, []);
+  const save = <K extends AttentionPreferenceField>(item: AttentionItem, field: K, value: AttentionPreference[K]) => {
+    if (!kernel || !writeAttentionPreference(localStorage, kernel, item, field, value)) setNotice("개인 정리 상태를 저장하지 못했습니다.");
+    else { setNotice(null); update(revision => revision + 1); }
+  };
+  const rows = (kernel && items ? items.map(item => ({ item, preference: readAttentionPreference(localStorage, kernel, item) })) : [])
+    .sort((a, b) => Number(b.preference.pinned) - Number(a.preference.pinned));
+  const now = Date.now();
+  return <section className="fleet-column" data-testid="kernel-attention">
+    <h3>현재 저장소 · 커널 확인 필요 <span className="muted">{items?.length ?? "—"}</span></h3>
+    <p className="muted">읽음·미루기·고정은 이 기기의 개인 표시 설정입니다. 응답을 대신하지 않습니다.</p>
+    {notice && <p role="status">{notice}</p>}
+    {items === null && <p className="muted fleet-empty">커널 확인 항목을 아직 읽지 못했습니다.</p>}
+    {items?.length === 0 && <p className="muted fleet-empty">없음</p>}
+    {rows.map(({ item, preference }) => {
+      const snoozed = preference.snoozedUntil !== null && preference.snoozedUntil > now;
+      return <div key={item.id} className="fleet-card">
+        <button type="button" className="fleet-card" onClick={() => item.subject.kind === "thread" ? onOpenThread(item.subject.id) : openPanel(item.subject.kind === "issue_decision" ? "issues" : "kernel")}>
+          <span className="fleet-card-title">{item.summary}</span>
+          <span className="fleet-card-meta">{item.cause} · {item.subject.kind} · {preference.read ? "읽음" : "안 읽음"}{snoozed ? " · 미룸" : ""}</span>
+          <span className="muted">{item.next.map(step => "name" in step ? step.name : step.step).join(" → ")}</span>
+        </button>
+        <div className="fleet-card-meta">
+          <button type="button" className="button" onClick={() => save(item, "read", !preference.read)}>{preference.read ? "안 읽음" : "읽음"}</button>
+          <button type="button" className="button" onClick={() => save(item, "pinned", !preference.pinned)}>{preference.pinned ? "고정 해제" : "고정"}</button>
+          <button type="button" className="button" onClick={() => save(item, "snoozedUntil", snoozed ? null : now + 60 * 60 * 1000)}>{snoozed ? "미루기 해제" : "1시간 미루기"}</button>
+        </div>
+      </div>;
+    })}
+  </section>;
+}
+
 export function Fleet({ onOpenThread }: { onOpenThread(threadId: string): void }) {
   const folders = useDesktopStore((state) => state.folders);
   const marks = useThreadMarks();
@@ -105,17 +147,7 @@ export function Fleet({ onOpenThread }: { onOpenThread(threadId: string): void }
         <h1>현황판</h1>
         <span className="muted">모든 작업 폴더의 스레드를 상태별로 봅니다.</span>
       </header>
-      <section className="fleet-column" data-testid="kernel-attention">
-        <h3>현재 저장소 · 커널 확인 필요 <span className="muted">{items?.length ?? "—"}</span></h3>
-        {items === null && <p className="muted fleet-empty">커널 확인 항목을 아직 읽지 못했습니다.</p>}
-        {items?.length === 0 && <p className="muted fleet-empty">없음</p>}
-        {items?.map((item) => <button key={item.id} type="button" className="fleet-card"
-          onClick={() => item.subject.kind === "thread" ? onOpenThread(item.subject.id) : openPanel(item.subject.kind === "issue_decision" ? "issues" : "kernel")}>
-          <span className="fleet-card-title">{item.summary}</span>
-          <span className="fleet-card-meta">{item.cause} · {item.subject.kind}</span>
-          <span className="muted">{item.next.map(step => "name" in step ? step.name : step.step).join(" → ")}</span>
-        </button>)}
-      </section>
+      <KernelAttentionList kernel={kernel.kernel} items={items} onOpenThread={onOpenThread} />
       <div className="fleet-columns">
         {FLEET_COLUMNS.map((column) => {
           const items = threads.filter((item) => column.marks.includes(item.mark));
