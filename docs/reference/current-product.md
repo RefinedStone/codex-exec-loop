@@ -2,12 +2,13 @@
 
 [한국어](../ko/reference/current-product.md)
 
-This document is the canonical shipped-behavior reference for `prerelease`. Future work belongs in
-an explicitly proposed document, not here.
+This document is the canonical implemented-behavior reference for `prerelease`. Availability in a
+published release is separate: see [Product Status](product-status.md) for code, UI, verification,
+and distribution boundaries. Future work belongs in an explicitly proposed document, not here.
 
 ## Product Shape
 
-- Akra is a native-first Rust client over official `codex app-server` interfaces.
+- Akra ADE is a native-first Rust client over official `codex app-server` interfaces.
 - The alternate-screen fullscreen TUI is the primary surface. One app-owned transcript viewport
   owns conversation history, streaming rows, tool cards, overlays, status, and the composer.
 - The startup logo occupies that transcript viewport; startup, draft editing, and active turns use

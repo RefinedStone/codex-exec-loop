@@ -1,4 +1,4 @@
-# Akra
+# Akra ADE
 
 [English](../../README.md)
 
@@ -7,9 +7,10 @@ Akra ADE는 `codex app-server`를 사용하는 네이티브 Rust 운영 클라�
 `codex-exec-loop`입니다.
 [명명 계약](../reference/naming.md)을 참고하세요.
 
-Akra는 시작 진단, 세션 재개, 프롬프트 스트리밍, 승인된 planning, 큐 기반 연속 실행, 병렬 작업자
-전달을 하나의 장시간 터미널 흐름으로 묶습니다. TUI가 기본 화면이며 CLI, Admin, Telegram,
-자동화 adapter도 같은 application service를 사용합니다.
+Akra ADE는 대화, 코드 검토, 작업 완료 기준, 실행 증거와 전달 결과를 하나의 개발 작업공간에서
+확인하게 합니다. Desktop은 소스 개발판이며 TUI, CLI, Admin, Telegram, 자동화 adapter도 같은
+application service를 사용합니다. 코드 구현·UI 연결·실제 OS 검증·게시된 배포판의 차이는
+[제품 상태와 배포 경계](reference/product-status.md)에서 확인하세요.
 
 ## 구현된 화면
 
@@ -38,7 +39,7 @@ Akra는 시작 진단, 세션 재개, 프롬프트 스트리밍, 승인된 plann
 - 대상 workspace 접근 권한
 - Linux에서는 동작하는 Codex sandbox helper(Codex 설치본 또는 시스템의 `bwrap`)
 
-npm 설치:
+게시된 TUI·CLI npm 패키지 설치(Desktop 설치는 아닙니다):
 
 ```bash
 npm install -g @refinedstone/akra
@@ -46,7 +47,7 @@ cd /path/to/workspace
 akra
 ```
 
-소스 빌드:
+현재 checkout한 소스 빌드:
 
 ```bash
 . "$HOME/.cargo/env"
@@ -54,6 +55,7 @@ cargo build --release
 cargo run
 ```
 
+Desktop은 [소스 설치와 Gateway 시작 경로](reference/product-status.md#소스-desktop-설치와-시작)를 따릅니다.
 네이티브 패키징과 배포 계약은 [네이티브 패키징과 배포](reference/release.md)에 있습니다.
 
 ## 운영 빠른 시작
@@ -151,6 +153,7 @@ Akra ADE는 소스 공개형(source-available)이며 오픈소스가 아닙니�
 
 - [문서 지도](docs-map.md)
 - [현재 제품 및 운영 계약](reference/current-product.md)
+- [구현·UI·검증·배포 상태](reference/product-status.md)
 - [설정 참조](reference/configuration.md)
 - [런타임 아키텍처](reference/architecture.md)
 - [개발 및 전달 가이드](reference/development.md)
