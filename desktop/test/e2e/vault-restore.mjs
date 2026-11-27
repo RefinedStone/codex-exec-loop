@@ -86,10 +86,15 @@ try {
 
   // 화면만 검증하는 합성 fixture이다. 제품에 승인 우회·fake environment·helper 대체 경로는 없다.
   const synthetic = { title: "synthetic local title <b>literal</b>", body: "synthetic-private-body <img src=x onerror=alert(1)> **literal**" };
-  const showSynthetic = async (state) => app.evaluate(({ BrowserWindow }, state) => {
-    const window = BrowserWindow.getAllWindows().find((owner) => owner.webContents.getURL().endsWith("vault-restore.html"));
-    window.webContents.send("akra-vault-restore:state", state);
-  }, state);
+  let syntheticGeneration = 1_000;
+  const showSynthetic = async (state) => {
+    const generation = ++syntheticGeneration;
+    await app.evaluate(({ BrowserWindow }, { state, generation }) => {
+      const window = BrowserWindow.getAllWindows().find((owner) => owner.webContents.getURL().endsWith("vault-restore.html"));
+      window.webContents.send("akra-vault-restore:state", state, generation);
+    }, { state, generation });
+    return generation;
+  };
   await showSynthetic({ phase: "restored", ...synthetic, expiresAt: Date.now() + 60_000 });
   await restore.getByTestId("vault-restored-body").waitFor();
   check("synthetic restored state appears only as literal text", await restore.getByTestId("vault-restored-title").textContent() === synthetic.title
@@ -133,11 +138,11 @@ try {
   const reviewText = "합성 공유본 <img src=x onerror=alert(1)> [[mask]]";
   await app.evaluate(({ ipcMain }) => {
     globalThis.__vaultReconnectSelections = [];
-    ipcMain.on("akra-vault-restore:reconnect", (_event, mappings) => {
-      globalThis.__vaultReconnectSelections.push(mappings);
+    ipcMain.on("akra-vault-restore:reconnect", (_event, generation, mappings) => {
+      globalThis.__vaultReconnectSelections.push({ generation, mappings });
     });
   });
-  await showSynthetic({ phase: "review", review: {
+  const reviewGeneration = await showSynthetic({ phase: "review", review: {
     reviewedHash: "1:" + "a".repeat(64), publishedTitle: "<b>합성 검토 제목</b>", publishedBody: reviewText,
     markers: [{ marker: "[[mask]]", previous: { field: "body", position: 300 },
       candidates: [{ field: "body", position: 46, context: "<img src=x> [[mask]]" }] }],
@@ -156,8 +161,9 @@ try {
     return globalThis.__vaultReconnectSelections;
   });
   check("one selected mapping is sent once while the confirmation button is disabled",
-    selections.length === 1 && selections[0].length === 1 && selections[0][0].marker === "[[mask]]"
-    && selections[0][0].field === "body" && selections[0][0].position === 46
+    selections.length === 1 && selections[0].generation === reviewGeneration
+    && selections[0].mappings.length === 1 && selections[0].mappings[0].marker === "[[mask]]"
+    && selections[0].mappings[0].field === "body" && selections[0].mappings[0].position === 46
     && await restore.getByTestId("vault-reconnect-confirm").isDisabled());
   await showSynthetic({ phase: "reconnecting" });
   await restore.locator('#root[data-phase="reconnecting"]').waitFor();
