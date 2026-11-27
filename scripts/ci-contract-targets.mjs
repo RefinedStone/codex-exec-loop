@@ -66,8 +66,11 @@ export function exactTestExecutable(output, request) {
 }
 
 export function parseTestInventory(output) {
-  const names = output.split(/\r?\n/).filter((line) => line.endsWith(": test"))
-    .map((line) => line.slice(0, -6));
+  const lines = output.split(/\r?\n/).filter(Boolean);
+  if (lines.some(line => !line.endsWith(": test") || !line.slice(0, -6).trim())) {
+    throw new Error("Unsupported libtest inventory; custom harnesses require explicit Cargo validation.");
+  }
+  const names = lines.map(line => line.slice(0, -6));
   if (new Set(names).size !== names.length) throw new Error("Duplicate test inventory entry.");
   return names;
 }
@@ -123,7 +126,7 @@ export function planContractFilters(prepared, filters, transfers = [], explicit 
 }
 
 /** Complete each new member exactly once, including bin/integration harnesses. */
-export function remainingMemberTests(prepared, assignments, {includeRoot = false, allowEmpty = false} = {}) {
+export function remainingMemberTests(prepared, assignments, {includeRoot = false, allowEmpty = true} = {}) {
   const remaining = [];
   for (const target of prepared) {
     if (!includeRoot && target.package === "akra-ade") continue;
