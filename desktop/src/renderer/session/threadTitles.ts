@@ -10,9 +10,15 @@ const CONTROLS = /[\p{Cc}\p{Cf}]/gu;
 
 export function provisionalThreadTitle(text: string): string | null {
   if (SENSITIVE.test(text)) return null;
-  const line = text.split(/\r?\n/u).map((value) => value.trim()).find(Boolean);
-  if (!line || GREETING.test(line) || /^\s*(?:```|~~~)/u.test(line)) return null;
-  const clean = line.replace(CONTROLS, (value) => value === "\u200d" ? value : " ").replace(/\s+/gu, " ").trim();
+  // Skip greeting-only lines after normalization, but never use code fenced content.
+  let clean = "";
+  for (const line of text.split(/\r\n|[\n\r\u2028\u2029]/u)) {
+    const candidate = line.replace(CONTROLS, (value) => value === "\u200d" ? value : " ").replace(/\s+/gu, " ").trim();
+    if (!candidate || GREETING.test(candidate)) continue;
+    if (/^(?:```|~~~)/u.test(candidate)) return null;
+    clean = candidate;
+    break;
+  }
   if (!clean) return null;
   const parts = [];
   for (const { segment } of GRAPHEMES.segment(clean)) {
