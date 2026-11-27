@@ -3,11 +3,13 @@
 // `home` 이면 새 스레드 화면의 입력창이다. 보내면 새 스레드를 만들고 첫 메시지를 보낸다.
 import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
 
+import type { CommandId, CommandSpec } from "../../shared/commands";
 import type { TurnPlanStep } from "../../shared/protocol/generated/v2/TurnPlanStep";
 import { Icon } from "../design/icons";
 import { useDesktopStore } from "../session/desktopStore";
 import { HOME_DRAFT, setDraft as setDraftFor, useUiStore } from "../session/uiStore";
 import { isSendKey, recallCursor } from "./composerKeys";
+import { slashCommandQuery, matchingSlashCommands } from "./slashCommands";
 import { type ActiveMention, activeMention, applyMention, sameMention } from "./fileMention";
 import { type ImageAttachment, readImage, refuseAttachment, withoutSent } from "./imageAttachments";
 import { isSentComposerDraft, runComposerAction, useComposerRequests } from "./composerAction";
@@ -20,6 +22,8 @@ import type { NextTurnSettingsController } from "../session/nextTurnSettings";
 import { NextTurnSettings } from "./NextTurnSettings";
 
 export interface ComposerActions {
+  /** 팔레트와 같은 앱 명령을 실행한다. 모델 메시지를 보내지 않는다 (#2837). */
+  runCommand?(id: CommandId): void;
   /** 대화 폴더의 파일을 찾는다 (#2837). 없으면 `@` 후보를 보이지 않는다. */
   searchFiles?(query: string): Promise<string[]>;
   modelSettings?: NextTurnSettingsController;
@@ -203,8 +207,35 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
     const text = cursor === null ? "" : (prompts[cursor] ?? "");
     recalled.current = cursor === null ? null : { cursor, text };
     closeMention();
+    closeSlash();
     setDraft(text);
     return true;
+  };
+
+  // `/` 명령은 초안 전체가 명령일 때만 연다. 경로나 문장 속의 `/` 는 일반 입력이다.
+  const [slash, setSlash] = useState<{ text: string; commands: CommandSpec[]; cursor: number } | null>(null);
+  const slashAt = useRef<string | null>(null);
+  const slashList = useRef<HTMLUListElement>(null);
+  const visibleSlash = !disabled && slash?.text === draft ? slash : null;
+  useEffect(() => {
+    slashList.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+  }, [visibleSlash?.cursor]);
+  const closeSlash = () => setSlash(null);
+  const updateSlash = (text: string, start: number, end: number) => {
+    const query = actions.runCommand ? slashCommandQuery(text, start, end) : null;
+    slashAt.current = query;
+    const commands = query === null ? [] : matchingSlashCommands(query);
+    setSlash(commands.length > 0 ? { text, commands, cursor: 0 } : null);
+  };
+  const chooseSlash = (id: CommandId) => {
+    const element = input.current;
+    if (disabled || !visibleSlash || !actions.runCommand || !element) return;
+    // 초안/커서가 바뀐 뒤의 클릭이나 오래된 후보로 다른 글을 지우지 않는다.
+    if (useUiStore.getState().drafts[draftKey] !== visibleSlash.text
+      || slashCommandQuery(element.value, element.selectionStart, element.selectionEnd) === null
+      || !visibleSlash.commands.some((spec) => spec.id === id)) return;
+    clearDraft();
+    actions.runCommand(id);
   };
 
   // `@` 파일 언급이다 (#2837). 입력이 바뀔 때마다 번호를 올려서 늦게 온 결과(이전 글, 다른 대화)를 버린다.
@@ -223,6 +254,8 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
   };
   /** 초안을 코드로 비운다. 열린 후보와 진행 중인 찾기도 버린다. */
   const clearDraft = () => {
+    closeSlash();
+    slashAt.current = null;
     closeMention();
     setDraft("");
   };
@@ -256,6 +289,27 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    const plain = !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey
+      && !event.nativeEvent.isComposing && event.keyCode !== 229;
+    if (visibleSlash && plain) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        setSlash({ ...visibleSlash, cursor: (visibleSlash.cursor + step + visibleSlash.commands.length) % visibleSlash.commands.length });
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        chooseSlash(visibleSlash.commands[visibleSlash.cursor]!.id);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeSlash();
+        return;
+      }
+    }
     if (mention && !event.nativeEvent.isComposing) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
@@ -280,7 +334,6 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
       send();
       return;
     }
-    const plain = !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !event.nativeEvent.isComposing;
     if (plain && (event.key === "ArrowUp" || event.key === "ArrowDown") && recall(event.key === "ArrowUp" ? "older" : "newer")) {
       event.preventDefault();
     }
@@ -306,6 +359,18 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
         {!home && transcript && actions.modelSettings && <NextTurnSettings key={transcript.threadId}
           controller={actions.modelSettings} threadId={transcript.threadId} disabled={!connected || writerElsewhere} />}
         <div className="composer">
+          {visibleSlash && (
+            <ul ref={slashList} id="composer-slash-commands" className="mention-list slash-command-list" role="listbox" aria-label="앱 명령" data-testid="slash-command-list">
+              {visibleSlash.commands.map((spec, index) => (
+                <li key={spec.id} id={`slash-command-${spec.id}`} role="option" aria-selected={index === visibleSlash.cursor}>
+                  <button type="button" className={index === visibleSlash.cursor ? "selected" : undefined}
+                    onMouseDown={(event) => event.preventDefault()} onClick={() => chooseSlash(spec.id)}>
+                    <code>/{spec.id}</code> {spec.title}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
           {mention && (
             <ul className="mention-list" role="listbox" aria-label="파일 언급" data-testid="mention-list">
               {mention.files.map((path, index) => (
@@ -336,12 +401,17 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
             onChange={(event) => {
               setDraft(event.target.value);
               updateMention(event.target.value, event.target.selectionStart);
+              updateSlash(event.target.value, event.target.selectionStart, event.target.selectionEnd);
             }}
             onSelect={(event) => {
-              const { value, selectionStart } = event.currentTarget;
+              const { value, selectionStart, selectionEnd } = event.currentTarget;
               if (!sameMention(activeMention(value, selectionStart), mentionAt.current)) updateMention(value, selectionStart);
+              if (slashCommandQuery(value, selectionStart, selectionEnd) !== slashAt.current) updateSlash(value, selectionStart, selectionEnd);
             }}
             onKeyDown={onKeyDown}
+            onBlur={closeSlash}
+            aria-controls={visibleSlash ? "composer-slash-commands" : undefined}
+            aria-activedescendant={visibleSlash ? `slash-command-${visibleSlash.commands[visibleSlash.cursor]!.id}` : undefined}
             onPaste={home ? undefined : (event) => {
               const images = [...event.clipboardData.files].filter((file) => file.type.startsWith("image/"));
               if (images.length === 0) return;
