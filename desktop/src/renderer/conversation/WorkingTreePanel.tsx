@@ -14,7 +14,7 @@ import { HunkChanges } from "./HunkChanges";
 import { filterChangedFiles } from "./workingTreeNavigation";
 
 /** 변경 패널이 쓰는 브리지 함수이다. 읽기와 파일별 동작이다. */
-type GitAccess = Pick<AkraBridge, "gitStatus" | "gitFileDiff" | "gitFileAction" | "gitOpenFile" | "gitBranchSummary" | "gitCommitDiff" | "gitPush" | "gitCreatePullRequest" | "gitHunks" | "gitHunkAction">;
+type GitAccess = Pick<AkraBridge, "gitStatus" | "gitFileDiff" | "gitFileAction" | "gitOpenFile" | "gitBranchSummary" | "gitCommitDiff" | "gitPush" | "gitCreatePullRequest" | "gitOperator" | "gitHunks" | "gitHunkAction">;
 
 // 동작 하나가 끝날 때까지 패널의 모든 동작 버튼을 막는다 (`ActionLock`). git 은 저장소마다 한 번에 하나만 쓸 수 있다 (`index.lock`).
 

@@ -36,7 +36,7 @@ try {
   await app.evaluate(({ ipcMain }) => {
     let pushed = false;
     let created = false;
-    for (const channel of ["akra:git-status", "akra:git-branch-summary", "akra:git-push", "akra:git-create-pull-request"]) ipcMain.removeHandler(channel);
+    for (const channel of ["akra:git-operator", "akra:git-status", "akra:git-branch-summary", "akra:git-push", "akra:git-create-pull-request"]) ipcMain.removeHandler(channel);
     ipcMain.handle("akra:git-status", () => ({ ok: true, branch: "feat/example", files: [], truncated: false }));
     ipcMain.handle("akra:git-branch-summary", () => ({
       ok: true, branch: "feat/example", remoteBranch: pushed ? "origin/feat/example" : null,
@@ -44,6 +44,10 @@ try {
       commits: [{ sha: "abc1234", shortSha: "abc1234", subject: "Add example", author: "Tester", committedAt: 0, pushed }],
       pullRequest: created ? { number: 12, title: "Add example", url: "https://github.com/sample/widgets/pull/12", state: "OPEN", isDraft: true, baseBranch: "main", checks: null } : null,
     }));
+    ipcMain.handle("akra:git-operator", (_event, _cwd, action, branch) => {
+      if(action!=="list" || typeof branch!=="string") throw new Error("expected a read-only G5 list request");
+      return "reviewed=false; automatic=main, prerelease";
+    });
     ipcMain.handle("akra:git-push", () => {
       pushed = true;
       return { ok: true, url: null };
@@ -60,6 +64,10 @@ try {
   await page.getByTestId("review-toggle").click();
   await page.getByTestId("branch-push").waitFor();
   assert.equal(await page.getByTestId("branch-pr-new").count(), 0);
+  await page.getByText("보호 브랜치 및 lease push",{exact:true}).click();
+  await page.getByRole("button",{name:"목록 보기"}).click();
+  await page.getByRole("status").filter({hasText:"automatic=main"}).waitFor();
+  console.log("PASS Desktop requests read-only protection state without supplying approval");
   await page.getByTestId("branch-push").click();
   await page.getByTestId("branch-pr-new").waitFor();
   assert.equal(await page.getByTestId("branch-push").count(), 0);

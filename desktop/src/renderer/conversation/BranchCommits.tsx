@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 
 import type { AkraBridge, GitBranchSummary, GitChecksState, GitCommit, GitPublishResult, GitPullRequest } from "../../shared/bridge";
 import { Icon } from "../design/icons";
+import { ProtectedPush } from "../git/ProtectedPush";
 import { toast } from "../session/uiStore";
 import { relativeAge } from "../sidebar/threadStatus";
 import { canCreatePullRequest, canPush, initialPullRequestDraft, type LoadedSummary } from "./branchPublish";
@@ -13,7 +14,7 @@ import { DiffFileList } from "./DiffView";
 export type BranchState = { phase: "idle" } | { phase: "loading" } | { phase: "loaded"; summary: GitBranchSummary } | { phase: "failed"; message: string };
 
 type CommitReader = Pick<AkraBridge, "gitCommitDiff">;
-type Publisher = Pick<AkraBridge, "gitPush" | "gitCreatePullRequest">;
+type Publisher = Pick<AkraBridge, "gitPush" | "gitCreatePullRequest" | "gitOperator">;
 
 /** 동작 하나가 끝날 때까지 패널의 모든 동작 버튼을 막는다. */
 export interface ActionLock {
@@ -42,7 +43,7 @@ function PublishActions({ cwd, summary, git, lock, onChanged, onOpenUrl }: { cwd
   };
   const pushable = canPush(summary);
   const creatable = canCreatePullRequest(summary);
-  if (!pushable && !creatable) return null;
+  if (!summary.branch) return null;
   return (
     <div className="publish">
       <div className="publish-buttons">
@@ -58,6 +59,7 @@ function PublishActions({ cwd, summary, git, lock, onChanged, onOpenUrl }: { cwd
           </button>
         )}
       </div>
+      <ProtectedPush key={cwd} cwd={cwd} branch={summary.branch} git={git} refresh={onChanged} />
       {creatable && form && (
         <form
           className="work-form publish-form"

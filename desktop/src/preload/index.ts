@@ -103,6 +103,7 @@ const bridge: AkraBridge = {
   gitCommitDiff(cwd: string, sha: string): Promise<GitCommitDiff> {
     return ipcRenderer.invoke(IPC_CHANNELS.gitCommitDiff, cwd, sha) as Promise<GitCommitDiff>;
   },
+  gitOperator(cwd, action, branch) { return ipcRenderer.invoke(IPC_CHANNELS.gitOperator, cwd, action, branch); },
   gitPush(cwd: string): Promise<GitPublishResult> {
     return ipcRenderer.invoke(IPC_CHANNELS.gitPush, cwd) as Promise<GitPublishResult>;
   },

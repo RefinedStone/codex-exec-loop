@@ -2657,3 +2657,5 @@ mod tests {
         assert!(attach_native_tui_to_gateway_kernel(&held(None)).is_none());
     }
 }
+
+pub(crate) use crate::adapter::outbound::github::automation::protected_push as git_operator;
