@@ -9,7 +9,7 @@ const MAX_GIT_CONFIG_STDOUT_BYTES: usize = 256 * 1024;
 const MAX_GIT_CONFIG_STDERR_BYTES: usize = 64 * 1024;
 use akra_verification_native::git_config::{
     EXECUTABLE_CONFIG_SECTION_REGEX, config_key_enables_external_execution,
-    validate_host_git_execution_config_keys,
+    escaped_config_key_label, validate_host_git_execution_config_keys,
 };
 
 pub(crate) fn ensure_git_command_execution_config_safe(
