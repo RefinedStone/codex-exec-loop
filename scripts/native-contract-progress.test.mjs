@@ -8,6 +8,11 @@ import test from "node:test";
 import { runStreamingCommand } from "./ci-process-progress.mjs";
 import { createContractProgressWriter, runNativeContracts } from "./run_native_rust_contracts.mjs";
 
+const packageId="opaque:root";
+const metadata={workspace_root:process.cwd(),workspace_members:[packageId],packages:[{id:packageId,name:"akra-ade",manifest_path:process.cwd()+"/Cargo.toml",targets:[{name:"akra_ade",kind:["lib"],test:true}]}]};
+const ownership={packages:[{name:"akra-ade",state:"active"}],transfers:[]};
+const request={packageId,package:"akra-ade",target:{name:"akra_ade",kind:"lib"}};
+
 test("stdout and stderr arrive before the process can complete", async () => {
   const controller = new AbortController();
   let observed = "";
@@ -48,10 +53,10 @@ test("progress is appended before the contract ends and retains partial runs", (
 test("a cancelled contract records failure and never starts the next filter", async () => {
   const records=[];
   const run=(command,args)=>command==="cargo"
-    ? {status:0,stdout:JSON.stringify({reason:"compiler-artifact",target:{name:"akra_ade",kind:["lib"]},profile:{test:true},executable:"fake"})+"\n"}
-    : {status:0,stdout:"one::test: test\ntwo::test: test\n"};
+    ? {status:0,stdout:JSON.stringify({reason:"compiler-artifact",package_id:packageId,target:{name:"akra_ade",kind:["lib"]},profile:{test:true},executable:"fake"})+"\n"}
+    : {status:0,stdout:args.includes("--ignored")?"":"one::test: test\ntwo::test: test\n"};
   await assert.rejects(runNativeContracts(["--","one::","two::"],{
-    run,write(){},record:(e)=>records.push(e),
+    metadata,ownership,run,write(){},record:(e)=>records.push(e),
     stream:async()=>({status:null,signal:"SIGTERM",aborted:true,stdout:"partial"}),
   }),/SIGTERM/);
   assert.deepEqual(records.map((e)=>[e.filter,e.phase,e.status]),[
