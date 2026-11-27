@@ -48,6 +48,7 @@ pub mod issue_autonomy;
 pub mod issue_binding_admission;
 pub mod issue_binding_pause;
 pub mod issue_interactions;
+pub mod issue_timeline;
 pub mod issue_triage;
 // Telegram 의 이슈 결정 알림이다 (IA8-3).
 pub mod telegram_issue_notification;

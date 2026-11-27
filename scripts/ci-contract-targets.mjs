@@ -75,11 +75,17 @@ export function parseTestInventory(output) {
   return names;
 }
 
+function testNameMappings(transfers) {
+  return transfers.flatMap((move) => [move, ...(move.testMappings ?? [])
+    .map((mapping) => ({...mapping, owner:move.owner}))]);
+}
+
 function originalNames(name, prepared, transfers, explicit) {
-  if (explicit || prepared.package === "akra-ade") return [name];
-  return transfers.flatMap((move) => [move, ...(move.testMappings ?? []).map((mapping) => ({...mapping, owner:move.owner}))]).filter((move) => move.owner === prepared.package
+  if (explicit) return [name];
+  const previous = testNameMappings(transfers).filter((move) => move.owner === prepared.package
     && move.oldTestPrefix && move.newTestPrefix && name.startsWith(move.newTestPrefix))
     .map((move) => move.oldTestPrefix + name.slice(move.newTestPrefix.length));
+  return prepared.package === "akra-ade" ? [name, ...previous] : previous;
 }
 
 function commonPrefix(names) {

@@ -1,0 +1,74 @@
+[
+  {
+    "sequence": 7,
+    "recorded_at": "2026-11-22T00:00:07Z",
+    "event": {
+      "kind": "issue_tracked",
+      "issue": {
+        "provider": "github",
+        "server_id": "github.com",
+        "repository_id": "R_project",
+        "issue_id": "I_42",
+        "project_scope": {
+          "workspace_dir": "/workspace"
+        }
+      },
+      "binding_id": "binding-1",
+      "revision": 7,
+      "by": "rule"
+    }
+  },
+  {
+    "sequence": 8,
+    "recorded_at": "2026-11-22T00:00:08Z",
+    "event": {
+      "kind": "issue_work_permit_revoked",
+      "issue": {
+        "provider": "github",
+        "server_id": "github.com",
+        "repository_id": "R_project",
+        "issue_id": "I_42",
+        "project_scope": {
+          "workspace_dir": "/workspace"
+        }
+      },
+      "work_order_id": "work-1",
+      "authorization_epoch": 4
+    }
+  },
+  {
+    "sequence": 9,
+    "recorded_at": "2026-11-22T00:00:09Z",
+    "event": {
+      "kind": "issue_execution_progressed",
+      "event_id": "execution-progress-1",
+      "issue": {
+        "provider": "github",
+        "server_id": "github.com",
+        "repository_id": "R_project",
+        "issue_id": "I_42",
+        "project_scope": {
+          "workspace_dir": "/workspace"
+        }
+      },
+      "work_order_id": "work-1",
+      "progress": {
+        "state": "in_review",
+        "attempts": {
+          "execution": 2,
+          "verification": 7,
+          "publication": 0
+        },
+        "terminal": {
+          "record_id": "terminal-observe-1",
+          "classification": "observe_again"
+        },
+        "review_pull_request_url": null,
+        "integration": null,
+        "attempts_exhausted": false,
+        "revision": 11
+      },
+      "revision": 11
+    }
+  }
+]
