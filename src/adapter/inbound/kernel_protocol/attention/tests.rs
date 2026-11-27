@@ -180,3 +180,21 @@ fn items_are_ordered_approval_then_pull_request_then_task() {
         ]
     );
 }
+
+#[test]
+fn invalid_planning_and_withheld_follow_are_stable_distinct_attention_items() {
+    let projection = RuntimeProjection::invalid("private error detail")
+        .with_auto_follow_pause_reason("follow withheld");
+    let before = planning_attention(&projection);
+    assert_eq!(before.len(), 2);
+    assert_eq!(before[0].cause, AttentionCause::PlanningInvalid);
+    assert_eq!(before[1].cause, AttentionCause::AutoFollowPaused);
+    assert_eq!(before, planning_attention(&projection));
+    assert!(
+        !serde_json::to_string(&before)
+            .unwrap()
+            .contains("private error detail")
+    );
+    assert!(planning_attention(&RuntimeProjection::uninitialized()).is_empty());
+    assert_ne!(before[0].id, before[1].id);
+}

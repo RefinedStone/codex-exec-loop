@@ -57,6 +57,7 @@ mod spec;
 pub use spec::{KernelSpec, describe};
 
 mod attention;
+pub(crate) use attention::issue_decision_attention;
 pub use attention::{AttentionCause, AttentionItem, AttentionSubject, AttentionSubjectKind};
 
 mod task_acceptance;
@@ -2249,17 +2250,20 @@ impl KernelQuery {
             }
             Self::Parallel {} => KernelQueryAnswer::Parallel(ParallelState::from_core(parallel)),
             Self::Attention {} => KernelQueryAnswer::Attention {
-                items: attention::attention_items(
-                    threads,
-                    parallel
-                        .supervisor
-                        .and_then(|supervisor| supervisor.pr_validation.as_ref()),
-                    snapshot
-                        .planning_parallel
-                        .planning_runtime
-                        .queue_projection()
-                        .map_or(&[], |queue| queue.proposed_tasks.as_slice()),
-                ),
+                items: {
+                    let planning = &snapshot.planning_parallel.planning_runtime;
+                    let mut items = attention::attention_items(
+                        threads,
+                        parallel
+                            .supervisor
+                            .and_then(|supervisor| supervisor.pr_validation.as_ref()),
+                        planning
+                            .queue_projection()
+                            .map_or(&[], |queue| queue.proposed_tasks.as_slice()),
+                    );
+                    items.extend(attention::planning_attention(planning));
+                    items
+                },
             },
             Self::History { after, .. } => {
                 KernelQueryAnswer::History(history.unwrap_or_else(|| KernelEventPage {

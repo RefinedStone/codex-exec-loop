@@ -181,6 +181,17 @@ pub(super) fn attention_next(cause: super::attention::AttentionCause) -> Vec<Nex
         AttentionCause::PrValidationBlocked | AttentionCause::PrValidationFailed => {
             vec![Step::query(KernelQueryKind::Parallel), Step::AskUser]
         }
+        AttentionCause::IssueDecisionPending => vec![
+            Step::query(KernelQueryKind::Issues),
+            Step::query(KernelQueryKind::Issue),
+            Step::AskUser,
+            Step::command(KernelCommandKind::AnswerIssueDecision),
+        ],
+        AttentionCause::PlanningInvalid
+        | AttentionCause::AutoFollowPaused
+        | AttentionCause::TaskAwaitingUser => {
+            vec![Step::query(KernelQueryKind::Planning), Step::AskUser]
+        }
     }
 }
 
