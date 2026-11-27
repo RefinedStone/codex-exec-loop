@@ -13,6 +13,7 @@ export type CommandId =
   | "fleet"
   | "next-attention"
   | "review"
+  | "graph-actions"
   | "graph"
   | "kernel"
   | "browser"
@@ -62,6 +63,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   { id: "next-attention", title: "다음 응답 필요 스레드", paletteIcon: "message", keys: ["KeyY"], keyLabel: "Y" },
   { id: "fleet", title: "현황판 열기", paletteIcon: "grid" },
   { id: "review", title: "변경 검토 패널", paletteIcon: "diff", keyLabel: "\\" },
+  { id: "graph-actions", title: "선택한 커밋 작업", paletteIcon: "branch", keys: ["KeyG"], keyLabel: "G" },
   { id: "graph", title: "커밋 그래프 패널", paletteIcon: "branch" },
   { id: "kernel", title: "Akra 커널 패널", paletteIcon: "bolt" },
   { id: "browser", title: "브라우저 패널", paletteIcon: "globe" },
@@ -73,7 +75,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 
 /** 팔레트에 보이는 명령의 순서이다. 이전 팔레트와 같은 순서이다. */
 export const PALETTE_ORDER: readonly CommandId[] = [
-  "new-thread", "fleet", "next-attention", "review", "graph", "kernel", "browser", "work", "docs", "skills", "terminal", "theme", "settings",
+  "new-thread", "fleet", "next-attention", "review", "graph", "graph-actions", "kernel", "browser", "work", "docs", "skills", "terminal", "theme", "settings",
 ];
 
 export function command(id: CommandId): CommandSpec {

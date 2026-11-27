@@ -1420,7 +1420,10 @@ The Gateway records the external documents that a thread mentions, without a mod
   (the PR's base branch, else the branch of `origin/HEAD`), marks the ones that are not pushed, and shows the
   branch's GitHub PR with its CI state through `gh` (`desktop/src/main/gitBranch.ts`). It can push the branch
   to the remote branch of the same name (never a force push) and create a PR with `gh`; the main process asks
-  before both and shows the target (`desktop/src/main/gitPublish.ts`)
+  before both and shows the target (`desktop/src/main/gitPublish.ts`).
+  For a normal `origin` tracking layout with the same fetch and push URL, the push dialog includes
+  the last fetched destination SHA if known. After confirmation Desktop checks the advertised SHA
+  and refuses if it changed. This is a preflight for ordinary pushes, not an atomic force lease.
   The "그래프" side panel (plan 27 G1, G2) shows the commit graph of the open thread's folder, read-only. It reads
   `akra/git/graph` when the panel opens, when the folder changes, and on "새로 고침"; it draws only the
   visible rows and reads the next page 60 rows before the end. A row shows the lane lines, the ref labels,
@@ -1436,6 +1439,9 @@ The Gateway records the external documents that a thread mentions, without a mod
   further match. The commit that a worktree has checked out carries a badge with the newest thread whose
   folder is in that worktree; the badge opens the thread. A backup ref has a dashed label, and a commit
   reached only from a backup ref is dim. The panel has no path or branch filter.
+  Right-click a row to select it and open the commit action chooser. With a commit selected,
+  Cmd/Ctrl+G or the palette command “선택한 커밋 작업” opens the same chooser. Picking an action only
+  requests its preview. Execute is a separate confirmation in the plan.
   Since #2851 the panel can be maximised (the button next to "패널 닫기"). The maximised panel adds a ref
   list on the left (local, remote, tag, backup, and worktree groups; a click selects that commit); the
   graph and the commit detail below it stay as in the narrow panel, which is unchanged. Above the graph
