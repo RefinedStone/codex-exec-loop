@@ -96,21 +96,47 @@ try {
   await conversation.waitFor();
   assert.equal(await selectionButton.count(), 0, "unselected conversation has no task action");
   const before = await conversation.boundingBox();
-  const selectedText = await page.locator(".user-message, .agent-message").first().evaluate((element) => {
+  const message = page.locator(".user-message").first();
+  const selectMessage = () => message.evaluate((element) => {
+    const body = element.querySelector("p");
     const range = document.createRange();
-    range.selectNodeContents(element);
+    range.selectNodeContents(element); // deliberately spans the copy control
     const selection = window.getSelection();
     selection.removeAllRanges();
     selection.addRange(range);
-    return selection.toString().trim();
+    return { text: body.textContent.trim(), turnId: element.closest("[data-turn-id]").dataset.turnId };
   });
+  let selected = await selectMessage();
   assert.equal(await selectionButton.count(), 0, "selection alone reserves no space");
   assert.deepEqual(await conversation.boundingBox(), before);
-  await page.locator(".user-message, .agent-message").first().click({ button: "right" });
+  await message.click({ button: "right" });
+  await selectionButton.waitFor();
+  const attaches = requests.filter(r => r.method === "akra/kernel/attach").length;
+  gateway.disconnectClients();
+  await selectionButton.waitFor({ state: "detached" });
+  await page.getByTestId("connection-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 30_000 });
+  const attachDeadline = Date.now() + 10_000;
+  while (requests.filter(r => r.method === "akra/kernel/attach").length <= attaches && Date.now() < attachDeadline) {
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.ok(requests.filter(r => r.method === "akra/kernel/attach").length > attaches, "kernel reattached");
+  await message.waitFor();
+  assert.equal(await selectionButton.count(), 0, "an old menu must not reactivate after reconnect");
+  assert.equal(await page.getByTestId("task-editor").count(), 0);
+  await conversation.focus();
+  selected = await selectMessage();
+  await page.keyboard.press("Shift+F10");
+  await selectionButton.waitFor({ timeout: 10_000 });
+  await page.keyboard.press("Escape");
+  await selectionButton.waitFor({ state: "detached" });
+  selected = await selectMessage();
+  await message.click({ button: "right" });
   await selectionButton.waitFor();
   await selectionButton.click();
   await page.getByTestId("task-editor").waitFor();
-  assert.equal(await page.locator("#task-editor-description").inputValue(), selectedText);
+  assert.equal(await page.locator("#task-editor-description").inputValue(), selected.text, "only message body, not UI controls");
+  await page.locator(".task-editor-source summary").click();
+  assert.ok((await page.locator(".task-editor-source .muted").textContent()).includes(selected.turnId), "source turn is preserved");
   assert.equal(requests.filter((r) => r.params.command?.type === "create_task").length, 0, "opening a draft does not mutate");
   await page.locator("#task-editor-task-title").fill("User reviewed title");
   await page.getByLabel("완료 기준 추가", { exact: true }).selectOption("screen");
