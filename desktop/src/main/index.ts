@@ -38,6 +38,7 @@ import { readBranchSummary, readCommitDiff, readGitHubRepository } from "./gitBr
 import { executePullRequest, executePush, planPullRequest, planPush } from "./gitPublish";
 import { executeGitHunkPlan, planGitHunkAction, readGitHunks } from "./gitHunks";
 import { editorUrl, executeGitFilePlan, planGitFileAction, readGitFileDiff, readGitStatus, resolveGitFile } from "./gitStatus";
+import { readGitDiffContext } from "./gitDiffContext";
 import { readGitHubSummary, readProject, readReviewPrompt } from "./githubService";
 import { ProviderCredentialMigration } from "./providerCredentialMigration";
 import { LegacyCredentialFiles } from "./providerLegacy";
@@ -572,6 +573,7 @@ ipcMain.on(IPC_CHANNELS.remoteSend, (event, host: unknown, text: unknown) => {
 });
 
 ipcMain.handle(IPC_CHANNELS.gitStatus, (_event, cwd: unknown) => readGitStatus(cwd));
+ipcMain.handle(IPC_CHANNELS.gitDiffContext, (_event, cwd: unknown, request: unknown) => readGitDiffContext(cwd, request));
 ipcMain.handle(IPC_CHANNELS.gitFileDiff, (_event, cwd: unknown, path: unknown, untracked: unknown, source?: unknown) =>
   readGitFileDiff(cwd, path, untracked, source),
 );

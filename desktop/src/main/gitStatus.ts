@@ -3,21 +3,16 @@
 // 있는 폴더에서는 응답이 접속 한도를 넘고 Gateway 세션 전체가 끊겼다 (2026-11-06). 여기서는 목록만 먼저 읽고,
 // 파일 diff 는 펼칠 때 하나씩, 크기 한도 안에서 읽는다.
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import { lstat, open, realpath, stat } from "node:fs/promises";
+import { lstat, stat } from "node:fs/promises";
 import { isAbsolute, normalize, relative, resolve, sep } from "node:path";
 
-import type { GitActionResult, GitChangedFile, GitFileAction, GitFileDiff, GitDiffSource, GitStatusResult } from "../shared/bridge";
+import type { GitActionResult, GitChangedFile, GitFileAction, GitStatusResult } from "../shared/bridge";
 import { isConflictStatus, stageState } from "../shared/gitChange";
+export { readGitFileDiff } from "./gitFileDiff";
 
 const GIT_TIMEOUT_MS = 15_000;
 /** 목록 출력의 한도이다. 이보다 크면 잘린 목록을 보여 준다. */
 const STATUS_OUTPUT_LIMIT = 4 << 20;
-/** 파일 하나의 diff 한도이다. 넘으면 앞부분만 보여 준다. */
-const FILE_DIFF_LIMIT = 1 << 20;
-/** Keep paths compatible with the renderer regardless of the repository diff configuration. */
-const DIFF_PATH_OPTIONS = ["--src-prefix=a/", "--dst-prefix=b/", "--no-relative"];
 
 export interface GitOutput {
   stdout: string;
@@ -188,57 +183,8 @@ export async function readGitStatus(cwdInput: unknown): Promise<GitStatusResult>
   return { ok: true, branch: parsed.branch, files, truncated: status.truncated };
 }
 
-function canonicalFileIsInsideRoot(root: string, target: string): boolean {
-  const fromRoot = relative(root, target);
-  return fromRoot !== "" && fromRoot !== ".." && !fromRoot.startsWith(".." + sep) && !isAbsolute(fromRoot);
-}
 
-async function readUntrackedFile(root: string, path: string): Promise<GitFileDiff> {
-  // A lexical root check is insufficient: a symlink or junction can reach
-  // outside the repository, including through an intermediate directory.
-  const [canonicalRoot, info, canonicalTarget] = await Promise.all([
-    realpath(root),
-    lstat(path),
-    realpath(path),
-  ]);
-  if (info.isSymbolicLink() || !info.isFile()) {
-    throw new Error("심볼릭 링크 및 일반 파일이 아닌 경로는 내용을 표시하지 않습니다.");
-  }
-  if (!canonicalFileIsInsideRoot(canonicalRoot, canonicalTarget)) {
-    throw new Error("저장소 외부 경로의 파일은 읽을 수 없습니다.");
-  }
-
-  // Resolve the canonical path before opening and refuse final symlinks on
-  // Unix. Check descriptor identity after opening to detect replacements.
-  // Nonblocking open also prevents a regular-file-to-FIFO race from waiting for a writer.
-  const flags = constants.O_RDONLY | (process.platform === "win32" ? 0 :
-    (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
-  const handle = await open(canonicalTarget, flags);
-  try {
-    const [opened, current, currentTarget] = await Promise.all([
-      handle.stat(),
-      lstat(path),
-      realpath(path),
-    ]);
-    if (!opened.isFile() || current.isSymbolicLink() || !current.isFile() ||
-      opened.dev !== info.dev || opened.ino !== info.ino ||
-      current.dev !== info.dev || current.ino !== info.ino ||
-      currentTarget !== canonicalTarget || !canonicalFileIsInsideRoot(canonicalRoot, currentTarget)) {
-      throw new Error("파일 경로가 읽기 도중 변경되어 내용을 표시하지 않습니다.");
-    }
-    const buffer = Buffer.alloc(FILE_DIFF_LIMIT + 1);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    const content = buffer.subarray(0, Math.min(bytesRead, FILE_DIFF_LIMIT));
-    if (content.includes(0)) {
-      return { kind: "binary" };
-    }
-    return { kind: "content", text: content.toString("utf8"), truncated: bytesRead > FILE_DIFF_LIMIT };
-  } finally {
-    await handle.close();
-  }
-}
-
-interface RepositoryFile {
+export interface RepositoryFile {
   cwd: string;
   /** 저장소 루트의 절대 경로이다. */
   root: string;
@@ -273,7 +219,7 @@ export async function resolveGitFile(cwdInput: unknown, path: unknown): Promise<
 }
 
 const GIT_FILE_ACTIONS: readonly GitFileAction[] = ["stage", "unstage", "discard"];
-const FILTER_MESSAGE = "필터(LFS 등)가 있는 파일입니다. 터미널에서 git 으로 처리하십시오.";
+export const FILTER_MESSAGE = "필터(LFS 등)가 있는 파일입니다. 터미널에서 git 으로 처리하십시오.";
 /** 폴더를 스테이지할 때 필터를 확인하는 파일 수의 한도이다. */
 const FOLDER_FILE_LIMIT = 200;
 const ATTRIBUTE_BATCH = 50;
@@ -318,7 +264,7 @@ export function discardCommands(status: string, pathspec: string, originalPathsp
  * 이 파일의 지금 상태를 git 에서 읽는다. renderer 가 보낸 상태는 쓰지 않는다. 오래된 목록이나 꾸민 값으로 다른
  * 명령을 고르지 못하게 한다. 이름 바꾸기는 경로를 좁혀 읽으면 보이지 않으므로 전체 목록에서 찾는다.
  */
-async function currentChange(file: RepositoryFile): Promise<GitChangedFile | null> {
+export async function currentChange(file: RepositoryFile): Promise<GitChangedFile | null> {
   const status = await runGit(file.root, ["status", "--porcelain=v1", "-z", "--untracked-files=normal"], STATUS_OUTPUT_LIMIT);
   if (status.code !== 0 || status.truncated || status.timedOut) {
     throw new Error(failureMessage(status, "git status 가 실패했거나 목록이 잘렸습니다."));
@@ -407,7 +353,7 @@ export async function planGitFileAction(cwdInput: unknown, action: unknown, path
 }
 
 /** 확인을 마친 동작을 실행한다. `discard` 는 되돌릴 수 없다. 부르는 쪽이 사용자에게 먼저 확인한다. */
-const CHANGED_SINCE_CONFIRMATION = "파일 상태가 확인 중 변경되었습니다. 목록을 새로 고친 뒤 다시 시도하십시오.";
+export const CHANGED_SINCE_CONFIRMATION = "파일 상태가 확인 중 변경되었습니다. 목록을 새로 고친 뒤 다시 시도하십시오.";
 
 async function pathFingerprint(path: string): Promise<string | null> {
   // lstat detects a symlink placed at a missing old name without following it.
@@ -419,7 +365,7 @@ async function pathFingerprint(path: string): Promise<string | null> {
   return [info.dev, info.ino, info.mode, info.size, info.mtimeMs, info.ctimeMs].join(":");
 }
 
-async function snapshotGitFilePlan(file: RepositoryFile, original: RepositoryFile | null): Promise<GitFilePlanGuard> {
+export async function snapshotGitFilePlan(file: RepositoryFile, original: RepositoryFile | null): Promise<GitFilePlanGuard> {
   const [head, indexEntries, targetState, originalState] = await Promise.all([
     runGit(file.root, ["rev-parse", "--verify", "-q", "HEAD"], 256),
     runGit(file.root, ["ls-files", "--stage", "-z", "--", file.pathspec, ...(original ? [original.pathspec] : [])], STATUS_OUTPUT_LIMIT),
@@ -478,75 +424,4 @@ export async function runGitFileAction(cwdInput: unknown, action: unknown, path:
 export function editorUrl(target: string): string {
   const parts = target.split(/[\\/]/);
   return `vscode://file/${parts.map((part, index) => (index === 0 && /^[A-Za-z]:$/.test(part) ? part : encodeURIComponent(part))).join("/")}`;
-}
-
-/** 파일 하나의 변경이다. 추적 중인 파일은 HEAD 대비 git diff, 새 파일은 내용이다. */
-export async function readGitFileDiff(cwdInput: unknown, path: unknown, untracked: unknown, source?: unknown): Promise<GitFileDiff> {
-  const file = await repositoryFile(cwdInput, path);
-  if (source !== undefined) return readSourceDiff(file, source);
-  const { cwd, root, target, pathspec } = file;
-  if (untracked === true) {
-    return readUntrackedFile(root, target);
-  }
-  // An unborn repository has no HEAD. Git's cached diff compares the index with the empty tree.
-  const head = await runGit(cwd, ["rev-parse", "--verify", "-q", "HEAD"], 4096);
-  const base = head.code === 0 ? ["HEAD"] : ["--cached"];
-  const output = await runGit(cwd, ["diff", ...base, "--no-color", "--no-ext-diff", "--no-textconv", ...DIFF_PATH_OPTIONS, "--", pathspec], FILE_DIFF_LIMIT);
-  if (output.code !== 0) {
-    throw new Error(failureMessage(output, "git diff 가 실패했습니다."));
-  }
-  return { kind: "gitDiff", text: output.stdout, truncated: output.truncated };
-}
-
-/** Explicitly distinguish HEAD, index and working-copy comparisons. Never reconstruct full files from a patch. */
-async function readSourceDiff(file: RepositoryFile, sourceInput: unknown): Promise<GitFileDiff> {
-  const sources: readonly GitDiffSource[] = ["head_worktree", "head_index", "index_worktree", "untracked", "worktree_file"];
-  if (!sources.includes(sourceInput as GitDiffSource)) throw new Error("지원하지 않는 비교 기준입니다.");
-  const source = sourceInput as GitDiffSource;
-  const change = await currentChange(file);
-  if (change?.directory || (change && isConflictStatus(change.status)) ||
-      (source !== "worktree_file" && (!change || change.untracked !== (source === "untracked")))) {
-    throw new Error("파일 상태가 변경되었거나 선택한 비교 기준을 사용할 수 없습니다.");
-  }
-  const original = change?.originalPath ? await repositoryFile(file.root, change.originalPath) : null;
-  if (await anyContentFilter(file.root, [file.relativePath, ...(original ? [original.relativePath] : [])])) {
-    throw new Error(FILTER_MESSAGE);
-  }
-  // A staged rename already has its new path in the index. Only the worktree status
-  // column identifies a rename between the index and the working copy.
-  const comparisonOriginal = source === "index_worktree" && !/[RC]/.test(change?.status[1] ?? "") ? null : original;
-  const before = await snapshotGitFilePlan(file, original);
-  // A clean tracked file has no status entry. An ignored file has neither a
-  // status entry nor an index entry and must not become a composer attachment.
-  if (source === "worktree_file" && !before.indexEntries && !change?.untracked) {
-    throw new Error("추적하거나 변경 목록에 있는 파일을 선택하십시오.");
-  }
-  const read = async (): Promise<GitFileDiff> => {
-    if (source === "untracked" || source === "worktree_file") return readUntrackedFile(file.root, file.target);
-    if (source === "head_worktree" && before.headOid === null) {
-      throw new Error("첫 커밋 전에는 스테이지 또는 작업 트리 비교를 선택하십시오.");
-    }
-    const args = source === "head_index" ? ["--cached", ...(before.headOid ? [before.headOid] : [])]
-      : source === "head_worktree" ? [before.headOid!] : [];
-    const result = await runGit(file.root, ["diff", ...args, "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", ...DIFF_PATH_OPTIONS, "--", file.pathspec,
-      ...(comparisonOriginal ? [comparisonOriginal.pathspec] : [])], FILE_DIFF_LIMIT);
-    if (result.code !== 0 || result.timedOut) throw new Error(failureMessage(result, "git diff 가 실패했습니다."));
-    return { kind: "gitDiff", text: result.stdout, truncated: result.truncated };
-  };
-  const result = await read();
-  const repeat = await read();
-  const after = await snapshotGitFilePlan(file, original);
-  const updated = await currentChange(file);
-  if (JSON.stringify(before) !== JSON.stringify(after) || JSON.stringify(result) !== JSON.stringify(repeat) ||
-      updated?.status !== change?.status || updated?.originalPath !== change?.originalPath) {
-    throw new Error(CHANGED_SINCE_CONFIRMATION);
-  }
-  const snapshotId = createHash("sha256").update(JSON.stringify([file.root, file.relativePath, change?.originalPath ?? null, source, before, result])).digest("hex");
-  const common = await runGit(file.root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], 4096);
-  if (common.code !== 0 || common.truncated || common.timedOut) throw new Error("저장소 출처를 확인할 수 없습니다.");
-  const binary = result.kind === "binary" || (result.kind === "gitDiff" && /^(Binary files .* differ|GIT binary patch)\r?$/m.test(result.text));
-  return { ...result, snapshot: { source, snapshotId, headOid: before.headOid, path: file.relativePath,
-    worktreeId: file.root, repositoryId: common.stdout.trim(),
-    originalPath: comparisonOriginal?.relativePath ?? null,
-    contentStatus: binary ? "binary" : result.truncated ? "truncated" : result.kind === "content" ? "complete" : "patch_only" } };
 }

@@ -38,6 +38,7 @@ export const IPC_CHANNELS = {
   openFolder: "akra:open-folder",
   gitStatus: "akra:git-status",
   gitFileDiff: "akra:git-file-diff",
+  gitDiffContext: "akra:git-diff-context",
   gitFileAction: "akra:git-file-action",
   gitHunks: "akra:git-hunks",
   gitHunkAction: "akra:git-hunk-action",
@@ -321,6 +322,7 @@ export interface GitDiffSnapshot {
   path: string;
   originalPath: string | null;
   contentStatus: "patch_only" | "complete" | "truncated" | "binary";
+  contents?: import("./gitDiffContext").GitSnapshotContents;
   worktreeId?: string;
   repositoryId?: string;
 }
@@ -444,6 +446,7 @@ export interface AkraBridge {
   gitStatus(cwd: string): Promise<GitStatusResult>;
   /** 바뀐 파일 하나의 diff 를 읽는다. 새 파일은 내용을 돌려준다. */
   gitFileDiff(cwd: string, path: string, untracked: boolean, source?: GitDiffSource): Promise<GitFileDiff>;
+  gitDiffContext(cwd: string, request: import("./gitDiffContext").GitDiffContextRequest): Promise<import("./gitDiffContext").GitDiffContextResult>;
   /**
    * 바뀐 파일 하나를 스테이지하거나, 스테이지를 취소하거나, 변경을 버린다. 경로만 보낸다. main 이 그 파일의 상태를
    * git 에서 다시 읽고, 버리기 전에 사용자에게 확인한다.
