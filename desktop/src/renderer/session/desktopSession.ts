@@ -47,6 +47,7 @@ import { applyMcpWriteApprovalNotification, clearMcpWriteApprovals, MCP_WRITE_AP
 import { NextTurnQueue } from "./nextTurnQueue";
 import { NextTurnSettingsController } from "./nextTurnSettings";
 import { ThreadCompactionController } from "./threadCompaction";
+import { ProvisionalThreadTitles, threadDisplayTitle } from "./threadTitles";
 import { type DotLiveState, type DotSummary, type GatewayInfo, type SessionStore, sortFolders, type WorkspaceFolder, type WorkspaceThread } from "./desktopStore";
 
 const THREAD_LIST_LIMIT = 100;
@@ -75,7 +76,7 @@ interface ResumeLoading {
   threadId: string;
   buffer: QueuedNotification[];
 }
-const UNTITLED_THREAD = "(제목 없음)";
+
 
 interface QueuedNotification {
   method: string;
@@ -149,7 +150,7 @@ export function groupThreadsByCwd(threads: readonly Thread[]): WorkspaceFolder[]
     if (seen.has(thread.id)) continue;
     seen.add(thread.id);
     const folder = folders.get(thread.cwd) ?? { cwd: thread.cwd, threads: [] };
-    folder.threads.push(workspaceThread(thread, thread.name ?? (thread.preview.trim() || UNTITLED_THREAD)));
+    folder.threads.push(workspaceThread(thread, threadDisplayTitle(thread.name, thread.preview)));
     folders.set(thread.cwd, folder);
   }
   return sortFolders([...folders.values()]);
@@ -247,6 +248,7 @@ export class DesktopSession {
    */
   private removedThreadIds = new Set<string>();
   private renamedThreads = new Map<string, string>();
+  private readonly provisionalTitles = new ProvisionalThreadTitles();
   /** 이 접속에서 생기거나 보관을 푼 스레드이다. 그 전에 읽기 시작한 목록에는 없을 수 있다. */
   private addedThreads = new Map<string, Thread>();
   /** 원본 id → 진행 중인 분기이다. 같은 원본의 두 번째 요청은 같은 결과를 기다린다. */
@@ -331,6 +333,7 @@ export class DesktopSession {
         this.providerVersionScope = "";
         this.store.setConnection(state);
         this.connected = state.phase === "connected";
+        if (!this.connected) this.provisionalTitles.clear();
         this.compaction.connectionChanged(this.connected);
         if (this.connected) {
           void this.initialize();
@@ -563,6 +566,11 @@ export class DesktopSession {
       const response = await this.client.request<TurnStartResponse>("turn/start", { threadId, input, ...settings.params });
       if (typeof response?.turn?.id === "string" && response.turn.id.length > 0) {
         this.nextTurnSettings.accepted(settings);
+        const title = this.provisionalTitles.accepted(threadId, text);
+        if (title !== null) {
+          this.store.renameThread(threadId, title);
+          this.store.updateTranscript(current => current.threadId === threadId ? { ...current, title } : current);
+        }
         this.nextTurnQueue.started(threadId, response.turn.id);
         if (generation === this.conversationGeneration && this.nextTurnQueue.snapshot(threadId).waitingTurnId === response.turn.id) {
           this.acknowledgedTurnStarts.set(threadId, response.turn.id);
@@ -600,6 +608,10 @@ export class DesktopSession {
     this.store.setOpenThread(response.thread.id);
     this.store.setTranscript(transcript);
     this.store.addThreadToFolder(response.thread.cwd, workspaceThread(response.thread, transcript.title));
+    if (!this.readOnly && !response.thread.ephemeral && !response.thread.parentThreadId && !isAgentThreadSource(response.thread.threadSource)
+        && !this.renamedThreads.has(response.thread.id)) {
+      this.provisionalTitles.register(response.thread.id, response.thread.name, response.thread.preview);
+    }
     return response.thread.id;
   }
 
@@ -752,7 +764,9 @@ export class DesktopSession {
     this.assertWritable();
     const trimmed = name.trim();
     if (!trimmed) throw new Error("이름이 비어 있습니다.");
+    this.provisionalTitles.stopGenerating(threadId);
     await this.client.request("thread/name/set", { threadId, name: trimmed });
+    this.provisionalTitles.forget(threadId);
     this.renamedThreads.set(threadId, trimmed);
     this.store.renameThread(threadId, trimmed);
   }
@@ -764,6 +778,7 @@ export class DesktopSession {
     await this.client.request("thread/archive", { threadId });
     this.nextTurnQueue.pause(threadId, "대화가 보관되거나 삭제되어 예약을 멈췄습니다.");
     this.removedThreadIds.add(threadId);
+    this.provisionalTitles.forget(threadId);
     this.addedThreads.delete(threadId);
     this.store.removeThread(threadId);
   }
@@ -907,6 +922,7 @@ export class DesktopSession {
       const generation = ++this.listGeneration;
       this.removedThreadIds.clear();
       this.renamedThreads.clear();
+      this.provisionalTitles.clear();
       this.addedThreads.clear();
       const threads = await this.listAllThreads(true).finally(() => {
         this.statusChangesWhileListing = null;
@@ -1051,7 +1067,8 @@ export class DesktopSession {
       this.store.setWriterElsewhere(opened.writerElsewhere);
       this.nextTurnSettings.observeSnapshot(threadId, opened.model ?? opened.thread.model,
         opened.effort ?? opened.thread.reasoningEffort, settingsRevision, { approvalPolicy: opened.approvalPolicy, sandbox: opened.sandbox });
-      let transcript = transcriptFromThread(opened.thread);
+      if (opened.writerElsewhere) this.provisionalTitles.forget(threadId);
+      let transcript = transcriptFromThread({ ...opened.thread, preview: this.provisionalTitles.preview(threadId, opened.thread.name, opened.thread.preview) });
       // 서버가 턴을 함께 보냈으면(예: 녹화 재생) 그대로 쓴다.
       if (transcript.turns.length === 0) {
         const page = await this.readTurnPage(threadId, null);
@@ -1092,7 +1109,8 @@ export class DesktopSession {
       .filter((thread) => !this.removedThreadIds.has(thread.id))
       .map((thread) => {
         const name = this.renamedThreads.get(thread.id);
-        return name === undefined ? thread : { ...thread, name };
+        const observed = name ?? thread.name;
+        return { ...thread, name: observed, preview: this.provisionalTitles.preview(thread.id, observed, thread.preview) };
       });
   }
 
@@ -1219,6 +1237,7 @@ export class DesktopSession {
     if (method === "thread/name/updated") {
       const name = (params as { threadName?: string }).threadName;
       if (name) {
+        this.provisionalTitles.forget(threadId);
         this.renamedThreads.set(threadId, name);
         this.store.renameThread(threadId, name);
       }
@@ -1226,6 +1245,7 @@ export class DesktopSession {
     if (method === "thread/archived" || method === "thread/deleted") {
       this.nextTurnQueue.pause(threadId, "대화가 보관되거나 삭제되어 예약을 멈췄습니다.");
       this.removedThreadIds.add(threadId);
+      this.provisionalTitles.forget(threadId);
       this.addedThreads.delete(threadId);
       this.store.removeThread(threadId);
     }
