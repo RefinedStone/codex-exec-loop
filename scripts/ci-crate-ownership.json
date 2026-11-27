@@ -65,7 +65,7 @@
     {
       "name": "akra-verification-native",
       "manifest": "crates/verification-native/Cargo.toml",
-      "state": "planned",
+      "state": "active",
       "workspaceDependencies": [
         "akra-native",
         "akra-verification"
@@ -1222,6 +1222,150 @@
         ],
         "retained": []
       }
+    },
+    {
+      "source": "src/adapter/outbound/git/task_verification.rs",
+      "destination": "crates/verification-native/src/task_verification.rs",
+      "owner": "akra-verification-native",
+      "kind": "production",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/adapter/outbound/git/task_verification/context.rs",
+      "destination": "crates/verification-native/src/task_verification/context.rs",
+      "owner": "akra-verification-native",
+      "kind": "production",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/adapter/outbound/git/task_verification/diagnostics.rs",
+      "destination": "crates/verification-native/src/task_verification/diagnostics.rs",
+      "owner": "akra-verification-native",
+      "kind": "production",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/adapter/outbound/git/task_verification/environment.rs",
+      "destination": "crates/verification-native/src/task_verification/environment.rs",
+      "owner": "akra-verification-native",
+      "kind": "production",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/adapter/outbound/git/task_verification/input.rs",
+      "destination": "crates/verification-native/src/task_verification/input.rs",
+      "owner": "akra-verification-native",
+      "kind": "production",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/adapter/outbound/git/task_verification/tests.rs",
+      "destination": "crates/verification-native/src/task_verification/tests.rs",
+      "owner": "akra-verification-native",
+      "kind": "split-unit-tests",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve",
+      "oldTestPrefix": "adapter::outbound::git::task_verification::tests::",
+      "newTestPrefix": "task_verification::tests::",
+      "movedTests": [
+        "preparation_diagnostics_never_expose_unrecognized_error_contents",
+        "actual_git_check_binds_the_frozen_full_range_without_changing_index_head_or_refs",
+        "source_attributes_info_attributes_and_whitespace_config_cannot_hide_a_failure",
+        "sha256_git_objects_use_the_same_fixed_recipe_with_a_distinct_environment_key",
+        "private_temporary_paths_do_not_change_environment_or_command_fingerprints",
+        "historical_receipt_fingerprints_do_not_poison_the_current_environment_key",
+        "source_changes_keep_the_environment_key_but_change_the_bound_command",
+        "binary_and_oversized_blobs_are_not_misrepresented_as_passing_text",
+        "symlink_and_gitlink_diff_modes_are_rejected_on_every_platform",
+        "source_execution_configuration_and_existing_alternates_fail_closed",
+        "cancellation_after_spawn_is_an_observed_execution_with_incomplete_streams",
+        "an_expired_or_cancelled_preparation_cannot_start_the_recipe",
+        "excessive_real_git_diagnostics_are_bounded_and_cannot_pass",
+        "malformed_or_over_limit_diff_inventory_is_rejected_without_partial_results",
+        "canonical_windows_workspace_is_normalized_only_at_git_boundaries"
+      ],
+      "retainedTests": [
+        "a_real_dirty_snapshot_is_checked_and_the_source_index_is_preserved"
+      ],
+      "platformTests": {
+        "windows": [
+          "canonical_windows_workspace_is_normalized_only_at_git_boundaries"
+        ]
+      }
+    },
+    {
+      "source": "src/git_subprocess.rs",
+      "destination": "crates/verification-native/src/git_command.rs",
+      "owner": "akra-verification-native",
+      "kind": "production-and-unit-tests",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve",
+      "oldTestPrefix": "git_subprocess::tests::",
+      "newTestPrefix": "git_command::tests::",
+      "retainedRoot": "Root libtest executable fixture selection and NativeTestTimer facade remain in src/git_subprocess/test_support.rs."
+    },
+    {
+      "source": "src/git_execution_guard.rs",
+      "destination": "crates/verification-native/src/git_config.rs",
+      "owner": "akra-verification-native",
+      "kind": "split-production-and-unit-tests",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve",
+      "oldTestPrefix": "git_execution_guard::tests::",
+      "newTestPrefix": "git_config::tests::",
+      "movedTests": [
+        "executable_config_key_vocabulary_is_explicit_and_value_free"
+      ],
+      "retainedTests": [
+        "explicit_git_directory_is_the_execution_config_audit_context",
+        "effective_worktree_config_is_audited_without_reading_or_executing_the_value"
+      ],
+      "retainedRoot": "Repository/submodule identity and containment admission, configured process timeout, inline Git argument context, and real audit integration."
     }
   ],
   "nativeCandidates": [
@@ -1263,12 +1407,12 @@
     {
       "source": "src/git_subprocess.rs",
       "owner": "akra-verification-native",
-      "decision": "audit-git-contract"
+      "decision": "extracted-production-retain-root-libtest-policy"
     },
     {
       "source": "src/git_execution_guard.rs",
       "owner": "akra-verification-native",
-      "decision": "audit-git-contract"
+      "decision": "extracted-config-key-rules-retain-root-audit-and-submodule-admission"
     }
   ],
   "contracts": [
@@ -1496,6 +1640,82 @@
       "isolation": "process-per-filter",
       "classification": "native-primitive",
       "reason": "Host ownership, identity, containment and trust contracts independent of product configuration",
+      "coverage": "retain-full"
+    },
+    {
+      "id": "git-verification-adapter",
+      "owner": "akra-verification-native",
+      "target": {
+        "kind": "lib",
+        "name": "akra_verification_native"
+      },
+      "filter": "task_verification::tests::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "all",
+      "isolation": "process-per-filter",
+      "classification": "native-contract",
+      "reason": "Pinned fixed Git recipe, isolation, object format, cancellation and output limits",
+      "coverage": "retain-full"
+    },
+    {
+      "id": "git-command-isolation",
+      "owner": "akra-verification-native",
+      "target": {
+        "kind": "lib",
+        "name": "akra_verification_native"
+      },
+      "filter": "git_command::tests::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "all",
+      "isolation": "process-per-filter",
+      "classification": "native-contract",
+      "reason": "Host Git environment, argument hardening and malicious routing/trace contract",
+      "coverage": "retain-full"
+    },
+    {
+      "id": "git-execution-config-keys",
+      "owner": "akra-verification-native",
+      "target": {
+        "kind": "lib",
+        "name": "akra_verification_native"
+      },
+      "filter": "git_config::tests::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "all",
+      "isolation": "process-per-filter",
+      "classification": "native-contract",
+      "reason": "Value-free Git config classification, vocabulary and bounded diagnostics",
+      "coverage": "retain-full"
+    },
+    {
+      "id": "dirty-snapshot-verification",
+      "owner": "akra-ade",
+      "target": {
+        "kind": "lib",
+        "name": "akra_ade"
+      },
+      "filter": "adapter::outbound::git::task_verification::tests::a_real_dirty_snapshot_is_checked_and_the_source_index_is_preserved",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "all",
+      "isolation": "process-per-filter",
+      "classification": "root-integration",
+      "reason": "Real parallel worker snapshot plus independent Git verification; source index and worktree preservation",
       "coverage": "retain-full"
     }
   ],
