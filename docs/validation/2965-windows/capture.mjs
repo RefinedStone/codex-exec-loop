@@ -179,6 +179,8 @@ try {
   await menu.waitFor({ state: "hidden" });
   await clear();
   await conversation.focus();
+  // Keep the pointer target in view so Playwright does not scroll it into view before a click.
+  await body.locator("p").first().scrollIntoViewIfNeeded();
   stages.before = await snapshot();
   await capture("before");
   await select("p");

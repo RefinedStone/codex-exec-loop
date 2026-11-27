@@ -639,6 +639,7 @@ kbd {
 
 .turn {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   padding-bottom: 28px;
 }
@@ -901,6 +902,7 @@ kbd {
 
 .steps {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1px;
   margin: 4px 0 0 6px;
   padding-left: 10px;
@@ -930,6 +932,7 @@ kbd {
 }
 
 .step-line code {
+  min-width: 0;
   overflow: hidden;
   font-size: var(--text-s);
   text-overflow: ellipsis;
