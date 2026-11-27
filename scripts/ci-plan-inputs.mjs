@@ -33,6 +33,17 @@ function nulFields(buffer) {
   if (fields.pop() !== "") throw new Error("expected a NUL-terminated Git inventory");
   return fields;
 }
+// Git diff/status deliberately ignore these tracked entries. Do not allow a
+// partially visible worktree to produce either a selective or clean CI plan.
+function assertVisibleTrackedInputs(cwd, environment) {
+  for (const entry of nulFields(git(cwd, ["ls-files", "-v", "-z"], environment))) {
+    if (!/^[A-Za-z?] /.test(entry)) throw new Error("invalid Git visibility inventory");
+    const flag = entry[0];
+    if (flag === "S" || flag === flag.toLowerCase()) {
+      throw new Error("validation refuses assume-unchanged or skip-worktree index entries: " + entry.slice(2));
+    }
+  }
+}
 function identity(stat) {
   return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String).join(":");
 }
@@ -175,6 +186,7 @@ export function capturePlanInputs({
   cwd = process.cwd(), environment = process.env, toolchain = toolchainIdentity(cwd, environment),
 } = {}) {
   const sourceSha = utf8(git(cwd, ["rev-parse", "--verify", "HEAD^{commit}"], environment)).trim();
+  assertVisibleTrackedInputs(cwd, environment);
   const stage = nulFields(git(cwd, ["ls-files", "--stage", "-z"], environment));
   const index = stage.map((record) => {
     const match = /^([0-7]{6}) ([a-f0-9]{40,64}) ([0-3])\t([\s\S]+)$/.exec(record);
@@ -243,6 +255,7 @@ export function assertCleanPlanCheckout({ cwd = process.cwd(), environment = pro
   const repoRoot = utf8(git(cwd, ["rev-parse", "--show-toplevel"], environment)).trim();
   const ownership = readOwnership(repoRoot);
   if (!ownership || !Array.isArray(ownership.packages)) throw new Error("cannot verify immutable checkout ownership");
+  assertVisibleTrackedInputs(repoRoot, environment);
   const status = git(repoRoot, ["status", "--porcelain", "-z", "--untracked-files=all"], environment);
   if (status.length !== 0) throw new Error("CI validation requires a clean tracked and untracked checkout");
   const tracked = new Set(nulFields(git(repoRoot, ["ls-files", "--cached", "-z"], environment)));
