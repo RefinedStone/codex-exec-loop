@@ -1,6 +1,12 @@
 param(
-    [ValidateSet("Full", "Rust", "Admin", "Portable")]
-    [string]$Mode = "Full"
+    [ValidateSet("Full", "Rust", "Admin", "Portable", "Changed")]
+    [string]$Mode = "Full",
+    [string]$Base = "origin/prerelease",
+    [string]$PlanFile = "",
+    [ValidateSet("default", "all", "both")]
+    [string]$FeatureMode = "both",
+    [string]$ValidationProfile = "test",
+    [string]$TargetTriple = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -8,6 +14,36 @@ Set-StrictMode -Version Latest
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $windowsTarget = "x86_64-pc-windows-msvc"
+
+if ($Mode -eq "Changed") {
+    $planArguments = @("scripts/agent-plan.mjs", "--run")
+    if ($PlanFile) {
+        foreach ($option in @("Base", "FeatureMode", "ValidationProfile", "TargetTriple")) {
+            if ($PSBoundParameters.ContainsKey($option)) {
+                throw "A saved plan already fixes its base and configuration."
+            }
+        }
+        $planArguments += @("--plan", $PlanFile)
+    } else {
+        $planArguments += @("--base", $Base, "--features", $FeatureMode, "--profile", $ValidationProfile)
+        if ($TargetTriple) {
+            $planArguments += @("--target", $TargetTriple)
+        }
+    }
+    Push-Location $repoRoot
+    try {
+        & node @planArguments
+        $validationExitCode = $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
+    exit $validationExitCode
+}
+foreach ($option in @("Base", "PlanFile", "FeatureMode", "ValidationProfile", "TargetTriple")) {
+    if ($PSBoundParameters.ContainsKey($option)) {
+        throw "Selective-plan arguments require -Mode Changed."
+    }
+}
 
 function Invoke-ExternalStep {
     param(
@@ -70,6 +106,8 @@ function Invoke-NodeAdminChecks {
         "scripts/capture_admin_validation_evidence.mjs",
         "scripts/normalize_codex_app_server_schema.mjs",
         "scripts/agent-plan.mjs",
+        "scripts/ci-plan-inputs.mjs",
+        "scripts/ci-impact-plan.mjs",
         "scripts/ci-scope.mjs",
         "npm/scripts/publish-package.mjs",
         "npm/scripts/stage-npm-packages.mjs",
@@ -301,6 +339,7 @@ try {
             "--test",
             "scripts/ci-scope.test.mjs",
             "scripts/ci-impact-plan.test.mjs",
+            "scripts/ci-plan-inputs.test.mjs",
             "scripts/crate-boundaries.test.mjs",
             "scripts/agent-plan.test.mjs",
             "scripts/ci-contract-targets.test.mjs",

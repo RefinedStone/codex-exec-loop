@@ -8,13 +8,14 @@
   dedicated worktree from it.
 - One user-visible outcome uses one worktree, branch, and PR. Keep commits small inside that PR;
   do not create a PR for every commit.
-- Local gate when Rust or Node source changed: in the worktree, run `node scripts/agent-plan.mjs`
-  and run exactly the checks it prints; the gate is done when they pass. For docs, CI workflow, or
+- Local gate when Rust or Node source changed: in the worktree, run `node scripts/agent-plan.mjs --run`.
+  Use `--explain` or `--json` for read-only planning. Execution recollects inputs and rejects a stale
+  saved plan; see [local validation](docs/reference/ci-local-validation.md). For docs, CI workflow, or
   config-only changes, the gate is `git diff --check`, and `CI Gate` decides the rest. `CI Gate` is
   the full gate, so the broad scripts below run only when the planner prints them or the user asks.
 - Before each commit, run `git diff --check`, and `cargo fmt --all` when Rust changed (again after
   any scripted edit).
-- `desktop/` is in the planner's Node scope: the printed `check_node_surfaces` runs its typecheck,
+- `desktop/` is in the planner's Node scope: `check_node_surfaces` runs its typecheck,
   unit tests, and build, and CI also runs `Desktop Screen Tests`. Run `cd desktop && npm run e2e`
   locally for UI changes.
 - Unless the user asks to hold locally, finish reviewable changes with
