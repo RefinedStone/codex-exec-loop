@@ -2,6 +2,7 @@ use super::*;
 use akra_verification::evidence::TaskEvidenceTree;
 use akra_verification::verification::TaskVerificationRecipe;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -48,10 +49,15 @@ impl Fixture {
                 &format!("--object-format={format}"),
             ],
         );
-        git(&root, &["config", "user.name", "Host Verification Fixture"]);
-        git(&root, &["config", "user.email", "fixture@example.invalid"]);
-        git(&root, &["config", "core.autocrlf", "false"]);
-        git(&root, &["config", "commit.gpgSign", "false"]);
+        // This fresh fixture keeps the same local policy without four setup processes.
+        fs::OpenOptions::new()
+            .append(true)
+            .open(root.join(".git/config"))
+            .expect("fresh Git fixture config should exist")
+            .write_all(
+                b"\n[user]\n\tname = Host Verification Fixture\n\temail = fixture@example.invalid\n[core]\n\tautocrlf = false\n[commit]\n\tgpgsign = false\n",
+            )
+            .expect("fixed local Git fixture policy should append");
         fs::write(root.join("README.md"), "base text\n").unwrap();
         git(&root, &["add", "."]);
         git(&root, &["commit", "-qm", "base"]);
@@ -445,4 +451,22 @@ fn canonical_windows_workspace_is_normalized_only_at_git_boundaries() {
         observation.outcome,
         TaskVerificationExecutionOutcome::Exited { exit_code: 0 }
     );
+}
+
+#[test]
+fn fixture_configuration_is_local_and_preserves_the_fixed_policy() {
+    let fixture = Fixture::new();
+    let local = git(&fixture.root, &["config", "--local", "--list"]);
+    let settings = local
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for (name, expected) in [
+        ("user.name", "Host Verification Fixture"),
+        ("user.email", "fixture@example.invalid"),
+        ("core.autocrlf", "false"),
+        ("commit.gpgsign", "false"),
+    ] {
+        assert_eq!(settings.get(name).copied(), Some(expected), "{name}");
+    }
 }
