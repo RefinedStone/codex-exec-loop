@@ -36,6 +36,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_TERM_VERBOSE: 'true'
   CARGO_INCREMENTAL: 0
   AKRA_CI_MEASUREMENTS: artifacts/ci-performance
   AKRA_CI_PROFILE: dev/test
@@ -67,7 +68,7 @@ jobs:
           node-version: 22
 
       - name: Test CI and agent planning policy
-        run: node --test scripts/ci-scope.test.mjs scripts/crate-boundaries.test.mjs scripts/agent-plan.test.mjs scripts/ci-performance.test.mjs scripts/native-rust-contracts.test.mjs scripts/ci-rust-test-inventory.test.mjs scripts/ci-cache.test.mjs scripts/native-confirmation-build-options.test.mjs scripts/native-contract-progress.test.mjs scripts/ci-contract-targets.test.mjs scripts/ci-impact-plan.test.mjs
+        run: node --test scripts/ci-scope.test.mjs scripts/crate-boundaries.test.mjs scripts/agent-plan.test.mjs scripts/ci-performance.test.mjs scripts/native-rust-contracts.test.mjs scripts/ci-rust-test-inventory.test.mjs scripts/ci-cache.test.mjs scripts/native-confirmation-build-options.test.mjs scripts/native-contract-progress.test.mjs scripts/ci-contract-targets.test.mjs scripts/ci-impact-plan.test.mjs scripts/ci-cache-inputs.test.mjs
 
       - name: Classify validation scope
         id: classify
@@ -133,6 +134,10 @@ jobs:
         if: steps.rust_cache_policy.outcome == 'success'
         run: node scripts/ci-cache.mjs clear-timings
 
+      - name: Reuse timestamps of unchanged cached source inputs
+        if: steps.rust_cache_policy.outcome == 'success'
+        run: node scripts/ci-cache-inputs.mjs prepare
+
       - name: Record restored Rust cache metrics
         if: always() && steps.rust_cache_policy.outcome == 'success'
         continue-on-error: true
@@ -162,9 +167,14 @@ jobs:
           path: ${{ steps.rust_cache_policy.outputs.registry-paths }}
           key: ${{ steps.rust_cache_policy.outputs.registry-key }}
 
+      - name: Verify source inputs stayed unchanged during validation
+        id: seal_cache_inputs
+        if: success() && steps.rust_cache_policy.outputs.save-allowed == 'true' && steps.restore_target.outputs.cache-hit != 'true'
+        run: node scripts/ci-cache-inputs.mjs seal
+
       - name: Save Rust target cache
         id: save_target
-        if: success() && steps.rust_cache_policy.outputs.save-allowed == 'true' && steps.restore_target.outputs.cache-hit != 'true'
+        if: success() && steps.rust_cache_policy.outputs.save-allowed == 'true' && steps.restore_target.outputs.cache-hit != 'true' && steps.seal_cache_inputs.outputs.sealed == 'true'
         continue-on-error: true
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -259,6 +269,10 @@ jobs:
         if: steps.rust_cache_policy.outcome == 'success'
         run: node scripts/ci-cache.mjs clear-timings
 
+      - name: Reuse timestamps of unchanged cached source inputs
+        if: steps.rust_cache_policy.outcome == 'success'
+        run: node scripts/ci-cache-inputs.mjs prepare
+
       - name: Record restored Rust cache metrics
         if: always() && steps.rust_cache_policy.outcome == 'success'
         continue-on-error: true
@@ -303,9 +317,14 @@ jobs:
           path: ${{ steps.rust_cache_policy.outputs.registry-paths }}
           key: ${{ steps.rust_cache_policy.outputs.registry-key }}
 
+      - name: Verify source inputs stayed unchanged during validation
+        id: seal_cache_inputs
+        if: success() && steps.rust_cache_policy.outputs.save-allowed == 'true' && steps.restore_target.outputs.cache-hit != 'true'
+        run: node scripts/ci-cache-inputs.mjs seal
+
       - name: Save Rust target cache
         id: save_target
-        if: success() && steps.rust_cache_policy.outputs.save-allowed == 'true' && steps.restore_target.outputs.cache-hit != 'true'
+        if: success() && steps.rust_cache_policy.outputs.save-allowed == 'true' && steps.restore_target.outputs.cache-hit != 'true' && steps.seal_cache_inputs.outputs.sealed == 'true'
         continue-on-error: true
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -512,6 +531,10 @@ jobs:
         if: steps.rust_cache_policy.outcome == 'success'
         run: node scripts/ci-cache.mjs clear-timings
 
+      - name: Reuse timestamps of unchanged cached source inputs
+        if: steps.rust_cache_policy.outcome == 'success'
+        run: node scripts/ci-cache-inputs.mjs prepare
+
       - name: Record restored Rust cache metrics
         if: always() && steps.rust_cache_policy.outcome == 'success'
         continue-on-error: true
@@ -663,9 +686,14 @@ jobs:
           path: ${{ steps.rust_cache_policy.outputs.registry-paths }}
           key: ${{ steps.rust_cache_policy.outputs.registry-key }}
 
+      - name: Verify source inputs stayed unchanged during validation
+        id: seal_cache_inputs
+        if: success() && steps.rust_cache_policy.outputs.save-allowed == 'true' && steps.restore_target.outputs.cache-hit != 'true'
+        run: node scripts/ci-cache-inputs.mjs seal
+
       - name: Save Rust target cache
         id: save_target
-        if: success() && steps.rust_cache_policy.outputs.save-allowed == 'true' && steps.restore_target.outputs.cache-hit != 'true'
+        if: success() && steps.rust_cache_policy.outputs.save-allowed == 'true' && steps.restore_target.outputs.cache-hit != 'true' && steps.seal_cache_inputs.outputs.sealed == 'true'
         continue-on-error: true
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -758,6 +786,10 @@ jobs:
         if: steps.rust_cache_policy.outcome == 'success'
         run: node scripts/ci-cache.mjs clear-timings
 
+      - name: Reuse timestamps of unchanged cached source inputs
+        if: steps.rust_cache_policy.outcome == 'success'
+        run: node scripts/ci-cache-inputs.mjs prepare
+
       - name: Record restored Rust cache metrics
         if: always() && steps.rust_cache_policy.outcome == 'success'
         continue-on-error: true
@@ -784,9 +816,14 @@ jobs:
           path: ${{ steps.rust_cache_policy.outputs.registry-paths }}
           key: ${{ steps.rust_cache_policy.outputs.registry-key }}
 
+      - name: Verify source inputs stayed unchanged during validation
+        id: seal_cache_inputs
+        if: success() && steps.rust_cache_policy.outputs.save-allowed == 'true' && steps.restore_target.outputs.cache-hit != 'true'
+        run: node scripts/ci-cache-inputs.mjs seal
+
       - name: Save Rust target cache
         id: save_target
-        if: success() && steps.rust_cache_policy.outputs.save-allowed == 'true' && steps.restore_target.outputs.cache-hit != 'true'
+        if: success() && steps.rust_cache_policy.outputs.save-allowed == 'true' && steps.restore_target.outputs.cache-hit != 'true' && steps.seal_cache_inputs.outputs.sealed == 'true'
         continue-on-error: true
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:

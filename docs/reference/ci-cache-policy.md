@@ -92,3 +92,21 @@ Fixture는 cache boundary 변화, source snapshot 갱신, 저장 허용 이벤�
 복원된 target에 이전 Cargo timings HTML이 남을 수 있으므로 검증 전에 cargo-timings 디렉터리만 정리합니다.
 컴파일 산출물과 dependency/incremental cache는 보존합니다. symlink/junction으로 연결된 target은 순회하지 않습니다.
 이후 artifact의 timings는 이번 실행에서 생성된 자료이며, 단계별 JSON과 함께 확인합니다.
+
+
+## 변경 없는 checkout 입력 재사용
+
+[#2866 조사와 재현](../validation/ci-cache-inputs-2026-11-27.md)에 따라 target 복원 뒤
+`ci-cache-inputs.mjs prepare`를 실행한다. 같은 checkout 경로·컴파일 경계에서
+Git 추적 일반 파일의 내용 해시·길이·모드가 같을 때만 이전 입력 mtime를 복원한다.
+이 정보는 target 안의 `.akra-ci-source-inputs-v1.json`에 함께 저장된다.
+
+빌드 전 pending snapshot은 성공한 target 저장 직전 `seal`로 다시 대조한다.
+내용·mtime·ctime·신원·모드가 검증 중 바뀌면 재사용 정보를 무효화한다.
+symlink/junction·hardlink·다른 경계·손상/누락/미봉인 정보는 보정하지 않는다.
+Cargo fingerprint나 산출물 시간은 변경하지 않으며 원래 Cargo 검증과 시험을 생략하지 않는다.
+
+이전 snapshot이 없는 캐시는 기존처럼 재빌드한다. 성공한 trusted push가 새 입력 정보를
+저장한 이후에만 실제 복원 효과를 잴 수 있다. PR은 계속 restore-only다.
+`cache-inputs-prepare.json`과 `cache-inputs-seal.json`, Cargo verbose dirty 사유를
+함께 확인한다. 작은 실제 Cargo fixture는 통과했으며 원격 CI 개선 폭은 아직 측정 전이다.
