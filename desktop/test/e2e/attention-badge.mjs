@@ -45,6 +45,9 @@ try {
   const owner = await app.browserWindow(second);
   await owner.evaluate(window => { window.show(); window.focus(); });
   await second.waitForFunction(() => document.hasFocus());
+  answer = {result:{type:"attention",items:[item]}};
+  gateway.sendKernelEvent({type:"resync"});
+  await second.getByTestId("kernel-attention").getByText(item.summary).waitFor();
   answer = {result:{type:"attention",items:[item,{...item,id:"task:second",subject:{kind:"task",id:"second"},cause:"task_proposed",summary:"Task needs an answer"}]}};
   gateway.sendKernelEvent({type:"resync"});
   await second.getByText("새 응답 필요 항목 2개가 있습니다.").waitFor();
