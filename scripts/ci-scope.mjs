@@ -169,12 +169,13 @@ export function classifyChangedPaths(inputPaths, requestedScope = "auto") {
 export function evaluateGate(plan, results) {
   const required = [["scope", results.scope]];
   if (plan.rust) {
-    required.push(["rust_tests", results.rust_tests], ["rust_lint", results.rust_lint]);
+    required.push(plan.selectedRust ? ["selected_rust_gate", results.selected_rust_gate] : ["rust_tests", results.rust_tests]);
+    required.push(["rust_lint", results.rust_lint]);
   }
   if (plan.node) {
     required.push(["node_surfaces", results.node_surfaces], ["desktop_e2e", results.desktop_e2e]);
   }
-  if (plan.portable) {
+  if (plan.portable && !plan.selectedRust) {
     required.push(["portable_native", results.portable_native]);
   }
   if (plan.smoke) {
@@ -247,6 +248,7 @@ function gateInputs() {
     node: booleanEnvironment("AKRA_CI_NODE_REQUIRED"),
     portable: booleanEnvironment("AKRA_CI_PORTABLE_REQUIRED"),
     smoke: booleanEnvironment("AKRA_CI_SMOKE_REQUIRED"),
+    selectedRust: booleanEnvironment("AKRA_CI_SELECTED_RUST_REQUIRED"),
   };
   const results = {
     scope: process.env.AKRA_CI_SCOPE_RESULT,
@@ -256,6 +258,7 @@ function gateInputs() {
     desktop_e2e: process.env.AKRA_CI_DESKTOP_RESULT,
     portable_native: process.env.AKRA_CI_PORTABLE_RESULT,
     smoke_check: process.env.AKRA_CI_SMOKE_RESULT,
+    selected_rust_gate: process.env.AKRA_CI_SELECTED_RUST_RESULT,
   };
   return { plan, results };
 }
@@ -319,3 +322,4 @@ function main() {
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   main();
 }
+
