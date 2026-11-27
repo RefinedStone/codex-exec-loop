@@ -322,6 +322,9 @@ impl EditMetaField {
     pub(super) fn required_for(&self, key: &str) -> Option<bool> {
         if matches!(key, "summary" | "project" | "issuetype") {
             Some(true)
+        } else if key == "description" {
+            // A non-empty approved body satisfies either possible requirement. Empty is unsafe unless explicitly optional.
+            Some(self.required.unwrap_or(true))
         } else {
             self.required
         }

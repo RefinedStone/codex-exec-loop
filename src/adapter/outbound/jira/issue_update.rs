@@ -69,6 +69,11 @@ impl IssueUpdatePort for JiraIssueUpdateAdapter {
         {
             bail!("Jira does not allow a summary and description edit on this issue")
         }
+        if body.trim().is_empty()
+            && meta.fields["description"].required_for("description") != Some(false)
+        {
+            bail!("Jira requires a non-empty description or has not confirmed it is optional")
+        }
         let current = self.reader.known_issue(&issue)?;
         if !adf_to_markdown(&current.fields.description)
             .unsupported
