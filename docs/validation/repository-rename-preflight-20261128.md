@@ -23,7 +23,7 @@ Counts are observations, not invariant values to reuse at cutover. #2588 and #25
    node scripts/repository-rename-audit.mjs capture after <new-after-file.json>
 5. Compare:
    node scripts/repository-rename-audit.mjs compare <before-file.json> <after-file.json>
-   Investigate discrepancies; do not infer preservation if comparison fails. Verify external consumers and only then update their URLs, test clean clones/installation, and preserve rollback evidence.
+   Both snapshots must be quiescent, and the after snapshot must have a later capture timestamp. Investigate discrepancies; do not infer preservation if comparison fails. Verify external consumers and only then update their URLs, test clean clones/installation, and preserve rollback evidence.
 
 The capture checks numeric repository identity, default branch and visibility, exact heads/tags, open PR IDs/base/head, sampled issue IDs/state, release and asset IDs/metadata, ruleset contracts, and old/new API and HTTPS Git alias equivalence after rename. GitHub CLI/API access is required. The comparison is not an authorization mechanism, does not prove all closed issue/PR history, does not download release asset contents, and does not check SSH remotes or externally managed settings.
 

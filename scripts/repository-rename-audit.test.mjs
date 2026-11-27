@@ -24,7 +24,8 @@ function fixture(phase, override = {}) {
     if (endpoint.includes("/actions/runs?")) return {total_count: 0, workflow_runs: []};
     return repo;
   };
-  return capture(phase, endpoint => override.api?.(endpoint, get) ?? get(endpoint), override.refs ?? (() => refs));
+  const snapshot = capture(phase, endpoint => override.api?.(endpoint, get) ?? get(endpoint), override.refs ?? (() => refs));
+  return { ...snapshot, capturedAt: phase === "before" ? "2026-11-28T00:00:00Z" : "2026-11-28T00:01:00Z" };
 }
 
 test("rename requires identical repository ID, exact refs, PRs, releases and rulesets", () => {
@@ -79,4 +80,14 @@ test("comparison rejects identically incomplete or malformed snapshots, not just
     after.repository.name = NEW_REPOSITORY;
     assert.throws(() => compare(before, after));
   }
+});
+
+test("compare rejects reversed or replayed captures and a busy post-rename window", () => {
+  const before = fixture("before");
+  const after = fixture("after");
+  for (const capturedAt of [before.capturedAt, "2026-11-27T23:59:00Z"]) {
+    assert.throws(() => compare(before, { ...after, capturedAt }), /must be later/);
+  }
+  after.activeRuns[0].count = 1;
+  assert.throws(() => compare(before, after), /post-rename capture was not quiescent/);
 });
