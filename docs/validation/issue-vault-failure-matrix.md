@@ -54,3 +54,12 @@ Windows x64, prerelease 1d538c2fe 기반:
 - 실제 Electron + fake Gateway 화면 시험 통과. 폐기 프로필에서 합성 powerMonitor 이벤트와 synthetic restored state를 사용해 재가림, 보류 중 재열람, 겹친 화면 잠금과 절전, resume 후 자동 복원 금지를 확인했다.
 - 다중 창 단위시험에서는 지연된 native prepare/restore 대역의 응답을 두 창에서 동시에 무효화하고 새 창도 보류하는 것을 검사했다.
 - 실제 OS 잠금 이벤트, 대화형 OS 확인, 실제 Credential Manager/Vault, 외부 API는 이 시험에서 사용하지 않았다. 해당 native 인수는 #2704/#2724에 남긴다.
+
+
+### 화면 잠금 감지 지원 범위 (PR #2963 리뷰 대응)
+
+Electron의 화면 잠금/해제 이벤트는 Windows/macOS 지원 범위입니다. Desktop 전용 복원 창은 이 두 환경에서만 OS 잠금 상태가 `active` 또는 `idle`로 확인될 때 기존 프로필·전용 helper 확인을 이어갑니다. `locked`는 잠금으로, `unknown`, 알 수 없는 값, 조회 예외는 상태 확인 불가로 열람을 보류합니다. 상태는 helper 준비 전과 비동기 응답 이후 기존 profileHold 경계에서 다시 검사합니다. 상태가 다시 확인되더라도 자동 복원하지 않습니다.
+
+Linux를 포함하여 화면 잠금 이벤트를 지원하지 않는 환경에서는 전용 창의 원문 열람을 보류하고 공유본만 제공합니다. Linux native 확인/키 저장소/복원 helper 자체의 기존 구현은 변경하지 않습니다. 실제 화면 잠금 감지 및 재가림 계약을 별도로 확보하기 전까지 해당 Desktop 열람을 지원한다고 표시하지 않습니다. 실제 OS 잠금 이벤트와 실제 키 저장소 검증은 #2704/#2724의 잔여 범위입니다.
+
+리뷰 대응 로컬 검증 (Windows, prerelease 7b1d29b0b 기반): 관련 4개 Vitest 파일 136/136, 격리 설치 후 전체 Desktop Vitest 1486 통과 / 기존 8개 제외, Desktop 타입 검사·빌드, 실제 Electron + fake Gateway 전용 복원 화면의 32개 검증 항목 통과. 전체 planner gate는 최초 공유 node_modules의 Windows 파일 잠금으로 실패했고, 격리 재실행에서 Node 검증 완료 후 Rust 컴파일 중 180초 제한으로 종료되었습니다. CI 상태는 조회하지 않았고 실제 Linux/macOS/Windows 잠금·키 저장소의 통합 인수는 별도로 유지합니다.

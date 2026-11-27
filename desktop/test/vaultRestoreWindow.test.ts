@@ -2,7 +2,8 @@
 import { EventEmitter } from "node:events";
 import type { BrowserWindow } from "electron";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { VAULT_RESTORE_CHANNELS, type VaultRestoreTarget } from "../src/shared/vaultRestore";
+import { VAULT_RESTORE_CHANNELS, type VaultRestoreTarget, type VaultRestoreHold } from "../src/shared/vaultRestore";
+import { vaultRestorePowerHold } from "../src/main/vaultRestorePower";
 import type { VaultRestoreChannel } from "../src/main/vaultRestoreSession";
 
 let nextId = 1;
@@ -51,7 +52,7 @@ function deferred<T>() {
   const promise = new Promise<T>((done) => { resolve = done; });
   return { promise, resolve };
 }
-function fixture() {
+function fixture(profileHold: () => VaultRestoreHold | null = () => null) {
   const created: ReturnType<typeof newChannel>[] = [];
   function newChannel() {
     const prepared = deferred<{ kind: "prepared" }>();
@@ -71,7 +72,7 @@ function fixture() {
     return entry.channel;
   });
   const windows = new VaultRestoreWindows({
-    source, profileHold: () => null, preloadPath: "fixture", hidden: true, loadPage: vi.fn(),
+    source, profileHold, preloadPath: "fixture", hidden: true, loadPage: vi.fn(),
   });
   const opener = new FakeWindow();
   windows.open(opener as unknown as BrowserWindow, TARGET);
@@ -87,6 +88,37 @@ beforeEach(() => { allWindows.length = 0; listeners.clear(); });
 afterEach(() => { for (const window of allWindows) window.close(); });
 
 describe("dedicated Vault window lifetime", () => {
+  it("does not prepare when the initial OS state is unknown, and does not auto-open when it becomes known", async () => {
+    let state = "unknown";
+    const f = fixture(() => vaultRestorePowerHold("win32", () => state));
+    send(f.window, VAULT_RESTORE_CHANNELS.ready);
+    expect(f.source).not.toHaveBeenCalled();
+    expect(f.window.webContents.send).toHaveBeenLastCalledWith(
+      VAULT_RESTORE_CHANNELS.state, { phase: "held", reason: "os_lock_unavailable" });
+    state = "active";
+    await microtasks();
+    expect(f.source).not.toHaveBeenCalled();
+    send(f.window, VAULT_RESTORE_CHANNELS.unlock);
+    expect(f.source).toHaveBeenCalledTimes(1);
+    state = "unknown";
+    f.created[0]!.prepared.resolve({ kind: "prepared" });
+    await microtasks();
+    expect(f.created[0]!.channel.close).toHaveBeenCalledTimes(1);
+    expect(f.created[0]!.channel.restore).not.toHaveBeenCalled();
+    expect(f.window.webContents.send).toHaveBeenLastCalledWith(
+      VAULT_RESTORE_CHANNELS.state, { phase: "held", reason: "os_lock_unavailable" });
+  });
+
+  it("does not start a helper on Linux even if its idle state looks active", async () => {
+    const f = fixture(() => vaultRestorePowerHold("linux", () => "active"));
+    send(f.window, VAULT_RESTORE_CHANNELS.ready);
+    send(f.window, VAULT_RESTORE_CHANNELS.unlock);
+    await microtasks();
+    expect(f.source).not.toHaveBeenCalled();
+    expect(f.window.webContents.send).toHaveBeenLastCalledWith(
+      VAULT_RESTORE_CHANNELS.state, { phase: "held", reason: "os_lock_unsupported" });
+  });
+
   it("accepts the first page load but ignores subframe and in-place navigation", async () => {
     const f = fixture();
     f.window.webContents.emit("did-start-navigation", {}, "file:///vault-restore.html", false, true);

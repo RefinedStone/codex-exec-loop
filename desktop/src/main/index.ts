@@ -13,6 +13,7 @@ import { type BrowserBounds, IPC_CHANNELS, isDotId, isRemoteHostId, type Termina
 import { isNotionPageUrl } from "../shared/notionLinks";
 import { mergeSettings, shouldKeepAwake, validateSettings } from "../shared/settings";
 import { isVaultRestoreTarget, vaultRestoreProfileHold } from "../shared/vaultRestore";
+import { vaultRestorePowerHold } from "./vaultRestorePower";
 import { isZoomDirection, isZoomScope, stepZoomFactors, type ZoomDirection, type ZoomScope } from "../shared/zoom";
 import { GatewayConnection } from "./gatewayConnection";
 import { resolveGatewayEndpoint, resolveGatewayExecutable } from "./gatewayEndpoint";
@@ -870,7 +871,7 @@ const vaultRestores = new VaultRestoreWindows({
       devRenderer: Boolean(process.env.ELECTRON_RENDERER_URL),
       hiddenWindows: HIDDEN_WINDOWS,
       agentWorking: workingWindows.size > 0,
-    }) ?? (powerMonitor.getSystemIdleState(1) === "locked" ? "os_locked" : null),
+    }) ?? vaultRestorePowerHold(process.platform, () => powerMonitor.getSystemIdleState(1)),
   preloadPath: join(__dirname, "../preload/vaultRestore.js"),
   // 개발 서버의 화면은 프로필 검사가 보류한다. 그래서 여기서는 빌드한 파일만 읽는다.
   loadPage: (window) => void window.loadFile(join(__dirname, "../renderer/vault-restore.html")),
