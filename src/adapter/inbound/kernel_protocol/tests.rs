@@ -1770,6 +1770,7 @@ fn the_spec_entry_of_a_command_carries_its_meaning_and_its_input() {
             "busy",
             "preparation_active",
             "unknown_thread",
+            "session_list_unavailable",
             "foreign_workspace",
             "parallel_mode",
             "parallel_mode_unknown"

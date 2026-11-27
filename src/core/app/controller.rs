@@ -1784,15 +1784,19 @@ impl CoreController {
                     thread_id: thread_id.clone(),
                     reason,
                 });
-            if looked_up
-                && let Some(record) = command_completed(
-                    op_id,
-                    &thread_id,
-                    kernel_event::OperationEnd::Failed,
-                    reason,
-                )
-            {
-                self.conversation_turn.record_kernel_event(record);
+            if looked_up && let Some(op_id) = op_id {
+                self.conversation_turn
+                    .record_kernel_event(KernelEvent::CommandCompleted {
+                        task_mutation: None,
+                        op_id,
+                        thread_id: thread_id.clone(),
+                        result: kernel_event::OperationEnd::Failed,
+                        reason: Some(reason),
+                        detail: (reason == kernel_event::ReasonCode::SessionListUnavailable)
+                            .then(|| self.session_catalog_failure())
+                            .flatten()
+                            .map(|cause| kernel_event::command_failure_detail(&cause)),
+                    });
             }
         }
         CoreDispatchOutcome {
@@ -1812,11 +1816,14 @@ impl CoreController {
         prompt: String,
         op_id: Option<i64>,
     ) -> (super::ThreadPromptAdmission, Vec<CoreEffect>) {
+        // 모르는 thread 는 세션 목록을 읽은 뒤에만 여기에 온다 (#2804). 읽지 못했으면 그 thread 가 있는지 모른다.
         if !self.thread_is_known(thread_id) {
-            return (
-                super::ThreadPromptAdmission::RejectedUnknownThread,
-                Vec::new(),
-            );
+            let admission = if self.session_catalog_failure().is_some() {
+                super::ThreadPromptAdmission::RejectedSessionListUnavailable
+            } else {
+                super::ThreadPromptAdmission::RejectedUnknownThread
+            };
+            return (admission, Vec::new());
         }
         if self.thread_runs_outside_workspace(&workspace_directory, thread_id) {
             return (
@@ -1853,6 +1860,19 @@ impl CoreController {
                 super::ThreadPromptAdmission::RejectedPreparationActive { active_correlation },
                 Vec::new(),
             ),
+        }
+    }
+
+    /// 세션 목록을 읽지 못했으면 그 원인이다. 읽은 목록에 행이 없는 경우(지원하지 않는 catalog)도 읽지 못한 것이다.
+    fn session_catalog_failure(&self) -> Option<String> {
+        match &self.state.shared_snapshot().session_catalog {
+            super::SessionCatalogSnapshot::Ready(ready)
+                if ready.catalog.recent_sessions().is_some() =>
+            {
+                None
+            }
+            super::SessionCatalogSnapshot::Failed { message } => Some(message.clone()),
+            _ => Some("the session list has no rows".to_string()),
         }
     }
 
@@ -10842,6 +10862,49 @@ mod tests {
                     result: kernel_event::OperationEnd::Failed,
                     reason: Some(ReasonCode::UnknownThread),
                     detail: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_thread_prompt_is_not_called_unknown_when_the_session_list_read_fails() {
+        // #2804 review: a failed read does not say that the thread is missing. The operation keeps the cause.
+        use kernel_event::ReasonCode;
+        let mut controller = hosted_controller(false);
+        controller.handle_input(CoreInput::Command(AppCommand::SubmitThreadPrompt(
+            Box::new(super::super::ThreadPromptSubmission {
+                workspace_directory: "/tmp/workspace".to_string(),
+                thread_id: "thread-beta".to_string(),
+                prompt: "hello".to_string(),
+                op_id: Some(7),
+            }),
+        )));
+        controller.take_kernel_records();
+        let failed = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionCatalogLoaded {
+                correlation: session_catalog_correlation(1, 10, "/tmp/workspace"),
+                result: Err("app-server is not reachable".to_string()),
+            },
+        ));
+        assert_eq!(
+            thread_prompt_admission(&failed),
+            super::super::ThreadPromptAdmission::RejectedSessionListUnavailable
+        );
+        assert_eq!(
+            controller.take_kernel_records(),
+            vec![
+                KernelEvent::ThreadPromptRejected {
+                    thread_id: "thread-beta".to_string(),
+                    reason: ReasonCode::SessionListUnavailable,
+                },
+                KernelEvent::CommandCompleted {
+                    task_mutation: None,
+                    op_id: 7,
+                    thread_id: "thread-beta".to_string(),
+                    result: kernel_event::OperationEnd::Failed,
+                    reason: Some(ReasonCode::SessionListUnavailable),
+                    detail: Some("app-server is not reachable".to_string()),
                 },
             ]
         );

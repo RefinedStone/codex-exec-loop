@@ -387,6 +387,7 @@
         "busy",
         "preparation_active",
         "unknown_thread",
+        "session_list_unavailable",
         "foreign_workspace",
         "parallel_mode",
         "parallel_mode_unknown"
@@ -5535,6 +5536,19 @@
       "next": [
         {
           "step": "ask_user"
+        }
+      ]
+    },
+    {
+      "name": "session_list_unavailable",
+      "summary": "The kernel did not know the thread and could not read the session list from the app-server, so the prompt ends its operation as `failed`. `detail` of the `command_completed` record gives the cause. Send again with a new idempotency key shortly.",
+      "next": [
+        {
+          "step": "wait",
+          "milliseconds": 1000
+        },
+        {
+          "step": "resend"
         }
       ]
     },
@@ -15808,6 +15822,7 @@
         "busy",
         "preparation_active",
         "unknown_thread",
+        "session_list_unavailable",
         "foreign_workspace",
         "parallel_mode",
         "parallel_mode_unknown",

@@ -1040,7 +1040,9 @@ Akra Desktop (`desktop/`) runs from source as a development build; it has no pac
   now also answers with `rejection` and `state: rejected`. A thread that the kernel does not know is
   not refused at once: the command is accepted, the kernel reads the session list again, and then
   decides. If the thread is still not in the list, the operation ends as `failed` with the reason
-  `unknown_thread` (its `next` is `ask_user`), and the `prompt_submission` event reports the refusal. The session catalog lists the threads of
+  `unknown_thread` (its `next` is `ask_user`), and the `prompt_submission` event reports the refusal.
+  If the kernel cannot read the list, the reason is `session_list_unavailable` instead: `detail` of the
+  `command_completed` record gives the cause, and `next` is a short wait and a resend. The session catalog lists the threads of
   every repository; `foreign_workspace` refuses a thread whose catalog `cwd` is outside the client's
   workspace and outside its parallel pool (`<name>-akra-worktrees/<hash>/akra-pool`), so no planning task of this kernel is made for it. `load_sessions` and `refresh_planning` are not recorded and
   have no receipt. While a client is attached the kernel refreshes the parallel supervisor snapshot, and the
