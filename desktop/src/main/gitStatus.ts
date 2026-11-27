@@ -3,11 +3,12 @@
 // 있는 폴더에서는 응답이 접속 한도를 넘고 Gateway 세션 전체가 끊겼다 (2026-11-06). 여기서는 목록만 먼저 읽고,
 // 파일 diff 는 펼칠 때 하나씩, 크기 한도 안에서 읽는다.
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, realpath, stat } from "node:fs/promises";
 import { isAbsolute, normalize, relative, resolve, sep } from "node:path";
 
-import type { GitActionResult, GitChangedFile, GitFileAction, GitFileDiff, GitStatusResult } from "../shared/bridge";
+import type { GitActionResult, GitChangedFile, GitFileAction, GitFileDiff, GitDiffSource, GitStatusResult } from "../shared/bridge";
 import { isConflictStatus, stageState } from "../shared/gitChange";
 
 const GIT_TIMEOUT_MS = 15_000;
@@ -317,8 +318,8 @@ export function discardCommands(status: string, pathspec: string, originalPathsp
  */
 async function currentChange(file: RepositoryFile): Promise<GitChangedFile | null> {
   const status = await runGit(file.root, ["status", "--porcelain=v1", "-z", "--untracked-files=normal"], STATUS_OUTPUT_LIMIT);
-  if (status.code !== 0) {
-    throw new Error(failureMessage(status, "git status 가 실패했습니다."));
+  if (status.code !== 0 || status.truncated || status.timedOut) {
+    throw new Error(failureMessage(status, "git status 가 실패했거나 목록이 잘렸습니다."));
   }
   return parsePorcelainStatus(status.stdout).files.find((change) => change.path.replace(/\/$/, "") === file.relativePath) ?? null;
 }
@@ -478,8 +479,10 @@ export function editorUrl(target: string): string {
 }
 
 /** 파일 하나의 변경이다. 추적 중인 파일은 HEAD 대비 git diff, 새 파일은 내용이다. */
-export async function readGitFileDiff(cwdInput: unknown, path: unknown, untracked: unknown): Promise<GitFileDiff> {
-  const { cwd, root, target, pathspec } = await repositoryFile(cwdInput, path);
+export async function readGitFileDiff(cwdInput: unknown, path: unknown, untracked: unknown, source?: unknown): Promise<GitFileDiff> {
+  const file = await repositoryFile(cwdInput, path);
+  if (source !== undefined) return readSourceDiff(file, source);
+  const { cwd, root, target, pathspec } = file;
   if (untracked === true) {
     return readUntrackedFile(root, target);
   }
@@ -491,4 +494,44 @@ export async function readGitFileDiff(cwdInput: unknown, path: unknown, untracke
     throw new Error(failureMessage(output, "git diff 가 실패했습니다."));
   }
   return { kind: "gitDiff", text: output.stdout, truncated: output.truncated };
+}
+
+/** Explicitly distinguish HEAD, index and working-copy comparisons. Never reconstruct full files from a patch. */
+async function readSourceDiff(file: RepositoryFile, sourceInput: unknown): Promise<GitFileDiff> {
+  const sources: readonly GitDiffSource[] = ["head_worktree", "head_index", "index_worktree", "untracked"];
+  if (!sources.includes(sourceInput as GitDiffSource)) throw new Error("지원하지 않는 비교 기준입니다.");
+  const source = sourceInput as GitDiffSource;
+  const change = await currentChange(file);
+  if (!change || change.directory || change.untracked !== (source === "untracked") || isConflictStatus(change.status)) {
+    throw new Error("파일 상태가 변경되었거나 선택한 비교 기준을 사용할 수 없습니다.");
+  }
+  const original = change.originalPath ? await repositoryFile(file.root, change.originalPath) : null;
+  if (await anyContentFilter(file.root, [file.relativePath, ...(original ? [original.relativePath] : [])])) {
+    throw new Error(FILTER_MESSAGE);
+  }
+  const before = await snapshotGitFilePlan(file, original);
+  const read = async (): Promise<GitFileDiff> => {
+    if (source === "untracked") return readUntrackedFile(file.root, file.target);
+    if (source === "head_worktree" && before.headOid === null) {
+      throw new Error("첫 커밋 전에는 스테이지 또는 작업 트리 비교를 선택하십시오.");
+    }
+    const args = source === "head_index" ? ["--cached", ...(before.headOid ? [before.headOid] : [])]
+      : source === "head_worktree" ? [before.headOid!] : [];
+    const result = await runGit(file.root, ["diff", ...args, "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--", file.pathspec,
+      ...(original && source !== "index_worktree" ? [original.pathspec] : [])], FILE_DIFF_LIMIT);
+    if (result.code !== 0 || result.timedOut) throw new Error(failureMessage(result, "git diff 가 실패했습니다."));
+    return { kind: "gitDiff", text: result.stdout, truncated: result.truncated };
+  };
+  const result = await read();
+  const repeat = await read();
+  const after = await snapshotGitFilePlan(file, original);
+  const updated = await currentChange(file);
+  if (JSON.stringify(before) !== JSON.stringify(after) || JSON.stringify(result) !== JSON.stringify(repeat) ||
+      updated?.status !== change.status || updated?.originalPath !== change.originalPath) {
+    throw new Error(CHANGED_SINCE_CONFIRMATION);
+  }
+  const snapshotId = createHash("sha256").update(JSON.stringify([file.root, file.relativePath, change.originalPath, source, before, result])).digest("hex");
+  return { ...result, snapshot: { source, snapshotId, headOid: before.headOid, path: file.relativePath,
+    originalPath: source === "index_worktree" ? null : change.originalPath,
+    contentStatus: result.kind === "binary" ? "binary" : result.truncated ? "truncated" : result.kind === "content" ? "complete" : "patch_only" } };
 }

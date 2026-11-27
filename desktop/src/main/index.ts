@@ -572,8 +572,8 @@ ipcMain.on(IPC_CHANNELS.remoteSend, (event, host: unknown, text: unknown) => {
 });
 
 ipcMain.handle(IPC_CHANNELS.gitStatus, (_event, cwd: unknown) => readGitStatus(cwd));
-ipcMain.handle(IPC_CHANNELS.gitFileDiff, (_event, cwd: unknown, path: unknown, untracked: unknown) =>
-  readGitFileDiff(cwd, path, untracked),
+ipcMain.handle(IPC_CHANNELS.gitFileDiff, (_event, cwd: unknown, path: unknown, untracked: unknown, source?: unknown) =>
+  readGitFileDiff(cwd, path, untracked, source),
 );
 ipcMain.handle(IPC_CHANNELS.gitBranchSummary, (_event, cwd: unknown, fresh: unknown) => readBranchSummary(cwd, fresh));
 ipcMain.handle(IPC_CHANNELS.gitCommitDiff, (_event, cwd: unknown, sha: unknown) => readCommitDiff(cwd, sha));

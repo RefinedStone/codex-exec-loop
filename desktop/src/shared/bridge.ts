@@ -311,10 +311,23 @@ export type GitFileAction = "stage" | "unstage" | "discard";
 /** `cancelled` 는 사용자가 확인 창에서 취소했다는 뜻이다. */
 export type GitActionResult = { ok: true } | { ok: false; message: string; cancelled?: boolean };
 
-export type GitFileDiff =
+export type GitDiffSource = "head_worktree" | "head_index" | "index_worktree" | "untracked";
+
+/** Identifies the captured view, not a promise that the worktree is still unchanged. */
+export interface GitDiffSnapshot {
+  source: GitDiffSource;
+  snapshotId: string;
+  headOid: string | null;
+  path: string;
+  originalPath: string | null;
+  contentStatus: "patch_only" | "complete" | "truncated" | "binary";
+}
+
+export type GitFileDiff = (
   | { kind: "gitDiff"; text: string; truncated: boolean }
   | { kind: "content"; text: string; truncated: boolean }
-  | { kind: "binary" };
+  | { kind: "binary" }
+) & { snapshot?: GitDiffSnapshot };
 
 /** 브랜치가 기준 브랜치 뒤에 더한 커밋 하나이다. */
 export interface GitCommit {
@@ -428,7 +441,7 @@ export interface AkraBridge {
   /** 작업 폴더의 바뀐 파일 목록을 읽는다 (R1). */
   gitStatus(cwd: string): Promise<GitStatusResult>;
   /** 바뀐 파일 하나의 diff 를 읽는다. 새 파일은 내용을 돌려준다. */
-  gitFileDiff(cwd: string, path: string, untracked: boolean): Promise<GitFileDiff>;
+  gitFileDiff(cwd: string, path: string, untracked: boolean, source?: GitDiffSource): Promise<GitFileDiff>;
   /**
    * 바뀐 파일 하나를 스테이지하거나, 스테이지를 취소하거나, 변경을 버린다. 경로만 보낸다. main 이 그 파일의 상태를
    * git 에서 다시 읽고, 버리기 전에 사용자에게 확인한다.
