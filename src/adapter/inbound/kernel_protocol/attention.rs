@@ -5,12 +5,14 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::next::{NextStep, attention_next};
 use crate::core::app::ThreadActivitySummary;
 use crate::domain::conversation::ConversationApprovalRequest;
+use crate::domain::issue_automation::decision::{IssueDecisionState, StoredIssueDecision};
 use crate::domain::parallel_mode::{PrValidationOperatorState, PrValidationOperatorSummary};
-use crate::domain::planning::PriorityQueueTask;
+use crate::domain::planning::{PriorityQueueTask, RuntimeProjection, TaskStatus};
 
 #[cfg(test)]
 mod tests;
@@ -45,6 +47,14 @@ pub enum AttentionCause {
     PrValidationBlocked,
     /// PR 검증이 실패했다. 새 기록으로 다시 해야 한다.
     PrValidationFailed,
+    /// The durable issue decision still needs an answer.
+    IssueDecisionPending,
+    /// The planning authority cannot be read or validated.
+    PlanningInvalid,
+    /// Planning has withheld automatic continuation.
+    AutoFollowPaused,
+    /// A task explicitly awaits the user.
+    TaskAwaitingUser,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -60,6 +70,8 @@ pub enum AttentionSubjectKind {
     Thread,
     Task,
     PullRequest,
+    IssueDecision,
+    Repository,
 }
 
 impl AttentionSubjectKind {
@@ -68,6 +80,8 @@ impl AttentionSubjectKind {
             Self::Thread => "thread",
             Self::Task => "task",
             Self::PullRequest => "pull_request",
+            Self::IssueDecision => "issue_decision",
+            Self::Repository => "repository",
         }
     }
 }
@@ -87,6 +101,85 @@ pub fn attention_items(
     let pull_request = pr_validation.and_then(pr_validation_item);
     let tasks = proposed_tasks.iter().map(proposed_task_item);
     approvals.chain(pull_request).chain(tasks).collect()
+}
+
+/// These projections already belong to the planning authority. Do not infer
+/// awaiting-user from free-form skip text or mark ordinary idle work as attention.
+pub(super) fn planning_attention(projection: &RuntimeProjection) -> Vec<AttentionItem> {
+    let mut items = Vec::new();
+    if let Some(reason) = projection.failure_reason() {
+        items.push(planning_reason_item(
+            AttentionCause::PlanningInvalid,
+            "planning",
+            reason,
+            projection.planning_revision(),
+            "Planning cannot be read; review the planning authority.",
+        ));
+    }
+    if let Some(reason) = projection.auto_follow_pause_reason() {
+        items.push(planning_reason_item(
+            AttentionCause::AutoFollowPaused,
+            "auto_follow",
+            reason,
+            projection.planning_revision(),
+            "Automatic continuation is withheld; review the planning authority.",
+        ));
+    }
+    if let Some(queue) = projection.queue_projection() {
+        for task in &queue.skipped_tasks {
+            if task.status == TaskStatus::AwaitingUser {
+                items.push(item(
+                    AttentionCause::TaskAwaitingUser,
+                    AttentionSubjectKind::Task,
+                    task.task_id.clone(),
+                    revision_for(&task.reason, projection.planning_revision()),
+                    task.task_title.clone(),
+                    None,
+                ));
+            }
+        }
+    }
+    items
+}
+
+fn revision_for(reason: &str, revision: Option<i64>) -> String {
+    // A stable digest distinguishes changed authority even without a numeric
+    // revision. Do not include potentially sensitive error detail in the item.
+    let digest = Sha256::digest(reason.as_bytes());
+    format!("{}:{digest:x}", revision.unwrap_or_default())
+}
+
+fn planning_reason_item(
+    cause: AttentionCause,
+    id: &str,
+    reason: &str,
+    revision: Option<i64>,
+    summary: &str,
+) -> AttentionItem {
+    item(
+        cause,
+        AttentionSubjectKind::Repository,
+        id.to_owned(),
+        revision_for(reason, revision),
+        summary.to_owned(),
+        None,
+    )
+}
+
+/// The id/revision is the existing decision's own authority, not a new request.
+pub(crate) fn issue_decision_attention(stored: &StoredIssueDecision) -> Option<AttentionItem> {
+    let request = &stored.request;
+    if request.state() != IssueDecisionState::Open {
+        return None;
+    }
+    Some(item(
+        AttentionCause::IssueDecisionPending,
+        AttentionSubjectKind::IssueDecision,
+        request.id().as_str().to_owned(),
+        stored.revision.to_string(),
+        request.definition().question.as_str().to_owned(),
+        None,
+    ))
 }
 
 fn approval_item(thread_id: &str, approval: &ConversationApprovalRequest) -> AttentionItem {

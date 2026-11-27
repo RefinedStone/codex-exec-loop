@@ -6597,6 +6597,22 @@
         {
           "const": "pr_validation_failed",
           "type": "string"
+        },
+        {
+          "const": "issue_decision_pending",
+          "type": "string"
+        },
+        {
+          "const": "planning_invalid",
+          "type": "string"
+        },
+        {
+          "const": "auto_follow_paused",
+          "type": "string"
+        },
+        {
+          "const": "task_awaiting_user",
+          "type": "string"
         }
       ]
     },
@@ -6659,7 +6675,9 @@
       "enum": [
         "thread",
         "task",
-        "pull_request"
+        "pull_request",
+        "issue_decision",
+        "repository"
       ],
       "type": "string"
     },

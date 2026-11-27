@@ -94,13 +94,13 @@ export type AttachResponse = { readonly "client_id": string; readonly "kernel": 
 
 export type Attempt = { readonly "backend": string; readonly "backend_kind": string; readonly "delivery": Delivery; readonly "id": string; readonly "model"?: (string | null); readonly "observations": Array<Evidence>; readonly "phase": Phase; readonly "reason"?: (EndReason | null); readonly "recovery"?: (Recovery | null); readonly "resumes"?: (number | null); readonly "retry_at"?: (number | null); };
 
-export type AttentionCause = ("approval_pending" | "task_proposed" | "pr_validation_blocked" | "pr_validation_failed");
+export type AttentionCause = ("approval_pending" | "task_proposed" | "pr_validation_blocked" | "pr_validation_failed" | "issue_decision_pending" | "planning_invalid" | "auto_follow_paused" | "task_awaiting_user");
 
 export type AttentionItem = { readonly "cause": AttentionCause; readonly "id": string; readonly "next": Array<NextStep>; readonly "revision": string; readonly "subject": AttentionSubject; readonly "summary": string; readonly "updated_at"?: (string | null); };
 
 export type AttentionSubject = { readonly "id": string; readonly "kind": AttentionSubjectKind; };
 
-export type AttentionSubjectKind = ("thread" | "task" | "pull_request");
+export type AttentionSubjectKind = ("thread" | "task" | "pull_request" | "issue_decision" | "repository");
 
 export type AutoFollowSettings = { readonly "max_turns": number; readonly "paused": boolean; };
 
