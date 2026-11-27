@@ -146,3 +146,50 @@ fn equivalent_patch_is_excluded_and_merge_input_is_rejected_before_writing() {
     );
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn abort_intent_written_before_backup_releases_the_worktree_without_changing_refs() {
+    let directory = temp_repository("pick-before-backup");
+    let cwd = directory.to_str().unwrap();
+    let commit = commit_file(&directory, "a", "base", "base");
+    let initial = git_text(&directory, &["show-ref"]);
+    let position = crate::domain::git_operation::GitHeadPosition {
+        branch: Some("main".into()),
+        commit: commit.clone(),
+    };
+    let journal = Arc::new(MemoryJournal::default());
+    journal
+        .append(
+            cwd,
+            &GitOperationRecord {
+                op_id: "interrupted".into(),
+                worktree: cwd.into(),
+                operation: GitOperation::CherryPick {
+                    commits: vec![commit],
+                },
+                before: position.clone(),
+                after: position,
+                backup_ref: Some("refs/akra/backup/main/interrupted".into()),
+                status: crate::domain::git_operation::GitOperationStatus::Started,
+                started_at: 1,
+                finished_at: None,
+                undo_of: None,
+                undone_by: None,
+                error: None,
+                pick_index: Some(0),
+            },
+        )
+        .unwrap();
+    let e = GitOperationService::new(
+        Arc::new(GitHistoryAdapter),
+        Arc::new(GitWorkspaceAdapter),
+        journal,
+        Arc::new(|| (2, 1)),
+        Arc::default(),
+    );
+    assert!(
+        matches!(e.resolve_pick(cwd,"interrupted",PickAction::Abort).unwrap(),GitOperationOutcome::Done {record} if record.status==crate::domain::git_operation::GitOperationStatus::Aborted)
+    );
+    assert_eq!(git_text(&directory, &["show-ref"]), initial);
+    std::fs::remove_dir_all(directory).unwrap();
+}
