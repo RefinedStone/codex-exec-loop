@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -55,4 +57,95 @@ test("a cancelled contract records failure and never starts the next filter", as
   assert.deepEqual(records.map((e)=>[e.filter,e.phase,e.status]),[
     ["one::","started",undefined],["one::","finished","cancelled"],
   ]);
+});
+
+function fixtureProcessIsAlive(pid) {
+  try { process.kill(pid, 0); }
+  catch (error) { if (error.code === "ESRCH") return false; throw error; }
+  if (process.platform === "linux") {
+    try {
+      const stat = readFileSync("/proc/" + pid + "/stat", "utf8");
+      if (stat.slice(stat.lastIndexOf(")") + 1).trimStart().startsWith("Z ")) return false;
+    } catch (error) { if (error.code === "ENOENT") return false; throw error; }
+  }
+  return true;
+}
+
+function killFixtureProcess(pid) {
+  if (!pid || !fixtureProcessIsAlive(pid)) return;
+  try { process.kill(pid, "SIGKILL"); }
+  catch (error) { if (error.code !== "ESRCH") throw error; }
+}
+
+test("cancellation terminates the owned child and its pipe-inheriting grandchild", async () => {
+  const controller = new AbortController();
+  let observed = "";
+  let grandchildPid;
+  const fixture = [
+    "const {spawn}=require('node:child_process');",
+    "const grandchild=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setInterval(()=>{},1000);\"],{stdio:['ignore','inherit','inherit']});",
+    "console.log('GRANDCHILD:'+grandchild.pid);setInterval(()=>{},1000);",
+  ].join("");
+  const fallback = setTimeout(() => controller.abort(), 10000);
+  try {
+    const result = await runStreamingCommand(process.execPath, ["-e", fixture], {
+      signal:controller.signal,
+      write(chunk) {
+        observed += chunk;
+        const match = observed.match(/GRANDCHILD:(\d+)/);
+        if (match) { grandchildPid = Number(match[1]); controller.abort(); }
+      },
+      writeError() {},
+    });
+    assert.ok(grandchildPid, "the fixture must report its own descendant PID");
+    assert.equal(result.aborted, true);
+    assert.notEqual(result.status, 0);
+    const deadline = Date.now() + 2000;
+    while (fixtureProcessIsAlive(grandchildPid) && Date.now() < deadline) await delay(20);
+    assert.equal(fixtureProcessIsAlive(grandchildPid), false, "the owned descendant must be terminated");
+  } finally {
+    clearTimeout(fallback);
+    killFixtureProcess(grandchildPid);
+  }
+});
+
+test("an escaped writer after leader exit fails cleanup within the cancellation bound", async () => {
+  const controller = new AbortController();
+  let leaderExited = false;
+  let observed = "";
+  let grandchildPid;
+  let abortedAt;
+  const abortWhenReady = () => {
+    if (leaderExited && grandchildPid && !controller.signal.aborted) {
+      abortedAt = Date.now();
+      controller.abort();
+    }
+  };
+  const fixture = [
+    "const {spawn}=require('node:child_process');",
+    "const grandchild=spawn(process.execPath,['-e','setInterval(()=>{},1000);'],{detached:true,stdio:['ignore','inherit','inherit']});",
+    "grandchild.unref();process.stdout.write('GRANDCHILD:'+grandchild.pid+'\\n',()=>process.exit(0));",
+  ].join("");
+  const fallback = setTimeout(() => controller.abort(), 10000);
+  try {
+    await assert.rejects(runStreamingCommand(process.execPath, ["-e", fixture], {
+      signal:controller.signal, terminationGraceMs:100, drainTimeoutMs:100,
+      spawnProcess(command, args, options) {
+        const child = spawn(command, args, options);
+        child.once("exit", () => queueMicrotask(() => { leaderExited = true; abortWhenReady(); }));
+        return child;
+      },
+      write(chunk) {
+        observed += chunk;
+        const match = observed.match(/GRANDCHILD:(\d+)/);
+        if (match) { grandchildPid = Number(match[1]); abortWhenReady(); }
+      },
+      writeError() {},
+    }), /Process tree cleanup failed:/);
+    assert.ok(grandchildPid && abortedAt, "the fixture must reach the exited-leader boundary");
+    assert.ok(Date.now() - abortedAt < 3000, "an inherited pipe cannot hold the supervisor indefinitely");
+  } finally {
+    clearTimeout(fallback);
+    killFixtureProcess(grandchildPid);
+  }
 });
