@@ -2,7 +2,7 @@
 // 읽는다. 목록은 스레드를 열 때와 턴이 끝날 때 읽는다. 위 막대의 변경 줄 수와 오른쪽 `변경` 패널이 함께 쓴다 (R10).
 import { useEffect, useRef, useState } from "react";
 
-import type { AkraBridge, GitChangedFile, GitFileAction, GitFileDiff, GitStatusResult } from "../../shared/bridge";
+import type { AkraBridge, GitChangedFile, GitFileAction, GitFileDiff, GitDiffSource, GitDiffSnapshot, GitStatusResult } from "../../shared/bridge";
 import { isConflictStatus, stageState } from "../../shared/gitChange";
 import { Icon, type IconName } from "../design/icons";
 import { useDesktopStore } from "../session/desktopStore";
@@ -11,6 +11,7 @@ import { type ActionLock, BranchCommits, type BranchState } from "./BranchCommit
 import { type DiffFile, diffFileFromChange, parseGitDiff } from "./diff";
 import { DiffBody, DiffCounts, DiffStyleToggle } from "./DiffView";
 import { HunkChanges } from "./HunkChanges";
+import { filterChangedFiles } from "./workingTreeNavigation";
 
 /** 변경 패널이 쓰는 브리지 함수이다. 읽기와 파일별 동작이다. */
 type GitAccess = Pick<AkraBridge, "gitStatus" | "gitFileDiff" | "gitFileAction" | "gitOpenFile" | "gitBranchSummary" | "gitCommitDiff" | "gitPush" | "gitCreatePullRequest" | "gitHunks" | "gitHunkAction">;
@@ -19,7 +20,7 @@ type GitAccess = Pick<AkraBridge, "gitStatus" | "gitFileDiff" | "gitFileAction" 
 
 type PanelState = { phase: "idle" } | { phase: "loading" } | { phase: "loaded"; result: GitStatusResult } | { phase: "failed"; message: string };
 
-type FileState = { phase: "loading" } | { phase: "loaded"; diff: DiffFile | null; note: string | null } | { phase: "failed"; message: string };
+type FileState = { phase: "loading" } | { phase: "loaded"; diff: DiffFile | null; note: string | null; snapshot?: GitDiffSnapshot; source?: GitDiffSource } | { phase: "failed"; message: string };
 
 const STATUS_LABEL: Record<string, string> = { M: "수정", A: "추가", D: "삭제", R: "이동", C: "복사", U: "충돌", "?": "새 파일" };
 
@@ -36,7 +37,7 @@ function fileFromDiff(diff: GitFileDiff, path: string): { diff: DiffFile | null;
   if (diff.kind === "content") {
     return { diff: diffFileFromChange({ path, kind: { type: "add" }, diff: diff.text }), note };
   }
-  const file = parseGitDiff(diff.text)[0];
+  const file = parseGitDiff(diff.text).find((candidate) => candidate.path === path || candidate.movePath === path);
   const hasLines = file !== undefined && file.lines.length > 0;
   return { diff: hasLines ? file : null, note: hasLines ? note : (note ?? "줄 단위 변경이 없습니다 (모드나 바이너리 변경).") };
 }
@@ -103,20 +104,30 @@ function FileActions({ cwd, file, git, lock, onChanged }: { cwd: string; file: G
   );
 }
 
-function ChangedFile({ cwd, file, git, lock, onChanged }: { cwd: string; file: GitChangedFile; git: GitAccess; lock: ActionLock; onChanged(): void }) {
-  const [open, setOpen] = useState(false);
-  const [state, setState] = useState<FileState>({ phase: "loading" });
+const SOURCE_LABELS: Record<GitDiffSource, string> = {
+  head_worktree: "HEAD ↔ 작업 트리",
+  head_index: "HEAD ↔ 스테이지",
+  index_worktree: "스테이지 ↔ 작업 트리",
+  untracked: "추적하지 않는 새 파일",
+};
 
-  const toggle = (next: boolean) => {
-    setOpen(next);
-    if (next && state.phase !== "loaded") {
-      setState({ phase: "loading" });
-      git.gitFileDiff(cwd, file.path, file.untracked).then(
-        (diff) => setState({ phase: "loaded", ...fileFromDiff(diff, file.path) }),
-        (error: unknown) => setState({ phase: "failed", message: error instanceof Error ? error.message : String(error) }),
-      );
-    }
-  };
+function ChangedFile({ cwd, file, git, lock, onChanged, open, onOpenChange, source }: {
+  cwd: string; file: GitChangedFile; git: GitAccess; lock: ActionLock; onChanged(): void;
+  open: boolean; onOpenChange(open: boolean): void; source: Exclude<GitDiffSource, "untracked">;
+}) {
+  const [state, setState] = useState<FileState>({ phase: "loading" });
+  const comparison = file.untracked ? "untracked" : source;
+  const conflict = isConflictStatus(file.status);
+  useEffect(() => {
+    if (!open || file.directory) return;
+    let active = true;
+    setState({ phase: "loading" });
+    git.gitFileDiff(cwd, file.path, file.untracked, conflict ? undefined : comparison).then(
+      (diff) => { if (active) setState({ phase: "loaded", ...fileFromDiff(diff, file.path), snapshot: diff.snapshot, source: comparison }); },
+      (error: unknown) => { if (active) setState({ phase: "failed", message: error instanceof Error ? error.message : String(error) }); },
+    );
+    return () => { active = false; };
+  }, [cwd, file.path, file.untracked, file.directory, open, comparison, conflict, git]);
 
   const summary = (
     <summary>
@@ -127,7 +138,7 @@ function ChangedFile({ cwd, file, git, lock, onChanged }: { cwd: string; file: G
           {" → "}
         </>
       )}
-      <code>{file.path}</code>
+      <code title={file.path}>{file.path}</code>
       {isConflictStatus(file.status) ? <span className="badge badge-bad">충돌</span> : stageState(file).staged && <span className="badge badge-ok">스테이지</span>}
       {file.added !== null && file.removed !== null && <DiffCounts added={file.added} removed={file.removed} />}
       <FileActions cwd={cwd} file={file} git={git} lock={lock} onChanged={onChanged} />
@@ -135,23 +146,33 @@ function ChangedFile({ cwd, file, git, lock, onChanged }: { cwd: string; file: G
   );
   if (file.directory) {
     return (
-      <details className="diff-file" data-testid="git-file">
+      <details className="diff-file" data-testid="git-file" open={open} onToggle={(event) => onOpenChange(event.currentTarget.open)}>
         {summary}
         <div className="muted diff-hint">새 폴더입니다. 안의 파일은 펼치지 않습니다.</div>
       </details>
     );
   }
   return (
-    <details className="diff-file" data-testid="git-file" open={open} onToggle={(event) => toggle(event.currentTarget.open)}>
+    <details className="diff-file" data-testid="git-file" open={open} onToggle={(event) => onOpenChange(event.currentTarget.open)}>
       {summary}
       {open && state.phase === "loading" && <div className="muted diff-hint">읽는 중…</div>}
       {open && state.phase === "failed" && <div className="error diff-hint">{state.message}</div>}
-      {open && state.phase === "loaded" && (
-        <HunkChanges cwd={cwd} path={file.path} git={git} lock={lock} onChanged={onChanged}>
-          {state.diff && <DiffBody file={state.diff} />}
+      {open && state.phase === "loaded" && (() => {
+        if (state.source !== comparison) return <div className="muted diff-hint">읽는 중…</div>;
+        const content = <>
+          {state.snapshot && <div className="muted diff-hint" data-testid="git-diff-snapshot">
+            {SOURCE_LABELS[state.snapshot.source]} · {state.snapshot.headOid?.slice(0, 8) ?? "첫 커밋 전"} · snapshot {state.snapshot.snapshotId.slice(0, 12)}
+            {state.snapshot.contentStatus === "patch_only" && " · 변경 문맥만 제공"}
+            {state.snapshot.contentStatus === "truncated" && " · 부분 표시"}
+          </div>}
+          {conflict && <div className="muted diff-hint">충돌 파일 · 기본 비교</div>}
+          {state.diff && <DiffBody key={state.snapshot?.snapshotId ?? file.path} file={state.diff} />}
           {state.note && <div className="muted diff-hint">{state.note}</div>}
-        </HunkChanges>
-      )}
+        </>;
+        return comparison === "head_worktree" && !conflict
+          ? <HunkChanges cwd={cwd} path={file.path} git={git} lock={lock} onChanged={onChanged}>{content}</HunkChanges>
+          : content;
+      })()}
     </details>
   );
 }
@@ -234,6 +255,56 @@ export function workingTreeCounts(tree: WorkingTree): { branch: string | null; a
   return { branch, added: files.reduce((sum, file) => sum + (file.added ?? 0), 0), removed: files.reduce((sum, file) => sum + (file.removed ?? 0), 0) };
 }
 
+function WorkingTreeFiles({ files, cwd, git, lock, onChanged }: {
+  files: GitChangedFile[]; cwd: string; git: GitAccess; lock: ActionLock; onChanged(): void;
+}) {
+  const [source, setSource] = useState<Exclude<GitDiffSource, "untracked">>("head_worktree");
+  const [query, setQuery] = useState("");
+  const [opened, setOpened] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<string | null>(null);
+  const list = useRef<HTMLDivElement>(null);
+  const visible = filterChangedFiles(files, query);
+  const navigable = visible.filter((file) => !file.directory);
+  const move = (step: number) => {
+    const current = navigable.findIndex((file) => file.path === selected);
+    const next = navigable[current < 0 ? (step > 0 ? 0 : navigable.length - 1) : current + step];
+    if (!next) return;
+    setSelected(next.path);
+    setOpened((previous) => new Set([...previous, next.path]));
+    requestAnimationFrame(() => {
+      const element = Array.from(list.current?.querySelectorAll<HTMLElement>("[data-git-path]") ?? []).find((item) => item.dataset.gitPath === next.path);
+      element?.scrollIntoView({ block: "nearest" });
+      element?.querySelector("summary")?.focus();
+    });
+  };
+  const counts = files.filter((file) => file.added !== null && file.removed !== null);
+  return <>
+    <div className="review-toolbar" style={{ flexWrap: "wrap" }}>
+      <label>비교 <select value={source} onChange={(event) => setSource(event.target.value as Exclude<GitDiffSource, "untracked">)}>
+        <option value="head_worktree">{SOURCE_LABELS.head_worktree}</option>
+        <option value="head_index">{SOURCE_LABELS.head_index}</option>
+        <option value="index_worktree">{SOURCE_LABELS.index_worktree}</option>
+      </select></label>
+      <span className="muted">HEAD 기준 확인된 합계 <DiffCounts added={counts.reduce((sum, file) => sum + (file.added ?? 0), 0)} removed={counts.reduce((sum, file) => sum + (file.removed ?? 0), 0)} /> · {counts.length}/{files.length}개</span>
+      <input aria-label="변경 파일 경로 찾기" placeholder="파일 경로 찾기" value={query} onChange={(event) => { setQuery(event.target.value); setSelected(null); }} />
+      <button type="button" className="button" onClick={() => move(-1)} disabled={navigable.length === 0}>이전 파일</button>
+      <button type="button" className="button" onClick={() => move(1)} disabled={navigable.length === 0}>다음 파일</button>
+      <button type="button" className="button" onClick={() => setOpened(new Set())}>전체 접기</button>
+      <span className="muted">{visible.length}/{files.length}개 · 경로만 검색</span>
+    </div>
+    <div className="working-tree-files diff-file-list" ref={list}>
+      {visible.map((file) => <div key={file.status + ":" + file.path} data-git-path={file.path}>
+        <ChangedFile cwd={cwd} file={file} git={git} lock={lock} onChanged={onChanged}
+          open={opened.has(file.path)} source={source}
+          onOpenChange={(open) => { if (open) setSelected(file.path); setOpened((previous) => {
+            if (previous.has(file.path) === open) return previous;
+            const next = new Set(previous); if (open) next.add(file.path); else next.delete(file.path); return next;
+          }); }} />
+      </div>)}
+    </div>
+  </>;
+}
+
 export function WorkingTreePanel({ tree, git, onOpenUrl, children }: {
   tree: WorkingTree; git: GitAccess; onOpenUrl(url: string): void; children?: React.ReactNode;
 }) {
@@ -266,11 +337,7 @@ export function WorkingTreePanel({ tree, git, onOpenUrl, children }: {
       )}
       {files && files.length === 0 && <div className="muted diff-hint">바뀐 파일이 없습니다.</div>}
       {files && files.length > 0 && (
-        <div className="working-tree-files diff-file-list" key={tree.generation}>
-          {files.map((file) => (
-            <ChangedFile key={`${file.status}:${file.path}`} cwd={cwd} file={file} git={git} lock={{ busy, setBusy }} onChanged={() => tree.refresh(false)} />
-          ))}
-        </div>
+        <WorkingTreeFiles key={tree.generation} files={files} cwd={cwd} git={git} lock={{ busy, setBusy }} onChanged={() => tree.refresh(false)} />
       )}
       <BranchCommits cwd={cwd} state={tree.branch} git={git} lock={{ busy, setBusy }} onChanged={() => tree.refresh()} onOpenUrl={onOpenUrl} />
       {children}
