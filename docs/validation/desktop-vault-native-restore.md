@@ -2,6 +2,9 @@
 
 > 이 문서의 실행 결과는 당시 구현 기준입니다. #2688의 Windows Vault 지원과 후속 검증은
 > [Windows Vault 원문 복원·재연결](windows-vault-restore.md)에 별도로 기록합니다.
+> #2705 / PR #2963 이후 Desktop 원문 창의 OS 잠금 감지 정책은
+> [이슈/Vault 실패 매트릭스](issue-vault-failure-matrix.md)를 따릅니다. Linux native helper의 과거 지원 기록을
+> 현재 Desktop 전용 창의 열람 허용으로 해석하지 않습니다.
 
 이 문서는 #2650의 최초 읽기 전용 연결과 당시 검증 결과를 기록합니다. 이후의 native 재연결은
 [#2656 검증 기록](desktop-vault-native-reconnect.md)에서 별도로 다룹니다.
