@@ -294,23 +294,80 @@ export function ConversationView({ onLoadOlder, onDraftTask, onQuote, onFork }: 
   return <ThreadConversation key={openThreadId} threadId={openThreadId} onLoadOlder={onLoadOlder} onDraftTask={onDraftTask} onQuote={onQuote} onFork={onFork} />;
 }
 
+// Only message bodies contribute to a task. A DOM selection can span controls,
+// tool/status cards and virtualized turns; those must not become instructions.
+function selectedBodyText(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE) return node.nodeValue ?? "";
+  if (node instanceof Element) {
+    if (node.matches("button, [role=button], [aria-hidden=true], input, textarea, select")) return "";
+    if (node.tagName === "BR") return "\n";
+    if (node.tagName === "PRE") return (node.textContent ?? "") + "\n";
+  }
+  const text = Array.from(node.childNodes, selectedBodyText).join("");
+  return node instanceof Element && /^(P|DIV|H[1-6]|LI|BLOCKQUOTE|TR)$/.test(node.tagName) && !text.endsWith("\n")
+    ? text + "\n" : text;
+}
+
+function selectedTaskSource(root: HTMLElement, threadId: string, selection: Selection | null): TaskDraftSource | null {
+  if (!selection || selection.isCollapsed || selection.rangeCount !== 1
+    || !root.contains(selection.anchorNode) || !root.contains(selection.focusNode)) return null;
+  const range = selection.getRangeAt(0);
+  const pieces: string[] = [];
+  const turnIds = new Set<string>();
+  let size = 0;
+  for (const content of root.querySelectorAll<HTMLElement>(".user-message > p, .agent-message > .markdown")) {
+    if (!range.intersectsNode(content)) continue;
+    const bounds = document.createRange();
+    bounds.selectNodeContents(content);
+    const clipped = range.cloneRange();
+    if (range.compareBoundaryPoints(Range.START_TO_START, bounds) < 0) {
+      clipped.setStart(bounds.startContainer, bounds.startOffset);
+    }
+    if (range.compareBoundaryPoints(Range.END_TO_END, bounds) > 0) {
+      clipped.setEnd(bounds.endContainer, bounds.endOffset);
+    }
+    const text = selectedBodyText(clipped.cloneContents()).trim();
+    const turnId = content.closest<HTMLElement>("[data-turn-id]")?.dataset.turnId;
+    if (!text || !turnId) continue;
+    size += text.length + (pieces.length ? 2 : 0);
+    if (size > 32_768) return null;
+    pieces.push(text);
+    turnIds.add(turnId);
+  }
+  return pieces.length ? { text: pieces.join("\n\n"), threadId, turnIds: [...turnIds] } : null;
+}
+
 function ThreadConversation({ threadId, onLoadOlder, onDraftTask, onQuote, onFork }: ConversationViewProps & { threadId: string }) {
-  const [menu, setMenu] = useState<ConversationMenuTarget | null>(null);
+  const [menu, setMenu] = useState<(ConversationMenuTarget & { taskEpoch?: number }) | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
   const transcript = useConversationStore((state) => state.transcript);
   const transcriptError = useConversationStore((state) => state.transcriptError);
   const scrollRef = useRef<HTMLElement>(null);
-  // Snapshot before the context menu takes focus, not from selectionchange.
+  const conversationStore = useContext(ConversationStoreContext);
+  const taskEpoch = useRef(0);
+  // A disconnect/reconnect can be batched into one React render. Invalidate
+  // synchronously on every store boundary, not just the final visible state.
+  useLayoutEffect(() => conversationStore.subscribe((next, previous) => {
+    if (next.connection?.phase !== previous.connection?.phase
+      || next.connection?.endpoint !== previous.connection?.endpoint
+      || next.kernel.phase !== previous.kernel.phase
+      || next.kernel.workspace !== previous.kernel.workspace
+      || next.kernel.kernel !== previous.kernel.kernel
+      || next.openThreadId !== previous.openThreadId
+      || next.transcript?.cwd !== previous.transcript?.cwd) {
+      taskEpoch.current += 1;
+      setMenu(current => current?.taskSource ? null : current);
+    }
+  }), [conversationStore]);
+  useLayoutEffect(() => {
+    taskEpoch.current += 1;
+    setMenu(current => current?.taskSource ? null : current);
+  }, [onDraftTask]);
   const taskSource = (root: HTMLElement): TaskDraftSource | null => {
-    const selection = window.getSelection();
-    if (!onDraftTask || !selection || selection.isCollapsed || selection.rangeCount !== 1
-      || !root.contains(selection.anchorNode) || !root.contains(selection.focusNode)) return null;
-    const text = selection.toString().trim();
-    if (!text || text.length > 32_768) return null;
-    const range = selection.getRangeAt(0);
-    const turnIds = [...root.querySelectorAll<HTMLElement>("[data-turn-id]")]
-      .filter(turn => range.intersectsNode(turn)).map(turn => turn.dataset.turnId!);
-    return turnIds.length ? { text, threadId, turnIds } : null;
+    const state = conversationStore.getState();
+    if (!onDraftTask || state.connection?.phase !== "connected" || state.kernel.phase !== "attached"
+      || state.openThreadId !== threadId || state.kernel.workspace !== state.transcript?.cwd) return null;
+    return selectedTaskSource(root, threadId, window.getSelection());
   };
   // 스레드를 새로 열면 맨 아래(최근 턴)부터 보여 준다.
   const followBottom = useRef(true);
@@ -335,7 +392,6 @@ function ThreadConversation({ threadId, onLoadOlder, onDraftTask, onQuote, onFor
   /** 보던 턴을 찾으려고 읽은 이전 페이지 수와, 읽기를 부탁할 때의 첫 턴이다. 같은 첫 턴에서 두 번 부탁하지 않는다. */
   const restorePages = useRef(0);
   const restoreRequestedAt = useRef<string | null>(null);
-  const conversationStore = useContext(ConversationStoreContext);
   const position = useRef<ThreadViewMemory["position"]>(null);
   const dividerTurnId = useMemo(
     () => newContentTurnId(turns.map((turn) => turn.id), remembered.current?.lastSeenTurnId),
@@ -523,7 +579,7 @@ function ThreadConversation({ threadId, onLoadOlder, onDraftTask, onQuote, onFor
       )}
       {menu && <ConversationMenu target={menu} onQuote={onQuote} onFork={onFork} onClose={closeMenu}
         onDraftTask={onDraftTask && ((source) => {
-          if (source.threadId === threadId) onDraftTask(source);
+          if (source.threadId === threadId && menu.taskEpoch === taskEpoch.current) onDraftTask(source);
         })}
         onFind={() => {
           useUiStore.setState({ findOpen: true, overlay: null });
@@ -534,7 +590,7 @@ function ThreadConversation({ threadId, onLoadOlder, onDraftTask, onQuote, onFor
           const target = scrollRef.current && conversationMenuTarget(event, scrollRef.current);
           if (!target) return;
           event.preventDefault();
-          setMenu({ ...target, taskSource: taskSource(scrollRef.current!) });
+          setMenu({ ...target, taskSource: taskSource(scrollRef.current!), taskEpoch: taskEpoch.current });
         }}
         tabIndex={0}
         onKeyDown={(event) => {
@@ -545,7 +601,7 @@ function ThreadConversation({ threadId, onLoadOlder, onDraftTask, onQuote, onFor
           if (!source) return;
           event.preventDefault();
           setMenu({ x: rect.left + 12, y: rect.top + 12, selection: source.text,
-            messageCopy: null, code: null, link: null, taskSource: source });
+            messageCopy: null, code: null, link: null, taskSource: source, taskEpoch: taskEpoch.current });
         }}>
         <div className="column">
           {transcript.olderTurnsCursor && (

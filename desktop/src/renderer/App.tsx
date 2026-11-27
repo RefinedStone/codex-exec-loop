@@ -602,7 +602,11 @@ export function App() {
   const attachedWorkspace = useDesktopStore((state) => state.kernel.workspace);
   const [taskEditor, setTaskEditor] = useState<{ workspace: string; source?: TaskDraftSource } | null>(null);
   const openTaskEditor = useCallback((source?: TaskDraftSource) => {
-    if (!session.current || !attachedWorkspace || kernelPhase !== "attached") return;
+    const current = useDesktopStore.getState();
+    if (!session.current || !attachedWorkspace || kernelPhase !== "attached"
+      || current.connection?.phase !== "connected" || current.kernel.phase !== "attached"
+      || current.kernel.workspace !== attachedWorkspace
+      || (source && (current.openThreadId !== source.threadId || openThreadCwd(current) !== attachedWorkspace))) return;
     session.current.taskAuthoring.beginDraft(attachedWorkspace);
     setTaskEditor({ workspace: attachedWorkspace, source });
   }, [attachedWorkspace, kernelPhase]);
@@ -908,7 +912,7 @@ export function App() {
                 {/* 대화가 그리다 실패해도 입력창과 초안은 남는다. */}
                 <AreaBoundary resetKey={openThreadId ?? ""} area="대화">
                   <ConversationView onLoadOlder={async () => session.current?.loadOlderTurns()}
-                    onDraftTask={kernelPhase === "attached" && attachedWorkspace === openCwd ? openTaskEditor : undefined}
+                    onDraftTask={connected && kernelPhase === "attached" && attachedWorkspace === openCwd ? openTaskEditor : undefined}
                     onQuote={quoteIntoDraft} onFork={() => void forkOpenThread()} />
                 </AreaBoundary>
                 {session.current && <ThreadCompactionControl key={openThreadId ?? ""} controller={session.current.compaction} />}
