@@ -176,7 +176,9 @@ export function compare(before, after) {
   for (const key of ["branches", "pulls", "issueSamples", "releases", "rulesets", "refs"]) {
     assert.deepEqual(before[key], after[key], key + " changed; reconcile before claiming a successful rename");
   }
+  assert.ok(Date.parse(after.capturedAt) > Date.parse(before.capturedAt), "post-rename capture must be later than pre-rename capture");
   assert.ok(before.activeRuns.every(run => run.count === 0), "pre-rename capture was not quiescent");
+  assert.ok(after.activeRuns.every(run => run.count === 0), "post-rename capture was not quiescent");
   return { verified: true, repositoryId: REPOSITORY_ID, branches: after.branches.length,
     openPullRequests: after.pulls.length, releases: after.releases.length, rulesets: after.rulesets.length };
 }
