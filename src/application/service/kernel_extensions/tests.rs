@@ -620,3 +620,13 @@ fn inputs_may_carry_a_two_mebibyte_attachment_but_not_more_than_the_input_bound(
     let oversized = call(&host, "echo", json!({"text":"x".repeat(MAX_INPUT)}), None);
     assert!(oversized.unwrap_err().to_string().contains("too large"));
 }
+
+#[test]
+fn package_response_budgets_keep_the_default_and_host_ceiling() {
+    let schema = jsonschema::validator_for(&json!({"type":"object"})).unwrap();
+    let output = json!({"text":"x".repeat(MAX_PAYLOAD)});
+    assert!(validate_output(&schema, &output, TestHandler::default().max_output_bytes()).is_err());
+    assert!(validate_output(&schema, &output, 8 << 20).is_ok());
+    let oversized = json!({"text":"x".repeat(MAX_OUTPUT)});
+    assert!(validate_output(&schema, &oversized, usize::MAX).is_err());
+}

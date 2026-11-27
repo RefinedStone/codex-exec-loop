@@ -309,6 +309,28 @@ class StudioTest(unittest.TestCase):
         cancelled = self.run_all(job, FakeModel(fail_on="review"))
         self.assertEqual(("edited", 4, "# 키 생성 경합 막기\n본문"), (cancelled["state"], cancelled["edition"], cancelled["draft"]))
 
+    def test_large_current_and_previous_editions_survive_save_and_reopen(self):
+        a = self.run_all(self.generate(), FakeModel("pass"))
+        a.update(draft="한" * studio.MAX_DRAFT,
+                 claims=[{"id": f"c{i}", "text": "글" * 2500, "sources": ["s1"]} for i in range(80)])
+        self.host.store(a)
+        saved = self.host.request("save", {"id": a["id"], "revision": a["revision"], "draft": a["draft"]})
+        size = len(json.dumps(saved, ensure_ascii=False).encode("utf-8"))
+        self.assertGreater(size, 1024 * 1024)
+        self.assertLessEqual(size, studio.MAX_RESPONSE_BYTES)
+        reopened = self.studio("reopened-kernel").request("open", {"id": a["id"]})
+        self.assertEqual(saved, reopened)
+        self.assertEqual(a["draft"], reopened["previous"]["draft"])
+
+    def test_oversized_save_rolls_back_before_revision_or_edition_changes(self):
+        a = self.run_all(self.generate(), FakeModel("pass"))
+        before = self.host.request("open", {"id": a["id"]})
+        limit = len(json.dumps(before, ensure_ascii=False).encode("utf-8")) + 100
+        with patch.object(studio, "MAX_RESPONSE_BYTES", limit):
+            with self.assertRaisesRegex(ValueError, "응답 한도"):
+                self.host.request("save", {"id": a["id"], "revision": a["revision"], "draft": "한" * 1000})
+        self.assertEqual(before, self.studio("reopened-kernel").request("open", {"id": a["id"]}))
+
     def test_saved_edit_is_a_new_edition(self):
         a = self.run_all(self.generate(), FakeModel("pass"))
         b = self.host.request("save", {"id": a["id"], "revision": a["revision"], "draft": "사람의 판"})

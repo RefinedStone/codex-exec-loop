@@ -19,6 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 
 const MAX_PAYLOAD: usize = 1_048_576;
+const MAX_OUTPUT: usize = 8 << 20;
 /// Inputs may carry one base64 attachment (the blog figure allows a 2 MiB PNG).
 const MAX_INPUT: usize = 4 << 20;
 const MAX_JOBS: usize = 128;
@@ -287,7 +288,7 @@ impl ExtensionService {
         );
         let guard_input = input.clone();
         let output = entry.handler.invoke(&context, action, input)?;
-        validate_output(&operation.output, &output)?;
+        validate_output(&operation.output, &output, entry.handler.max_output_bytes())?;
         // Handler authority is locked first. No handler invocation or cleanup is permitted
         // while the host lock is held, except this non-I/O, non-reentrant final guard check.
         let response_guard =
@@ -530,9 +531,13 @@ pub(super) fn now_ms() -> u64 {
 fn random_id() -> String {
     format!("{:032x}", rand::random::<u128>())
 }
-fn validate_output(validator: &jsonschema::Validator, output: &Value) -> Result<()> {
+fn validate_output(
+    validator: &jsonschema::Validator,
+    output: &Value,
+    maximum_bytes: usize,
+) -> Result<()> {
     ensure!(
-        serde_json::to_vec(output)?.len() <= MAX_PAYLOAD,
+        serde_json::to_vec(output)?.len() <= maximum_bytes.min(MAX_OUTPUT),
         "extension output is too large"
     );
     ensure!(

@@ -248,7 +248,11 @@ impl ExtensionService {
         let entry = self.registry.get(&job.extension)?;
         self.check_permissions(entry)?;
         let output = entry.handler.run(context, &job.action, input)?;
-        validate_output(&entry.operations[&job.action].output, &output)?;
+        validate_output(
+            &entry.operations[&job.action].output,
+            &output,
+            entry.handler.max_output_bytes(),
+        )?;
         Ok(output)
     }
 

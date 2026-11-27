@@ -16,6 +16,8 @@ import tech_blog as blog
 PLUGIN = "akra.tech-blog"
 VERSION = 2
 MAX_DRAFT = 100_000
+# Matches the common host blog handler. Validate before persisting, not after the side effect.
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_COMMITS = 30
 DEFAULT_COMMITS = 20
 EVIDENCE_LIMIT = 200_000  # 글 1개의 근거 전체 (글자 수)
@@ -176,6 +178,12 @@ def present(a):
             "stopped": None, "commits": [], "evidence": None, "calls": 0, "edition": 1, "previous": None, "unread": False}
 
 
+def check_response_size(value):
+    # ensure_ascii=False matches the Rust host; whitespace makes this check conservative.
+    if len(json.dumps(value, ensure_ascii=False).encode("utf-8")) > MAX_RESPONSE_BYTES:
+        raise ValueError("글과 이전 판의 전체 크기가 응답 한도를 넘습니다. 저장하지 않았습니다.")
+
+
 def front_matter_id(path):
     """내보낸 파일의 머리말에 적힌 글 ID 이다. 없으면 None 이다."""
     with open(path, encoding="utf-8", errors="replace") as file:
@@ -237,12 +245,14 @@ class Studio:
         return a
 
     def store(self, a):
+        check_response_size(present(a))
         self.db.execute("INSERT OR REPLACE INTO article VALUES (?,?)", (a["id"], json.dumps(a, ensure_ascii=False)))
 
     def request(self, action, data):
         self.db.execute("BEGIN IMMEDIATE")
         try:
             response = self.change(action, data)
+            check_response_size(response)
             self.db.commit()
             return response
         except BaseException:

@@ -21,6 +21,8 @@ const ACTIONS: [&str; 14] = [
     "restore", "figure", "export", "delete",
 ];
 const STUDIO: &str = "tech-blog.sqlite3";
+// The studio checks this same response budget before committing article changes.
+const MAX_ARTICLE_RESPONSE_BYTES: usize = 8 << 20;
 
 pub(super) fn registration(workspace: &Path, runtime: PathBuf) -> ExtensionRegistration {
     ExtensionRegistration {
@@ -172,6 +174,10 @@ impl ExtensionHandler for TechBlogHandler {
         }
         self.worker("open", json!({"id": id}))
     }
+    fn max_output_bytes(&self) -> usize {
+        // A supported article includes the current and previous 100,000-character editions.
+        MAX_ARTICLE_RESPONSE_BYTES
+    }
     fn max_active_jobs(&self) -> Option<usize> {
         // One model call at a time per repository, as in version 2.
         Some(1)
@@ -253,6 +259,76 @@ mod tests {
             );
             Ok::<(), anyhow::Error>(())
         })();
+        std::fs::remove_dir_all(root).unwrap();
+        result.unwrap();
+    }
+
+    #[test]
+    fn common_host_saves_and_reopens_large_current_and_previous_editions() {
+        let root = std::env::temp_dir().join(format!(
+            "akra-blog-response-{:032x}",
+            rand::random::<u128>()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let packages = super::super::RepositoryPackages {
+            workspace: Path::new(env!("CARGO_MANIFEST_DIR")),
+            runtime: &root,
+        };
+        let host = super::super::build(
+            &root.join("extensions"),
+            ExtensionScope::Repository,
+            Some("large-blog".into()),
+            None,
+            Some(&packages),
+        )
+        .unwrap();
+        let call = |action, input| {
+            host.call(
+                host.context("large-blog-test".into(), Some(host.host_id().into())),
+                ID,
+                VERSION,
+                action,
+                input,
+                None,
+            )
+        };
+        let result = (|| -> Result<()> {
+            call("configure", json!({"enabled":true,"expected_revision":0}))?;
+            call("list", json!({}))?;
+            let draft = "한".repeat(100_000);
+            let claims = (0..80)
+                .map(|i| {
+                    json!({
+                        "id":format!("c{i}"),"text":"글".repeat(2500),"sources":["s1"]
+                    })
+                })
+                .collect::<Vec<_>>();
+            let article = json!({
+                "id":"large-article","version":2,"title":"큰 글","topic":"큰 글",
+                "draft":draft,"claims":claims,"review":null,"state":"edited","stage":null,
+                "job":null,"revision":1,"edition":1,"previous":null,"figures":[],
+                "messages":[],"commits":[],"style":"PROBLEM_SOLVING","slug":"large-article"
+            });
+            let db = rusqlite::Connection::open(root.join(STUDIO))?;
+            db.execute(
+                "INSERT INTO article VALUES (?,?)",
+                rusqlite::params!["large-article", serde_json::to_string(&article)?],
+            )?;
+            drop(db);
+            let saved = call(
+                "save",
+                json!({"id":"large-article","revision":1,"draft":draft}),
+            )?;
+            anyhow::ensure!(serde_json::to_vec(&saved)?.len() > 1_048_576);
+            anyhow::ensure!(
+                saved["revision"] == 2 && saved["previous"]["draft"] == article["draft"]
+            );
+            let opened = call("open", json!({"id":"large-article"}))?;
+            anyhow::ensure!(opened == saved);
+            Ok(())
+        })();
+        host.shutdown();
+        drop(host);
         std::fs::remove_dir_all(root).unwrap();
         result.unwrap();
     }
