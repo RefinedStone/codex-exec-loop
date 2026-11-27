@@ -105,6 +105,8 @@ test("runtime loader paths preserve caller directories and macOS fallback defaul
 
 test("Windows portable entrypoint retains the complete inventory including Vault restore", () => {
   const shell = readFileSync(new URL("./check_windows_portable.sh", import.meta.url), "utf8");
+  const powershell = readFileSync(new URL("./check_native_pr.ps1", import.meta.url), "utf8");
+  assert.ok(powershell.includes('"scripts/native-rust-contracts.test.mjs"'));
   const filters = [...shell.matchAll(/^\s+'([^']+)'/gm)].map((match) => match[1]);
   assert.equal(filters.length, 126);
   assert.ok(filters.includes("filesystem::issue_creation_journal::"));
