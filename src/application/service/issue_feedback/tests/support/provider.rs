@@ -8,6 +8,7 @@ pub(crate) enum WriteBehavior {
     Ack,
     Lost,
     Contradictory,
+    JiraRejected(crate::domain::issue_automation::feedback::JiraFeedbackRejection),
 }
 #[derive(Clone, Copy)]
 pub(crate) enum ReadBehavior {
@@ -99,6 +100,9 @@ impl IssueFeedbackPort for FakeProvider {
         }
         let mut writes = self.writes.lock().unwrap();
         writes.push(intent.clone());
+        if let WriteBehavior::JiraRejected(reason) = *self.write_behavior.lock().unwrap() {
+            return Ok(IssueFeedbackWriteResult::JiraRejected(reason));
+        }
         let event_id = format!("LE_{}", writes.len());
         if let Some(label) = intent.operation.label() {
             let applied = matches!(intent.operation, IssueFeedbackOperation::AddLabel { .. });
@@ -140,6 +144,7 @@ impl IssueFeedbackPort for FakeProvider {
             },
             WriteBehavior::Lost => IssueFeedbackWriteResult::Unconfirmed,
             WriteBehavior::Contradictory => IssueFeedbackWriteResult::Contradictory,
+            WriteBehavior::JiraRejected(reason) => IssueFeedbackWriteResult::JiraRejected(reason),
         })
     }
     fn reconcile(&self, intent: &IssueFeedbackIntent) -> Result<IssueFeedbackReadResult> {

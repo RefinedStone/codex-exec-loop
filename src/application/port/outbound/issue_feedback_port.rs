@@ -1,6 +1,6 @@
 use crate::domain::issue_automation::feedback::{
     IssueFeedbackConnection, IssueFeedbackIntent, IssueFeedbackJiraTransition,
-    IssueFeedbackLinearState, IssueFeedbackReceipt,
+    IssueFeedbackLinearState, IssueFeedbackReceipt, JiraFeedbackRejection,
 };
 use crate::domain::issue_automation::policy::{
     IssueAutomationJiraCloseTransition, IssueAutomationLinearCloseState,
@@ -44,6 +44,7 @@ pub enum IssueFeedbackWriteResult {
     },
     /// 오류 원문/비밀값은 전달하지 않는다. 실제 쓰기는 수행됐을 수도 있다.
     Unconfirmed,
+    JiraRejected(JiraFeedbackRejection),
     Contradictory,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]

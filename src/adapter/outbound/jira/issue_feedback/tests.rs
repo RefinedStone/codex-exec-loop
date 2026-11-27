@@ -144,6 +144,8 @@ struct Api {
     writes: AtomicUsize,
     reads: AtomicUsize,
     lose_ack: AtomicBool,
+    rejection: Mutex<Option<JiraFeedbackRejection>>,
+    write_error: Mutex<Option<ProviderCredentialError>>,
     before_send: Mutex<Option<Box<dyn Fn() + Send>>>,
     after_read: Mutex<Option<Box<ReadHook>>>,
 }
@@ -166,6 +168,8 @@ impl Api {
             writes: AtomicUsize::new(0),
             reads: AtomicUsize::new(0),
             lose_ack: AtomicBool::new(false),
+            rejection: Mutex::new(None),
+            write_error: Mutex::new(None),
             before_send: Mutex::new(None),
             after_read: Mutex::new(None),
         }
@@ -244,6 +248,12 @@ impl JiraIssueFeedbackApiPort for Api {
         }
         let _send = authorization.begin_send()?;
         self.writes.fetch_add(1, Ordering::SeqCst);
+        if let Some(reason) = *self.rejection.lock().unwrap() {
+            return Ok(JiraIssueFeedbackWriteResponse::Rejected(reason));
+        }
+        if let Some(error) = *self.write_error.lock().unwrap() {
+            return Err(error);
+        }
         let mut remote = self.remote.lock().unwrap();
         let response = match request {
             JiraIssueFeedbackWriteRequest::CreateComment {

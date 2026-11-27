@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use super::provider_credential_mutation_port::ProviderMutationAuthorizationPort;
 use super::provider_credentials_port::ProviderCredentialLease;
+use crate::domain::issue_automation::feedback::JiraFeedbackRejection;
 use crate::domain::provider_credentials::CredentialResult;
 
 pub enum JiraIssueFeedbackReadRequest {
@@ -73,6 +74,7 @@ pub enum JiraIssueFeedbackWriteResponse {
     Comment(JiraIssueFeedbackDocument),
     /// Only a 204 response with an empty body establishes this acknowledgement.
     Transitioned,
+    Rejected(JiraFeedbackRejection),
 }
 
 pub trait JiraIssueFeedbackApiPort: Send + Sync {

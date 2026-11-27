@@ -2,6 +2,7 @@
 use crate::application::port::outbound::provider_credential_mutation_port::ProviderMutationAuthorizationPort;
 use crate::application::port::outbound::provider_credentials_port::ProviderAccountVerifierPort;
 use crate::application::port::outbound::provider_work_port::ProviderWorkApiPort;
+use crate::domain::issue_automation::feedback::JiraFeedbackRejection;
 use crate::domain::provider_credentials::*;
 use crate::domain::provider_work::*;
 use base64::Engine;
@@ -33,6 +34,7 @@ struct HttpRequest {
     expected: ExpectedResponse,
     send_authorization: Option<Arc<dyn ProviderMutationAuthorizationPort>>,
     preserve_client_errors: bool,
+    report_jira_feedback_rejection: bool,
     query: Vec<(String, String)>,
     body: Option<Value>,
     limit: usize,
@@ -52,12 +54,13 @@ enum ExpectedResponse {
 enum HttpResponse {
     Json(Value),
     NoContent,
+    JiraRejected(JiraFeedbackRejection),
 }
 impl HttpResponse {
     fn json(self) -> CredentialResult<Value> {
         match self {
             Self::Json(value) => Ok(value),
-            Self::NoContent => Err(ProviderCredentialError::Corrupt),
+            Self::NoContent | Self::JiraRejected(_) => Err(ProviderCredentialError::Corrupt),
         }
     }
 }
@@ -199,6 +202,14 @@ impl HttpTransport for NativeHttpTransport {
             .map_err(|_| ProviderCredentialError::Unavailable)?;
         ensure_live(cancelled, deadline)?;
         let status = response.status();
+        if let Some(rejection) = jira_feedback_rejection(
+            status.as_u16(),
+            request.report_jira_feedback_rejection,
+            request.send_authorization.is_some(),
+        ) {
+            // Preserve only the definitive status, never the potentially sensitive body.
+            return Ok(HttpResponse::JiraRejected(rejection));
+        }
         check_response_status(
             status.as_u16(),
             request.expected,
@@ -234,6 +245,18 @@ impl HttpTransport for NativeHttpTransport {
         parse_expected_response(&bytes, token, request.expected, request.limit)
     }
 }
+fn jira_feedback_rejection(
+    status: u16,
+    enabled: bool,
+    authorized: bool,
+) -> Option<JiraFeedbackRejection> {
+    if enabled && authorized {
+        JiraFeedbackRejection::from_http_status(status)
+    } else {
+        None
+    }
+}
+
 fn check_response_status(
     status: u16,
     expected: ExpectedResponse,
@@ -346,6 +369,7 @@ impl ProviderHttpAdapter {
                     expected: ExpectedResponse::Json(200),
                     send_authorization: None,
                     preserve_client_errors: true,
+                    report_jira_feedback_rejection: false,
                     query: request.query,
                     body: request.body,
                     limit: RESPONSE_LIMIT,
@@ -388,6 +412,7 @@ impl ProviderHttpAdapter {
                     expected: ExpectedResponse::Json(200),
                     send_authorization: None,
                     preserve_client_errors: false,
+                    report_jira_feedback_rejection: false,
                     query: read.query,
                     body: None,
                     limit: read.limit,
@@ -439,6 +464,7 @@ impl ProviderHttpAdapter {
                     expected: ExpectedResponse::Json(200),
                     send_authorization,
                     preserve_client_errors: false,
+                    report_jira_feedback_rejection: false,
                     query: vec![],
                     body: Some(json!({"query":query,"variables":variables})),
                     limit: RESPONSE_LIMIT,

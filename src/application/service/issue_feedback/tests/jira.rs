@@ -230,3 +230,32 @@ fn jira_label_feedback_cannot_silently_satisfy_the_first_grant_requirement() {
     assert!(fixture.base.writes().is_empty());
     assert!(!fixture.base.store.snapshot_value().first_grant_entered);
 }
+
+#[test]
+fn definitive_jira_rejection_is_terminal_without_readback_or_resend() {
+    use crate::domain::issue_automation::feedback::JiraFeedbackRejection;
+    for reason in [
+        JiraFeedbackRejection::BadRequest,
+        JiraFeedbackRejection::Forbidden,
+        JiraFeedbackRejection::NotFound,
+    ] {
+        let fixture = JiraFixture::new();
+        *fixture.base.provider.write_behavior.lock().unwrap() = WriteBehavior::JiraRejected(reason);
+        fixture.sync();
+        let record = fixture.base.store.record();
+        assert_eq!(record.state, IssueFeedbackIntentState::Abandoned);
+        assert_eq!(record.jira_rejection, Some(reason));
+        assert!(!record.state.is_unresolved());
+        assert!(record.receipt.is_none());
+        assert_eq!(fixture.base.writes().len(), 1);
+        assert_eq!(fixture.base.provider.reconciles.load(Ordering::SeqCst), 0);
+        fixture
+            .service()
+            .reconcile_pending(&IssueCollectionCancellation::new())
+            .unwrap();
+        fixture.sync();
+        assert_eq!(fixture.base.writes().len(), 1);
+        assert_eq!(fixture.base.store.snapshot_value().publication_attempts, 1);
+        assert!(fixture.service().pending_events().unwrap().is_empty());
+    }
+}

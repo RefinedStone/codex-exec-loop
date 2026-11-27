@@ -115,6 +115,9 @@ impl JiraIssueFeedbackAdapter {
             Ok(JiraIssueFeedbackWriteResponse::Transitioned) => {
                 Ok(IssueFeedbackWriteResult::Acknowledged { comment_id: None })
             }
+            Ok(JiraIssueFeedbackWriteResponse::Rejected(reason)) => {
+                Ok(IssueFeedbackWriteResult::JiraRejected(reason))
+            }
             Ok(_) => Ok(IssueFeedbackWriteResult::Contradictory),
             Err(_) => Ok(IssueFeedbackWriteResult::Unconfirmed),
         }

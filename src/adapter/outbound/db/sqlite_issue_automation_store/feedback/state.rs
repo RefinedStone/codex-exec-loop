@@ -181,7 +181,8 @@ pub(super) fn publication_attempts(connection: &Connection, issue: &IssueReferen
     let count: i64 = connection.query_row(
         "SELECT count(*) FROM issue_feedback_intents
          WHERE provider=?1 AND server_id=?2 AND repository_id=?3 AND issue_id=?4
-           AND status IN ('sent','confirmed','needs_confirmation')",
+           AND (status IN ('sent','confirmed','needs_confirmation')
+                OR (status = 'abandoned' AND json_extract(record, '$.jira_rejection') IS NOT NULL))",
         params![
             enum_name(&issue.provider)?,
             issue.server_id,
