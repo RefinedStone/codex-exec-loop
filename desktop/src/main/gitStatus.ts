@@ -509,6 +509,9 @@ async function readSourceDiff(file: RepositoryFile, sourceInput: unknown): Promi
   if (await anyContentFilter(file.root, [file.relativePath, ...(original ? [original.relativePath] : [])])) {
     throw new Error(FILTER_MESSAGE);
   }
+  // A staged rename already has its new path in the index. Only the worktree status
+  // column identifies a rename between the index and the working copy.
+  const comparisonOriginal = source === "index_worktree" && !/[RC]/.test(change.status[1] ?? "") ? null : original;
   const before = await snapshotGitFilePlan(file, original);
   const read = async (): Promise<GitFileDiff> => {
     if (source === "untracked") return readUntrackedFile(file.root, file.target);
@@ -518,7 +521,7 @@ async function readSourceDiff(file: RepositoryFile, sourceInput: unknown): Promi
     const args = source === "head_index" ? ["--cached", ...(before.headOid ? [before.headOid] : [])]
       : source === "head_worktree" ? [before.headOid!] : [];
     const result = await runGit(file.root, ["diff", ...args, "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--", file.pathspec,
-      ...(original && source !== "index_worktree" ? [original.pathspec] : [])], FILE_DIFF_LIMIT);
+      ...(comparisonOriginal ? [comparisonOriginal.pathspec] : [])], FILE_DIFF_LIMIT);
     if (result.code !== 0 || result.timedOut) throw new Error(failureMessage(result, "git diff 가 실패했습니다."));
     return { kind: "gitDiff", text: result.stdout, truncated: result.truncated };
   };
@@ -531,7 +534,8 @@ async function readSourceDiff(file: RepositoryFile, sourceInput: unknown): Promi
     throw new Error(CHANGED_SINCE_CONFIRMATION);
   }
   const snapshotId = createHash("sha256").update(JSON.stringify([file.root, file.relativePath, change.originalPath, source, before, result])).digest("hex");
+  const binary = result.kind === "binary" || (result.kind === "gitDiff" && /^(Binary files .* differ|GIT binary patch)\r?$/m.test(result.text));
   return { ...result, snapshot: { source, snapshotId, headOid: before.headOid, path: file.relativePath,
-    originalPath: source === "index_worktree" ? null : change.originalPath,
-    contentStatus: result.kind === "binary" ? "binary" : result.truncated ? "truncated" : result.kind === "content" ? "complete" : "patch_only" } };
+    originalPath: comparisonOriginal?.relativePath ?? null,
+    contentStatus: binary ? "binary" : result.truncated ? "truncated" : result.kind === "content" ? "complete" : "patch_only" } };
 }
