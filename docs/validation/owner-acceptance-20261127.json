@@ -1,0 +1,231 @@
+{
+  "schema": 1,
+  "observedDateUtc": "2026-11-27",
+  "sourceSha": "865e0ade186221b24d02a4f54ab58d53f78b693d",
+  "validationToolSha": "ee84865a2f14a03275caa2217955fb6fc3f007c0",
+  "validationToolPr": "https://github.com/RefinedStone/codex-exec-loop/pull/3021",
+  "platform": {
+    "os": "Windows",
+    "kernel": "10.0.26200",
+    "architecture": "x64",
+    "rust": "1.95.0",
+    "node": "24.13.0"
+  },
+  "checks": [
+    {
+      "name": "release-launcher-and-rename",
+      "passed": 46,
+      "failed": 0,
+      "skipped": 4,
+      "skipReason": "Existing POSIX signal cases on Windows"
+    },
+    {
+      "name": "desktop-focused",
+      "files": 13,
+      "passed": 251,
+      "failed": 0
+    },
+    {
+      "name": "desktop-build",
+      "exit": 0
+    },
+    {
+      "name": "desktop-typecheck",
+      "exit": 0
+    },
+    {
+      "name": "electron-vault-synthetic",
+      "passed": 32,
+      "failed": 0
+    },
+    {
+      "name": "native-selected",
+      "passed": 84,
+      "failed": 0,
+      "ignored": 1,
+      "seconds": 408.81,
+      "groups": {
+        "restoreBridge": 46,
+        "sharedCopyGateway": 14,
+        "windowsValidator": 14,
+        "windowsPointerSharingFailure": 1,
+        "proposeFlow": 9
+      },
+      "ignoredReason": "Existing explicit manual OS confirmation and real credential test"
+    },
+    {
+      "name": "unsupported-isolation-publication",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "name": "legacy-current-release-contracts",
+      "passed": 51,
+      "failed": 0
+    },
+    {
+      "name": "candidate-fresh-archive",
+      "exit": 0
+    },
+    {
+      "name": "genuine-legacy-task-upgrade",
+      "exit": 1,
+      "acceptance": "blocked",
+      "reason": "Candidate rejects schema 5; migration floor is 7. Historical task remains readable by old binary."
+    },
+    {
+      "name": "required-windows-full-planner",
+      "result": "blocked",
+      "normalExit": false,
+      "termination": "Owned stalled monitor stopped",
+      "desktopTestsPassed": 1527,
+      "desktopTestsSkipped": 8,
+      "lastNativeSelector": "composition::repository_kernel::restart_tests",
+      "lastNativePassed": 23,
+      "diagnosis": "Runner did not return after a passing result and had no live test child. Cause not established."
+    }
+  ],
+  "artifacts": {
+    "legacy": {
+      "release": "v1.3.5",
+      "assetId": 452661989,
+      "name": "codex-exec-loop-native-1.3.5-x86_64-pc-windows-msvc.tar.gz",
+      "sha256": "496097730bc8b7cb37d6d79759456bc68bf47d5995eaad8e029a1d741ca01eaa",
+      "payloadChecksumsMatched": 10
+    },
+    "candidate": {
+      "name": "akra-ade-1.3.5-x86_64-pc-windows-msvc.tar.gz",
+      "profile": "debug",
+      "sha256": "3dd0a7c2825f0861ce19887702d4b2558d5a63ca74e7aa739802d78802f135aa",
+      "binarySha256": "f81058c74399941f8f5750e82b7a062626b755d87688e722fb603734f44f34d9"
+    }
+  },
+  "remote": {
+    "issues": [
+      {
+        "number": 2588,
+        "state": "OPEN",
+        "assignees": 0
+      },
+      {
+        "number": 2589,
+        "state": "OPEN",
+        "assignees": 0
+      },
+      {
+        "number": 2591,
+        "state": "OPEN",
+        "assignees": 0
+      },
+      {
+        "number": 2703,
+        "state": "OPEN",
+        "assignees": 0
+      },
+      {
+        "number": 2704,
+        "state": "OPEN",
+        "assignees": 0
+      },
+      {
+        "number": 2705,
+        "state": "OPEN",
+        "assignees": 0
+      },
+      {
+        "number": 2724,
+        "state": "OPEN",
+        "assignees": 0
+      },
+      {
+        "number": 2846,
+        "state": "OPEN",
+        "assignees": 0
+      },
+      {
+        "number": 2860,
+        "state": "OPEN",
+        "assignees": 0
+      },
+      {
+        "number": 2861,
+        "state": "OPEN",
+        "assignees": 0
+      },
+      {
+        "number": 2868,
+        "state": "OPEN",
+        "assignees": 0
+      },
+      {
+        "number": 2870,
+        "state": "OPEN",
+        "assignees": 0
+      },
+      {
+        "number": 2879,
+        "state": "OPEN",
+        "assignees": 0
+      },
+      {
+        "number": 2555,
+        "state": "OPEN",
+        "assignees": 0
+      },
+      {
+        "number": 2644,
+        "state": "OPEN",
+        "assignees": 0
+      }
+    ],
+    "repositoryId": 1201646585,
+    "renameSnapshot": {
+      "branches": 14,
+      "openPullRequests": 6,
+      "releases": 12,
+      "rulesets": 1,
+      "queuedRuns": 34,
+      "inProgressRuns": 1,
+      "pendingRuns": 1
+    },
+    "protection": {
+      "ruleset": 20411125,
+      "requiredContext": "CI Gate",
+      "bypassActors": [
+        {
+          "actor_type": "RepositoryRole",
+          "actor_id": 5,
+          "bypass_mode": "pull_request"
+        }
+      ],
+      "tagRulesets": 0,
+      "environments": 0
+    },
+    "npmCredentialMetadata": {
+      "repositorySecretPresent": true,
+      "valueRead": false,
+      "packageScopeVerified": false
+    },
+    "publicProjectsRead": {
+      "owner": "github",
+      "number": 4247,
+      "result": "blocked",
+      "reason": "Active token lacks read:project"
+    },
+    "tunnelCoreIssue1": "open"
+  },
+  "safety": {
+    "modelCalls": 0,
+    "productProviderWrites": 0,
+    "nativeConsentClicks": 0,
+    "realCredentialAccess": 0,
+    "settingsChanges": 0,
+    "packagePublications": 0
+  },
+  "mutations": {
+    "skippedCandidateRead": "Detected: 7 failures including task-loss/identity/content cases",
+    "brokenArchiveDigestPin": "Detected before accepting a replaced historical artifact",
+    "discardedGnuLongName": "Detected truncated-name collision",
+    "relaxedHistoricalPathBounds": "Detected missing rejection"
+  }
+}
