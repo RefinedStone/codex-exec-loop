@@ -42,6 +42,7 @@ node --test \
   scripts/agent-plan.test.mjs \
   scripts/ci-plan-inputs.test.mjs \
   scripts/ci-impact-plan.test.mjs \
+  scripts/ci-rust-test-profile.test.mjs \
   scripts/npm-audit-gate.test.mjs \
   scripts/pr-validation-approval-package.test.mjs \
   scripts/pr-validation-rollout-evidence.test.mjs \
