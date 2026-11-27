@@ -870,6 +870,34 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_detail_draft_of_a_deleted_direction_is_refused_as_stale() {
+        // The executor picks the draft files from the current directions, so it compares the revision first.
+        let (workspace, admin) = admin("promote-deleted-direction");
+        run_git(std::path::Path::new(&workspace.0), &["init", "-q"]);
+        let mut release = direction("", "Release", None);
+        release.detail_doc_path = "docs/release.md".to_string();
+        admin.upsert_direction(release).unwrap();
+        let draft = admin
+            .create_draft_session(PlanningAdminDraftKind::DirectionDetail, Some("dir-release"))
+            .unwrap();
+        let revision = admin.load_management_view().unwrap().planning_revision;
+        admin
+            .delete_direction(delete_direction("dir-release", Some(revision)))
+            .unwrap();
+
+        let stale = admin
+            .promote_draft_session(PlanningAdminDraftMutationRequest {
+                draft_name: draft.draft_name,
+                kind: PlanningAdminDraftKind::DirectionDetail,
+                direction_id: Some("dir-release".to_string()),
+                files: Vec::new(),
+            })
+            .unwrap_err();
+        let refusal = PlanningAdminMutationRefusal::find_in(&stale).expect("a refusal");
+        assert_eq!(refusal.reason, ReasonCode::PlanningRevisionStale);
+    }
+
     // The profile file is written beside the repository. It is unavailable on Windows.
     #[cfg(not(windows))]
     #[test]

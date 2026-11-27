@@ -21,7 +21,9 @@ use crate::application::service::planning::{
     PlanningDraftEditorFile, PlanningDraftPromoteResult, PlanningDraftSaveResult,
     RESULT_OUTPUT_FILE_PATH, validate_planning_draft_name,
 };
-use crate::domain::planning::{DirectionCatalogDocument, PlanningFileKind, PlanningWorkspaceFiles};
+use crate::domain::planning::{
+    DirectionCatalogDocument, PlanningFileKind, PlanningMutationRefusal, PlanningWorkspaceFiles,
+};
 
 /*
  * draft session은 admin editor의 isolation layer다. operator가 result-output, queue-idle prompt, direction
@@ -226,6 +228,20 @@ impl PlanningAdminFacadeService {
         direction_id: Option<&str>,
         expected_planning_revision: i64,
     ) -> Result<PlanningDraftPromoteResult> {
+        // 파일을 고르려면 지금의 방향 목록을 읽는다. 그 방향이 그 사이에 지워졌을 수 있으므로 revision 을 먼저 견준다.
+        if let Some(current) = self
+            .load_operator_planning_documents()?
+            .observed_planning_revision
+            && current != expected_planning_revision
+        {
+            return Err(PlanningMutationRefusal::revision_stale(
+                format!(
+                    "planning authority changed from revision {expected_planning_revision} to {current}; reload and retry"
+                ),
+                current,
+            )
+            .into());
+        }
         let request = PlanningAdminDraftMutationRequest {
             draft_name: draft_name.to_string(),
             kind,
