@@ -303,7 +303,7 @@ export class KernelConnection {
   private connected = false;
   private generation = 0;
   private attentionRequest = 0;
-  private attentionQueued = false;
+  private attentionRead: { generation: number; dirty: boolean } | null = null;
   private overviewGeneration = 0;
   private overviewRequest = 0;
   private planningEvidenceRequest = 0;
@@ -1052,11 +1052,22 @@ export class KernelConnection {
   private scheduleAttentionRead(): void {
     if (!this.canRead("issue_attention")) return;
     ++this.attentionRequest;
-    if (this.attentionQueued) return;
-    this.attentionQueued = true;
+    if (this.attentionRead?.generation === this.generation) {
+      this.attentionRead.dirty = true;
+      return;
+    }
+    const pending = { generation: this.generation, dirty: false };
+    this.attentionRead = pending;
     queueMicrotask(() => {
-      this.attentionQueued = false;
-      void this.readAttention();
+      if (this.attentionRead !== pending || pending.generation !== this.generation) return;
+      // Events before dispatch are covered by this read; events while it is in
+      // flight invalidate its response and request exactly one successor read.
+      pending.dirty = false;
+      void this.readAttention().finally(() => {
+        if (this.attentionRead !== pending) return;
+        this.attentionRead = null;
+        if (pending.dirty) this.scheduleAttentionRead();
+      });
     });
   }
 

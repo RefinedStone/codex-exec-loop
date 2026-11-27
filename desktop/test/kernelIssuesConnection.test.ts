@@ -1749,23 +1749,54 @@ describe("issue decisions and interventions", () => {
     expect(h.requests("akra/kernel/command")).toHaveLength(0);
   });
 
-  it("discards an old attention snapshot after an authority event", async () => {
+  it.each(["success", "failure"] as const)("coalesces attention events until an in-flight read ends with %s", async (outcome) => {
     const h = harness();
     h.connection.connectionChanged(true);
     const shown = h.connection.show("/repo", ["issue_attention"]);
     h.reply(h.requests("akra/kernel/attach")[0], { client_id: "1", protocol_version: 1, kernel: "repo" });
     await shown;
     const old = h.query("attention");
-    h.connection.handleEvent({ event: { type: "resync" } });
+    for (let index = 0; index < 20; index++) {
+      h.connection.handleEvent({ event: { type: "thread_activity", threads: [] } });
+      await Promise.resolve();
+    }
+    expect(h.queries("attention")).toHaveLength(1);
+    if (outcome === "success") h.reply(old, { type: "attention", items: [{ id: "obsolete" }] });
+    else h.fail(old);
+    await h.when(() => h.queries("attention").length === 2);
+    expect(h.view().attentionItems).toBeNull();
+    h.reply(h.query("attention"), { type: "attention", items: [] });
+    await h.when(() => h.view().attentionItems !== null);
+    expect(h.view().attentionItems).toEqual([]);
     await Promise.resolve();
-    const fresh = h.query("attention");
-    expect(fresh!.id).not.toBe(old!.id);
-    h.reply(fresh, { type: "attention", items: [] });
-    await Promise.resolve();
+    expect(h.queries("attention")).toHaveLength(2);
+    expect(h.requests("akra/kernel/command")).toHaveLength(0);
+  });
+
+  it("keeps a reconnect read in flight when the old connection's read completes", async () => {
+    const h = harness();
+    h.connection.connectionChanged(true);
+    const shown = h.connection.show("/repo", ["issue_attention"]);
+    h.reply(h.requests("akra/kernel/attach")[0], { client_id: "1", protocol_version: 1, kernel: "repo" });
+    await shown;
+    const old = h.query("attention");
+    h.connection.connectionChanged(false);
+    h.connection.connectionChanged(true);
+    h.reply(h.requests("akra/kernel/attach").at(-1), { client_id: "2", protocol_version: 1, kernel: "repo" });
+    await h.when(() => h.queries("attention").length === 2);
+    const current = h.query("attention");
     h.reply(old, { type: "attention", items: [{ id: "obsolete" }] });
     await Promise.resolve();
+    await Promise.resolve();
+    h.connection.handleEvent({ event: { type: "resync" } });
+    await Promise.resolve();
+    expect(h.queries("attention")).toHaveLength(2);
+    h.reply(current, { type: "attention", items: [{ id: "also-obsolete" }] });
+    await h.when(() => h.queries("attention").length === 3);
+    expect(h.view().attentionItems).toBeNull();
+    h.reply(h.query("attention"), { type: "attention", items: [] });
+    await h.when(() => h.view().attentionItems !== null);
     expect(h.view().attentionItems).toEqual([]);
-    expect(h.requests("akra/kernel/command")).toHaveLength(0);
   });
 
   it("does not restore attention when a fresh detail already shows the decision resolved", async () => {
