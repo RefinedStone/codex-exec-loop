@@ -61,3 +61,14 @@ cargo test --locked --lib adapter::outbound::issue_code_validator::linux:: -- --
 | 경계 시험 | 기존 filesystem, 외부/private 파일·쓰기·TCP·abstract Unix socket, stdin 공유본, 출력 보관·해시 변경, timeout·관측된 detach 자식 종료, 실제 service 게시 관문 모두 통과 |
 
 후속 commit은 이 결과와 지원 범위를 문서화하며, 검증한 Rust 코드와 workflow는 변경하지 않는다. 검증된 범위는 위 정확한 프로필이다. Ubuntu 24.04 기본 호스트의 앞선 차단 결과와 WSL 미지원은 유지하며, 다른 배포판·cgroup 집계 quota·실제 사용자 Vault 원문 접근 시험을 수행했다고 주장하지 않는다.
+
+### 실행 중 사용자 취소 (#2703)
+
+지원 프로필에서 아래 시험은 실제 runner에 무해한 셸 스크립트를 전달한다. 호스트의
+읽기 전용 프로세스 관측으로 셸과 대기 중인 자식을 확인한 뒤 취소한다. `Cancelled`
+결과, 관측한 프로세스의 종료, 실행 중 실제로 존재했던 staging 디렉터리의 삭제를 확인한다.
+Ubuntu 24.04 기본 호스트나 WSL은 이 시험의 지원 프로필이 아니다.
+
+```sh
+cargo test --locked --lib adapter::outbound::issue_code_validator::linux::native_tests::native_profile_cancel_stops_live_fixture_and_removes_staging -- --ignored --exact --nocapture
+```
