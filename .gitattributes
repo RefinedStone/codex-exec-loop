@@ -5,3 +5,4 @@
 *.yml text eol=lf
 *.yaml text eol=lf
 *.ansi binary
+/assets/admin/game/akra-diorama.js text eol=lf
