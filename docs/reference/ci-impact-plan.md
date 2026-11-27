@@ -175,7 +175,7 @@ sourceSha/baseSha/localChangeId, configuration, 소유권 및 graph hash는 모�
 
 - base snapshot/resolve 누락, 불완전한 optional feature graph
 - 등록되지 않은 workspace member, planned owner, 불완전한 consumer 소유권
-- manifest/lock/toolchain/빌드 정책 변경, 미등록 경로·생성 입력
+- root와 모든 member의 Cargo.toml/Cargo.lock, toolchain/빌드 정책 변경, 미등록 경로·생성 입력
 - 알 수 없는 dependency kind, 순환, 누락된 resolve node
 - 비어 있거나 잘못된 변경 목록, 충돌 중인 경로
 - root 소비자 영향 또는 실행할 시험 target이 확인되지 않은 package

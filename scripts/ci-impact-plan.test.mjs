@@ -284,7 +284,7 @@ test("documentation and executable documentation are classified explicitly", () 
 });
 
 test("global build inputs, unmerged and invalid paths all select full validation", () => {
-  for (const path of ["Cargo.toml", "Cargo.lock", ".cargo/config.toml", "rust-toolchain.toml", "scripts/ci-impact-plan.mjs", "build.rs"]) {
+  for (const path of ["Cargo.toml", "Cargo.lock", "crates/leaf/Cargo.toml", "crates/leaf/Cargo.lock", "nested/generated/Cargo.lock", ".cargo/config.toml", "rust-toolchain.toml", "scripts/ci-impact-plan.mjs", "build.rs"]) {
     assertFull(createValidationPlan(request({ changes: [{ status: "M", path }] })), "global-input");
   }
   assertFull(createValidationPlan(request({ changes: [{ status: "U", path: "crates/leaf/src/lib.rs" }] })), "unmerged-change");
