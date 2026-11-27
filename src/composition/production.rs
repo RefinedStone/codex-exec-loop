@@ -504,6 +504,14 @@ pub(crate) fn login_codex_delegation() -> Result<i32> {
     crate::adapter::outbound::app_server::codex_thread::login()
 }
 
+/// Read or explicitly update the Gateway-owned context ledger. Never fall back to a second ledger owner.
+pub(crate) fn work_context_cli_request(
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value> {
+    crate::adapter::outbound::gateway_kernel_client::request_context(method, params)
+}
+
 pub(crate) fn build_gateway_backend(
     run_dir: &Path,
     providers: crate::composition::provider_credentials::ProviderServices,

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -6,18 +6,20 @@ use anyhow::{Result, bail};
 use chrono::{DateTime, SecondsFormat, Utc};
 
 use crate::application::port::inbound::work_context_port::{
-    AttachContextRequest, ContextResource, ContextScope, ContextScopeRequest, WorkContextPort,
+    AttachContextRequest, ContextResource, ContextScope, ContextScopeRequest,
+    ContextSelectionEntry, ContextSelectionRequest, WorkContextPort,
 };
 use crate::application::port::outbound::external_resource_version_port::ExternalResourceVersionPort;
 use crate::application::port::outbound::repository_identity_port::RepositoryIdentityPort;
 use crate::application::port::outbound::thread_transcript_port::ThreadTranscriptPort;
 use crate::application::port::outbound::work_context_store_port::{
-    ResourceVersionCheck, WORK_CONTEXT_SCOPE_PATH, WORK_CONTEXT_SCOPE_REPOSITORY,
-    WORK_CONTEXT_SCOPE_TASK, WORK_CONTEXT_SCOPE_THREAD, WorkContextLink, WorkContextStorePort,
+    ResourceVersionCheck, WORK_CONTEXT_SCOPE_EXCLUDE, WORK_CONTEXT_SCOPE_PATH,
+    WORK_CONTEXT_SCOPE_PIN, WORK_CONTEXT_SCOPE_REPOSITORY, WORK_CONTEXT_SCOPE_TASK,
+    WORK_CONTEXT_SCOPE_THREAD, WorkContextLink, WorkContextStorePort,
 };
 use crate::domain::work_context::{
-    ExternalResourceRecognizer, ExternalResourceRef, external_resource_recognizers,
-    extract_external_resources, normalize_repository_path,
+    ContextPreference, ExternalResourceRecognizer, ExternalResourceRef,
+    external_resource_recognizers, extract_external_resources, normalize_repository_path,
 };
 
 /// 스레드 id 와 작업 id 는 장부의 키이다. app-server 의 id 는 짧은 UUID 이다.
@@ -145,14 +147,24 @@ impl WorkContextService {
                 kind: WORK_CONTEXT_SCOPE_REPOSITORY,
                 id: repository,
             },
-            ContextScope::Task { task_id } => LedgerScope {
-                kind: WORK_CONTEXT_SCOPE_TASK,
-                id: repository_scope_id(&repository, valid_scope_id(task_id)?),
-            },
-            ContextScope::Path { path } => LedgerScope {
-                kind: WORK_CONTEXT_SCOPE_PATH,
-                id: repository_scope_id(&repository, &normalize_repository_path(path)?),
-            },
+            ContextScope::Task { task_id } => {
+                let task_id = valid_scope_id(task_id)?;
+                if !identity.task_exists(&request.cwd, task_id)? {
+                    bail!("the task does not exist in this repository");
+                }
+                LedgerScope {
+                    kind: WORK_CONTEXT_SCOPE_TASK,
+                    id: repository_scope_id(&repository, task_id),
+                }
+            }
+            ContextScope::Path { path } => {
+                let path = normalize_repository_path(path)?;
+                identity.validate_path(&request.cwd, &path)?;
+                LedgerScope {
+                    kind: WORK_CONTEXT_SCOPE_PATH,
+                    id: repository_scope_id(&repository, &path),
+                }
+            }
         })
     }
 
@@ -331,6 +343,161 @@ fn attached_resource(
 }
 
 impl WorkContextPort for WorkContextService {
+    fn select_resources(
+        &self,
+        request: &ContextSelectionRequest,
+    ) -> Result<Vec<ContextSelectionEntry>> {
+        let identity = self
+            .repository_identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("repository scopes are not available"))?;
+        let repository = identity.repository_identity(&request.cwd)?;
+        if request.paths.len() > 32 {
+            bail!("too many context paths");
+        }
+        let task = request.task_id.as_deref().map(valid_scope_id).transpose()?;
+        if let Some(task) = task
+            && !identity.task_exists(&request.cwd, task)?
+        {
+            bail!("the task does not exist in this repository");
+        }
+        // Match complete ancestors, never a raw string prefix. A rename is an explicit
+        // new path; linked worktrees share the repository ledger.
+        let mut prefixes = BTreeSet::new();
+        for path in &request.paths {
+            let path = normalize_repository_path(path)?;
+            identity.validate_path(&request.cwd, &path)?;
+            let mut prefix = path.as_str();
+            loop {
+                prefixes.insert(prefix.to_owned());
+                if prefixes.len() > 256 {
+                    bail!("too many context path scopes");
+                }
+                let Some((parent, _)) = prefix.rsplit_once('/') else {
+                    break;
+                };
+                prefix = parent;
+            }
+        }
+        let focused = task.is_some() || !prefixes.is_empty();
+        let _guard = self
+            .version_check
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut selected = BTreeMap::new();
+        let mut add_scope =
+            |kind, id: String, matched_scope: ContextScope, include, reason| -> Result<()> {
+                for link in self.store.links(kind, &id)? {
+                    let key = (link.resource.kind.clone(), link.resource.key.clone());
+                    selected
+                        .entry(key)
+                        .or_insert_with(|| ContextSelectionEntry {
+                            resource: context_resource(link),
+                            selected: include,
+                            reason,
+                            matched_scope: Some(matched_scope.clone()),
+                        });
+                }
+                Ok(())
+            };
+        // Task matches beat path matches, and the longest path wins among path matches.
+        if let Some(task) = task {
+            add_scope(
+                WORK_CONTEXT_SCOPE_TASK,
+                repository_scope_id(&repository, task),
+                ContextScope::Task {
+                    task_id: task.to_owned(),
+                },
+                true,
+                "task_link",
+            )?;
+        }
+        let mut prefixes: Vec<_> = prefixes.into_iter().collect();
+        prefixes.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+        for path in prefixes {
+            add_scope(
+                WORK_CONTEXT_SCOPE_PATH,
+                repository_scope_id(&repository, &path),
+                ContextScope::Path { path },
+                true,
+                "path_prefix",
+            )?;
+        }
+        add_scope(
+            WORK_CONTEXT_SCOPE_REPOSITORY,
+            repository.clone(),
+            ContextScope::Repository,
+            !focused,
+            if focused {
+                "repository_only"
+            } else {
+                "repository_link"
+            },
+        )?;
+        // The override applies even without another matching link. Exclude is fail-closed.
+        for (kind, include, reason) in [
+            (WORK_CONTEXT_SCOPE_PIN, true, "user_pin"),
+            (WORK_CONTEXT_SCOPE_EXCLUDE, false, "user_exclude"),
+        ] {
+            for link in self.store.links(kind, &repository)? {
+                let key = (link.resource.kind.clone(), link.resource.key.clone());
+                let entry = selected
+                    .entry(key)
+                    .or_insert_with(|| ContextSelectionEntry {
+                        resource: context_resource(link),
+                        selected: include,
+                        reason,
+                        matched_scope: None,
+                    });
+                entry.selected = include;
+                entry.reason = reason;
+            }
+        }
+        let mut entries: Vec<_> = selected.into_values().collect();
+        entries.sort_by_key(|entry| {
+            if entry.reason == "user_pin" {
+                0
+            } else if entry.selected {
+                1
+            } else {
+                2
+            }
+        });
+        Ok(entries)
+    }
+
+    fn set_repository_preference(
+        &self,
+        cwd: &str,
+        url: &str,
+        preference: ContextPreference,
+    ) -> Result<()> {
+        let identity = self
+            .repository_identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("repository scopes are not available"))?;
+        let repository = identity.repository_identity(cwd)?;
+        let resource = attached_resource(url, &self.recognizers)?;
+        {
+            let _guard = self
+                .version_check
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.store
+                .set_repository_preference(&repository, &resource, preference)?;
+        }
+        if preference == ContextPreference::Pin {
+            self.check_versions(
+                &LedgerScope {
+                    kind: WORK_CONTEXT_SCOPE_REPOSITORY,
+                    id: repository,
+                },
+                Some(&resource),
+            )?;
+        }
+        Ok(())
+    }
+
     fn thread_resources(&self, thread_id: &str) -> Result<Vec<ContextResource>> {
         let scope = LedgerScope::thread(thread_id)?;
         self.collect(&scope.id)?;
@@ -488,17 +655,51 @@ mod tests {
     }
 
     impl WorkContextStorePort for FakeStore {
+        fn set_repository_preference(
+            &self,
+            repository: &str,
+            resource: &ExternalResourceRef,
+            preference: ContextPreference,
+        ) -> Result<()> {
+            let target =
+                crate::application::port::outbound::work_context_store_port::preference_scope_kind(
+                    preference,
+                );
+            for kind in [WORK_CONTEXT_SCOPE_PIN, WORK_CONTEXT_SCOPE_EXCLUDE] {
+                if Some(kind) != target {
+                    let id = format!("{kind}\0{repository}");
+                    self.links
+                        .lock()
+                        .unwrap()
+                        .retain(|(scope, link)| scope != &id || !same_document(link, resource));
+                }
+            }
+            if let Some(kind) = target {
+                self.link_resources(kind, repository, "user", std::slice::from_ref(resource))?;
+            }
+            if preference == ContextPreference::Pin {
+                self.link_resources(
+                    WORK_CONTEXT_SCOPE_REPOSITORY,
+                    repository,
+                    "user",
+                    std::slice::from_ref(resource),
+                )?;
+            }
+            Ok(())
+        }
+
         fn link_resources(
             &self,
-            _scope_kind: &str,
+            scope_kind: &str,
             scope_id: &str,
             source: &str,
             resources: &[ExternalResourceRef],
         ) -> Result<()> {
+            let scope_id = format!("{scope_kind}\0{scope_id}");
             let mut links = self.links.lock().unwrap();
             for resource in resources {
                 let known = links.iter().any(|(scope, link)| {
-                    scope == scope_id
+                    scope == &scope_id
                         && link.resource.kind == resource.kind
                         && link.resource.key == resource.key
                 });
@@ -522,13 +723,14 @@ mod tests {
             }
             Ok(())
         }
-        fn links(&self, _scope_kind: &str, scope_id: &str) -> Result<Vec<WorkContextLink>> {
+        fn links(&self, scope_kind: &str, scope_id: &str) -> Result<Vec<WorkContextLink>> {
+            let scope_id = format!("{scope_kind}\0{scope_id}");
             let links = self
                 .links
                 .lock()
                 .unwrap()
                 .iter()
-                .filter(|(scope, _)| scope == scope_id)
+                .filter(|(scope, _)| scope == &scope_id)
                 .map(|(_, link)| link.clone())
                 .collect();
             if let Some(observer) = self.link_reads.lock().unwrap().as_ref() {
@@ -560,14 +762,15 @@ mod tests {
         }
         fn set_read_version(
             &self,
-            _scope_kind: &str,
+            scope_kind: &str,
             scope_id: &str,
             resource: &ExternalResourceRef,
             version: &str,
             replace: bool,
         ) -> Result<()> {
+            let scope_id = format!("{scope_kind}\0{scope_id}");
             for (scope, link) in self.links.lock().unwrap().iter_mut() {
-                if scope == scope_id
+                if scope == &scope_id
                     && same_document(link, resource)
                     && (replace || link.read_version.is_none())
                 {
@@ -1148,6 +1351,15 @@ mod tests {
                 _ => bail!("not a repository"),
             }
         }
+        fn task_exists(&self, _cwd: &str, task_id: &str) -> Result<bool> {
+            Ok(task_id == "T-1")
+        }
+        fn validate_path(&self, _cwd: &str, path: &str) -> Result<()> {
+            if path.starts_with("escape/") {
+                bail!("outside fixture repository");
+            }
+            Ok(())
+        }
     }
 
     fn scope(cwd: &str, scope: ContextScope) -> ContextScopeRequest {
@@ -1168,6 +1380,266 @@ mod tests {
     fn path(path: &str) -> ContextScope {
         ContextScope::Path {
             path: path.to_string(),
+        }
+    }
+
+    #[test]
+    fn context_selection_matches_complete_segments_and_explicit_preferences() {
+        let (service, versions, _) = versioned_service("");
+        let service = service.with_repository_identity(Arc::new(FakeRepositories));
+        for n in 1..=7 {
+            versions.set(&format!("a/b#{n}"), "v1");
+        }
+        let attach_at = |scope_kind, n| {
+            service
+                .attach_scope_resource(&attach(
+                    scope("/one/wt", scope_kind),
+                    &format!("https://github.com/a/b/pull/{n}"),
+                ))
+                .unwrap();
+        };
+        attach_at(ContextScope::Repository, 1);
+        attach_at(path("src/lib"), 2);
+        attach_at(path("src/lib/deep"), 2);
+        attach_at(path("src/library"), 3);
+        attach_at(
+            ContextScope::Task {
+                task_id: "T-1".into(),
+            },
+            4,
+        );
+        attach_at(path("src/lib"), 4);
+        attach_at(path("src/lib"), 5);
+        service
+            .set_repository_preference(
+                "/one/main",
+                "https://github.com/a/b/pull/5",
+                ContextPreference::Exclude,
+            )
+            .unwrap();
+        service
+            .set_repository_preference(
+                "/one/main",
+                "https://github.com/a/b/pull/6",
+                ContextPreference::Pin,
+            )
+            .unwrap();
+        let request = ContextSelectionRequest {
+            cwd: "/one/main".into(),
+            task_id: Some("T-1".into()),
+            paths: vec!["src/lib/deep/main.rs".into()],
+        };
+        let asked = versions.asked.lock().unwrap().len();
+        let entries = service.select_resources(&request).unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|e| (e.resource.key.as_str(), e.selected, e.reason))
+                .collect::<Vec<_>>(),
+            [
+                ("a/b#6", true, "user_pin"),
+                ("a/b#2", true, "path_prefix"),
+                ("a/b#4", true, "task_link"),
+                ("a/b#1", false, "repository_only"),
+                ("a/b#5", false, "user_exclude")
+            ]
+        );
+        assert_eq!(entries[1].matched_scope, Some(path("src/lib/deep")));
+        assert_eq!(versions.asked.lock().unwrap().len(), asked);
+        assert!(
+            service
+                .select_resources(&ContextSelectionRequest {
+                    cwd: "/two/main".into(),
+                    ..request.clone()
+                })
+                .unwrap()
+                .is_empty()
+        );
+        for bad in ["../outside", "escape/file"] {
+            assert!(
+                service
+                    .select_resources(&ContextSelectionRequest {
+                        paths: vec![bad.into()],
+                        ..request.clone()
+                    })
+                    .is_err()
+            );
+        }
+        assert!(
+            service
+                .select_resources(&ContextSelectionRequest {
+                    task_id: Some("missing".into()),
+                    ..request.clone()
+                })
+                .is_err()
+        );
+        assert!(
+            service
+                .attach_scope_resource(&attach(
+                    scope(
+                        "/one/wt",
+                        ContextScope::Task {
+                            task_id: "missing".into()
+                        }
+                    ),
+                    "https://github.com/a/b/pull/7"
+                ))
+                .is_err()
+        );
+        service
+            .set_repository_preference(
+                "/one/main",
+                "https://github.com/a/b/pull/5",
+                ContextPreference::Pin,
+            )
+            .unwrap();
+        assert!(
+            service
+                .select_resources(&request)
+                .unwrap()
+                .iter()
+                .any(|entry| entry.resource.key == "a/b#5"
+                    && entry.selected
+                    && entry.reason == "user_pin")
+        );
+        service
+            .set_repository_preference(
+                "/one/main",
+                "https://github.com/a/b/pull/5",
+                ContextPreference::Automatic,
+            )
+            .unwrap();
+        assert!(
+            service
+                .select_resources(&request)
+                .unwrap()
+                .iter()
+                .any(|entry| entry.resource.key == "a/b#5"
+                    && entry.selected
+                    && entry.reason == "path_prefix")
+        );
+    }
+
+    // #2828: deterministic metadata-only baseline, not a model quality or token benchmark.
+    #[test]
+    fn context_selection_fixed_cases_measure_four_independent_metrics() {
+        let (service, versions, _) = versioned_service("");
+        let service = service.with_repository_identity(Arc::new(FakeRepositories));
+        for n in 1..=7 {
+            versions.set(&format!("a/b#{n}"), "v1");
+        }
+        let attach_at = |scope_kind, n| {
+            service
+                .attach_scope_resource(&attach(
+                    scope("/one/wt", scope_kind),
+                    &format!("https://github.com/a/b/pull/{n}"),
+                ))
+                .unwrap();
+        };
+        for n in 1..=6 {
+            attach_at(ContextScope::Repository, n);
+        }
+        attach_at(path("src/server"), 3);
+        attach_at(path("src/ui"), 4);
+        attach_at(
+            ContextScope::Task {
+                task_id: "T-1".into(),
+            },
+            7,
+        );
+        service
+            .set_repository_preference(
+                "/one/main",
+                "https://github.com/a/b/pull/5",
+                ContextPreference::Pin,
+            )
+            .unwrap();
+        service
+            .set_repository_preference(
+                "/one/main",
+                "https://github.com/a/b/pull/6",
+                ContextPreference::Exclude,
+            )
+            .unwrap();
+        // Source oracle advances two documents after the cached ledger was observed.
+        // Neither arm fetches again; selection cannot make an unobserved version fresh.
+        versions.set("a/b#2", "v2");
+        versions.set("a/b#3", "v2");
+        let baseline = service
+            .scope_resources(&scope("/one/wt", ContextScope::Repository))
+            .unwrap();
+        fn metrics(
+            resources: &[ContextResource],
+            required: &[&str],
+        ) -> (usize, usize, usize, usize) {
+            let keys: BTreeSet<_> = resources.iter().map(|r| r.key.as_str()).collect();
+            let missing = required.iter().filter(|key| !keys.contains(**key)).count();
+            let irrelevant = keys.iter().filter(|key| !required.contains(key)).count();
+            let stale = resources
+                .iter()
+                .filter(|r| {
+                    let current = if matches!(r.key.as_str(), "a/b#2" | "a/b#3") {
+                        "v2"
+                    } else {
+                        "v1"
+                    };
+                    r.current_version.as_deref() != Some(current)
+                })
+                .count();
+            let input = resources.iter().map(|r| serde_json::json!({"kind":r.kind,"key":r.key,"url":r.url,"version":r.current_version})).collect::<Vec<_>>();
+            (
+                missing,
+                irrelevant,
+                stale,
+                serde_json::to_vec(&input).unwrap().len(),
+            )
+        }
+        for (name, task, target, required, expected_before, expected_after) in [
+            (
+                "server",
+                Some("T-1"),
+                "src/server/api.rs",
+                vec!["a/b#3", "a/b#5", "a/b#7"],
+                (1, 4, 2),
+                (0, 0, 1),
+            ),
+            (
+                "ui",
+                None,
+                "src/ui/main.ts",
+                vec!["a/b#4", "a/b#5"],
+                (0, 4, 2),
+                (0, 0, 0),
+            ),
+        ] {
+            let request = ContextSelectionRequest {
+                cwd: "/one/main".into(),
+                task_id: task.map(str::to_owned),
+                paths: vec![target.into()],
+            };
+            let select = || {
+                service
+                    .select_resources(&request)
+                    .unwrap()
+                    .into_iter()
+                    .filter(|entry| entry.selected)
+                    .map(|entry| entry.resource)
+                    .collect::<Vec<_>>()
+            };
+            let selected = select();
+            assert_eq!(
+                selected,
+                select(),
+                "fixed case must replay deterministically"
+            );
+            let before = metrics(&baseline, &required);
+            let after = metrics(&selected, &required);
+            assert_eq!((before.0, before.1, before.2), expected_before);
+            assert_eq!((after.0, after.1, after.2), expected_after);
+            assert!(after.3 < before.3);
+            println!(
+                "context-eval-v1 {name}: missing/irrelevant/stale/input_bytes baseline={before:?} selected={after:?}"
+            );
         }
     }
 

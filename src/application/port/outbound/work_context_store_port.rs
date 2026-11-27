@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::domain::work_context::ExternalResourceRef;
+use crate::domain::work_context::{ContextPreference, ExternalResourceRef};
 
 /*
  * 작업 컨텍스트 장부이다 (plan 22). 외부 문서와, 그 문서가 어느 범위(스레드 등)에서 나왔는지를 저장한다.
@@ -11,6 +11,16 @@ pub const WORK_CONTEXT_SCOPE_THREAD: &str = "thread";
 pub const WORK_CONTEXT_SCOPE_REPOSITORY: &str = "repository";
 pub const WORK_CONTEXT_SCOPE_TASK: &str = "task";
 pub const WORK_CONTEXT_SCOPE_PATH: &str = "path";
+pub const WORK_CONTEXT_SCOPE_PIN: &str = "context_pin";
+pub const WORK_CONTEXT_SCOPE_EXCLUDE: &str = "context_exclude";
+
+pub fn preference_scope_kind(preference: ContextPreference) -> Option<&'static str> {
+    match preference {
+        ContextPreference::Automatic => None,
+        ContextPreference::Pin => Some(WORK_CONTEXT_SCOPE_PIN),
+        ContextPreference::Exclude => Some(WORK_CONTEXT_SCOPE_EXCLUDE),
+    }
+}
 
 /// 범위 하나에서 본 문서이다.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +45,14 @@ pub struct ResourceVersionCheck {
 }
 
 pub trait WorkContextStorePort: Send + Sync {
+    /// Replace the explicit choice atomically; automatic removes both choices.
+    fn set_repository_preference(
+        &self,
+        repository: &str,
+        resource: &ExternalResourceRef,
+        preference: ContextPreference,
+    ) -> Result<()>;
+
     /// 문서들을 범위에 잇는다. 이미 이어진 문서는 그대로 둔다.
     fn link_resources(
         &self,

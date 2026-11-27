@@ -11,9 +11,10 @@ use anyhow::{Context, Result, anyhow};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::application::port::outbound::work_context_store_port::{
-    ResourceVersionCheck, WorkContextLink, WorkContextStorePort,
+    ResourceVersionCheck, WORK_CONTEXT_SCOPE_EXCLUDE, WORK_CONTEXT_SCOPE_PIN, WorkContextLink,
+    WorkContextStorePort, preference_scope_kind,
 };
-use crate::domain::work_context::ExternalResourceRef;
+use crate::domain::work_context::{ContextPreference, ExternalResourceRef};
 
 const DIRECTORY: &str = "work-context";
 const FILE: &str = "ledger.sqlite";
@@ -139,6 +140,36 @@ fn migrate_jira_identity(connection: &mut Connection) -> Result<()> {
 }
 
 impl WorkContextStorePort for SqliteWorkContextStore {
+    fn set_repository_preference(
+        &self,
+        repository: &str,
+        resource: &ExternalResourceRef,
+        preference: ContextPreference,
+    ) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        self.with_connection(|connection| {
+            let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            if let Some(kind) = preference_scope_kind(preference) {
+                tx.execute("INSERT OR IGNORE INTO resources (kind,key,url,title_hint) VALUES (?1,?2,?3,?4)",
+                    params![resource.kind, resource.key, resource.url, resource.title_hint])?;
+                tx.execute("INSERT OR IGNORE INTO links (scope_kind,scope_id,resource_id,source,first_seen_at)
+                    SELECT ?1,?2,id,'user',?5 FROM resources WHERE kind=?3 AND key=?4",
+                    params![kind, repository, resource.kind, resource.key, now])?;
+            }
+            if preference == ContextPreference::Pin {
+                // Pinning discovers this document explicitly. Resetting the preference does not erase discovery.
+                tx.execute("INSERT OR IGNORE INTO links (scope_kind,scope_id,resource_id,source,first_seen_at)
+                    SELECT 'repository',?1,id,'user',?4 FROM resources WHERE kind=?2 AND key=?3",
+                    params![repository, resource.kind, resource.key, now])?;
+            }
+            tx.execute("DELETE FROM links WHERE scope_id=?1 AND scope_kind IN (?2,?3)
+                AND scope_kind != ?4 AND resource_id IN (SELECT id FROM resources WHERE kind=?5 AND key=?6)",
+                params![repository, WORK_CONTEXT_SCOPE_PIN, WORK_CONTEXT_SCOPE_EXCLUDE, preference_scope_kind(preference).unwrap_or(""), resource.kind, resource.key])?;
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
     fn link_resources(
         &self,
         scope_kind: &str,
@@ -546,6 +577,70 @@ mod tests {
         assert_eq!(second[0].resource.title_hint.as_deref(), Some("Spec"));
         assert!(store.links("path", "t1").unwrap().is_empty());
         drop(store);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn context_repository_preferences_are_atomic_and_survive_reopen() {
+        let (store, directory) = store("context-preferences");
+        let document = resource("github", "a/b#3", None);
+        store
+            .set_repository_preference("repo-a", &document, ContextPreference::Pin)
+            .unwrap();
+        store
+            .set_repository_preference("repo-b", &document, ContextPreference::Exclude)
+            .unwrap();
+        drop(store);
+        let reopened = SqliteWorkContextStore::at(directory.join(FILE));
+        assert_eq!(
+            reopened
+                .links(WORK_CONTEXT_SCOPE_PIN, "repo-a")
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(reopened.links("repository", "repo-a").unwrap().len(), 1);
+        assert_eq!(
+            reopened
+                .links(WORK_CONTEXT_SCOPE_EXCLUDE, "repo-b")
+                .unwrap()
+                .len(),
+            1
+        );
+        reopened
+            .set_repository_preference("repo-a", &document, ContextPreference::Exclude)
+            .unwrap();
+        assert!(
+            reopened
+                .links(WORK_CONTEXT_SCOPE_PIN, "repo-a")
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            reopened
+                .links(WORK_CONTEXT_SCOPE_EXCLUDE, "repo-a")
+                .unwrap()
+                .len(),
+            1
+        );
+        reopened
+            .set_repository_preference("repo-a", &document, ContextPreference::Automatic)
+            .unwrap();
+        assert!(
+            reopened
+                .links(WORK_CONTEXT_SCOPE_EXCLUDE, "repo-a")
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(reopened.links("repository", "repo-a").unwrap().len(), 1);
+        assert_eq!(
+            reopened
+                .links(WORK_CONTEXT_SCOPE_EXCLUDE, "repo-b")
+                .unwrap()
+                .len(),
+            1
+        );
+        drop(reopened);
         let _ = std::fs::remove_dir_all(directory);
     }
 
