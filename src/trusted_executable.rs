@@ -807,6 +807,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn native_macos_homebrew_style_codex_launcher_is_trusted() {
+        // Keep the macOS admin group as fixture data in this launcher integration test.
+        const MACOS_ADMIN_FIXTURE_GID: u32 = 80;
+
         let root = fixture_root("native-macos-homebrew-codex");
         let workspace = root.join("workspace");
         let prefix = root.join("homebrew");
@@ -840,7 +843,7 @@ mod tests {
 
         for directory in [bin.as_path(), library.as_path(), cellar.as_path()] {
             if let Err(error) =
-                std::os::unix::fs::chown(directory, None, Some(super::MACOS_ADMIN_GROUP_ID))
+                std::os::unix::fs::chown(directory, None, Some(MACOS_ADMIN_FIXTURE_GID))
             {
                 if error.kind() == std::io::ErrorKind::PermissionDenied {
                     eprintln!(
