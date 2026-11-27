@@ -122,7 +122,7 @@ fn registration(
                     kind: ExtensionOperationKind::Job,
                     input_schema: schema.clone(),
                     output_schema: schema,
-                    progress_schema: None,
+                    progress_schema: Some(json!({"type":"object"})),
                 },
             ],
         },
@@ -586,4 +586,37 @@ fn a_successful_command_notifies_attached_clients_but_a_query_does_not() {
     let mut quiet = query.subscribe();
     call(&query, "echo", json!({"text":"read"}), None).unwrap();
     assert!(quiet.try_recv().is_err());
+}
+
+#[test]
+fn the_first_progress_report_is_kept_and_later_bursts_are_throttled() {
+    let handler = Arc::new(TestHandler::default());
+    let host = service(Arc::new(MemoryStore::default()), handler.clone());
+    enable(&host);
+    let receipt = call(&host, "work", json!({"text":"progress"}), None).unwrap();
+    let id = receipt["id"].as_str().unwrap();
+    wait_until(|| handler.entered.load(Ordering::Acquire) == 1);
+    // Both reports arrive within 100 ms of the Running transition.
+    host.progress(id, json!({"step":1})).unwrap();
+    host.progress(id, json!({"step":2})).unwrap();
+    assert_eq!(
+        host.job("akra.test", id).unwrap().progress,
+        json!({"step":1})
+    );
+    handler.release.store(true, Ordering::Release);
+    wait_until(|| host.job("akra.test", id).unwrap().state == ExtensionJobState::Completed);
+}
+
+#[test]
+fn inputs_may_carry_a_two_mebibyte_attachment_but_not_more_than_the_input_bound() {
+    let host = service(
+        Arc::new(MemoryStore::default()),
+        Arc::new(TestHandler::default()),
+    );
+    enable(&host);
+    let attachment = call(&host, "echo", json!({"text":"x".repeat(2_800_000)}), None);
+    // The size gate passes; the operation's own schema decides.
+    assert!(!attachment.unwrap_err().to_string().contains("too large"));
+    let oversized = call(&host, "echo", json!({"text":"x".repeat(MAX_INPUT)}), None);
+    assert!(oversized.unwrap_err().to_string().contains("too large"));
 }

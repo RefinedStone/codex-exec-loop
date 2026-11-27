@@ -323,7 +323,8 @@ impl ExtensionService {
             "progress does not match its registered schema"
         );
         // Bound persistent progress writes and notifications independently of worker throughput.
-        if now_ms().saturating_sub(job.updated_at_ms) < 100 {
+        // The first report always lands: clients wait on it to learn what the job drives.
+        if !job.progress.is_null() && now_ms().saturating_sub(job.updated_at_ms) < 100 {
             return Ok(());
         }
         let extension = job.extension.clone();
