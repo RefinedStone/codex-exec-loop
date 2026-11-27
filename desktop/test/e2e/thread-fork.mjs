@@ -28,6 +28,7 @@ const turns = [turn("turn-2", "두 번째 질문"), turn("turn-1", "첫 질문")
 const requests = [];
 /** true 면 thread/fork 에 새 대화 id 가 없는 답을 준다: 결과 불명이다. */
 let malformedFork = false;
+let forkCreated = false;
 
 const userData = mkdtempSync(join(tmpdir(), "akra-e2e-fork-"));
 const endpoint = fake.uniqueTestEndpoint();
@@ -36,10 +37,13 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST
     if (!method.startsWith("thread/") && !method.startsWith("turn/")) return undefined;
     requests.push({ method, params });
     const id = params.threadId;
+    // 실제 app-server 의 목록은 자식에도 forkedFromId: null 을 준다.
+    if (method === "thread/list" && forkCreated) return { result: { data: [thread(SOURCE), thread(CHILD)], nextCursor: null } };
     if (method === "thread/resume" && id === SOURCE) return { error: { code: -32603, message: `thread ${SOURCE} already has an active writer` } };
     if (method === "thread/resume" || method === "thread/read") return { result: { thread: id === CHILD ? thread(CHILD, SOURCE) : thread(SOURCE) } };
     if (method === "thread/turns/list") return { result: { data: params.itemsView === "notLoaded" ? turns.map((item) => ({ ...item, items: [] })) : turns, nextCursor: null, backwardsCursor: null } };
     if (method === "thread/fork" && malformedFork) return { result: {} };
+    if (method === "thread/fork") forkCreated = true;
     if (method === "thread/fork") return { result: { thread: thread(CHILD, SOURCE), model: "gpt-6-luna", modelProvider: "openai", serviceTier: null, disabledPluginIds: [], cwd: recordedThread.cwd, instructionSources: [], approvalPolicy: "untrusted", approvalsReviewer: "user", sandbox: { type: "readOnly", networkAccess: false }, reasoningEffort: "low" } };
     if (method === "thread/unsubscribe") return { result: { status: "unsubscribed" } };
     return undefined;
@@ -91,6 +95,20 @@ try {
   await page.getByTestId("forked-from-open").click();
   await page.getByTestId("writer-elsewhere-banner").waitFor({ timeout: 15_000 });
   check("the source opens again from the fork", (await page.getByTestId("forked-from-banner").count()) === 0);
+
+  // renderer 를 다시 시작하면 목록은 계보 없는 자식만 준다. 다시 열 때 서버 메타데이터로 복원해야 한다.
+  await page.reload();
+  await page.getByTestId("connection-phase").filter({ hasText: "연결됨" }).waitFor({ timeout: 30_000 });
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid="thread-entry"]').length === 2, null, { timeout: 15_000 });
+  check("a restarted session does not infer lineage from the list", (await page.getByTestId("fork-badge").count()) === 0);
+  await page.getByTestId("thread-entry").nth(1).click();
+  await page.getByTestId("forked-from-banner").waitFor({ timeout: 15_000 });
+  check("reopening the fork restores its sidebar badge", (await page.getByTestId("fork-badge").count()) === 1);
+  check("reopening the fork restores the origin action", await page.getByTestId("forked-from-open").isVisible());
+  check("restoring lineage does not create another fork or start a turn", requests.filter((request) => request.method === "thread/fork").length === 1
+    && !requests.some((request) => request.method.startsWith("turn/")));
+  await page.getByTestId("forked-from-open").click();
+  await page.getByTestId("writer-elsewhere-banner").waitFor({ timeout: 15_000 });
 
   // 결과 불명 뒤의 두 번째 분기는 먼저 묻는다. 취소하면 아무것도 보내지 않는다.
   malformedFork = true;

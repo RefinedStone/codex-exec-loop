@@ -1245,9 +1245,11 @@ The Gateway records the external documents that a thread mentions, without a mod
   `thread/list` does not return `forkedFromId`. A fork is a conversation copy, not a Git worktree: it uses the same working folder,
   so two conversations that edit files at the same time can conflict. The fork shows this warning and an
   "원본 열기" button. Remote, temporary, sub-agent, dot, and browser conversations (browser tool calls in the loaded
-  turns) are refused with a reason. Limits: the sidebar "분기" badge and the warning come from `forkedFromId` in
-  the fork response; codex 0.172.0 `thread/list` returns `forkedFromId: null`, so they do not come back after a
-  reconnect. The Gateway treats a successful `thread/fork` like `thread/start` for the storage-share conversation
+  turns) are refused with a reason. The sidebar "분기" badge and the warning use server-confirmed `forkedFromId`.
+  When a conversation is opened again after reconnecting or restarting, `thread/resume` or `thread/read` restores
+  its origin even when `thread/list` omitted it. Later list results do not erase that origin or overwrite newer
+  sidebar titles and status. Forks not yet reopened remain unmarked if the list omits their origin; Desktop does
+  not scan every conversation or guess lineage. The Gateway treats a successful `thread/fork` like `thread/start` for the storage-share conversation
   (`src/adapter/inbound/gateway/storage_context.rs`), so an opened fork can share storage evidence. After a fork
   that was only listed, the source must be opened again before it can share. Model, approval, sandbox, and MCP settings are those that app-server gives a normal fork; Desktop
   sends no overrides.
