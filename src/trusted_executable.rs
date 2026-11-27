@@ -20,8 +20,8 @@ use akra_native::trusted_executable::{
     validate_trusted_configuration_path as validate_configuration_path,
 };
 pub(crate) use akra_native::trusted_executable::{
-    PinnedNativeExecutable, resolve_native_from_current_path, resolve_native_from_path,
-    sanitized_path, validate_absolute, validate_native_executable,
+    resolve_native_from_current_path, resolve_native_from_path, sanitized_path, validate_absolute,
+    validate_native_executable,
 };
 
 #[cfg(unix)]
