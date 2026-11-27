@@ -2,12 +2,13 @@
 
 [English](../../reference/current-product.md)
 
-이 문서는 `prerelease`에 구현된 동작의 canonical reference입니다. 미래 작업은 제안 상태를 명시한
-문서에 두며 이 문서에 섞지 않습니다.
+이 문서는 `prerelease`에 구현된 동작의 canonical reference입니다. 게시된 배포판의 제공 범위는
+별개이며 코드·UI·검증·배포 경계는 [제품 상태](product-status.md)에서 확인합니다. 미래 작업은 제안
+상태를 명시한 문서에 두며 이 문서에 섞지 않습니다.
 
 ## 제품 형태
 
-- Akra는 공식 `codex app-server` interface 위에 만든 native-first Rust client입니다.
+- Akra ADE는 공식 `codex app-server` interface 위에 만든 native-first Rust client입니다.
 - Alternate-screen fullscreen TUI가 기본 화면입니다. 앱이 소유하는 transcript viewport 하나가
   대화 이력, streaming row, tool card, overlay, status, composer를 함께 담당합니다.
 - Agent text는 app-server state에서 raw Markdown으로 유지하고 TUI projection 경계에서 렌더링합니다.

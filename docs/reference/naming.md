@@ -2,9 +2,10 @@
 
 - 관련: [N1 #2587](https://github.com/RefinedStone/codex-exec-loop/issues/2587),
   상위 [#2584](https://github.com/RefinedStone/codex-exec-loop/issues/2584)
-- 기준: prerelease@48b6d49a3 이후 N1 변경
-- 이 문서는 자체 식별자의 현재 값과 남은 과거 명칭의 이유를 기록한다. 데이터 경로 이전(N2),
-  배포 산출물 이름 전환(R1), 저장소 rename(G1)을 완료했다는 뜻이 아니다.
+- 기준: N1 이후 변경과 2026-11-27 `prerelease@fa72e69a8` 대조
+- 이 문서는 자체 식별자의 현재 값과 남은 과거 명칭의 이유를 기록한다. N2·R1 코드 이전과
+  실제 설치·자격 증명·산출물 검증은 구분한다. 아래 N2 근거표와 [제품 상태표](product-status.md)를
+  따른다. 저장소 rename(G1)은 아직 수행하지 않았다.
 
 ## 현재 값
 
@@ -26,10 +27,10 @@
 
 | 값 | 위치 | 이유 | 담당 |
 | --- | --- | --- | --- |
-| `.codex-exec-loop/planning/`, `.codex-exec-loop/runtime/` | planning 저장소, `.gitignore` | 기존 사용자 작업 데이터 경로다 | N2 #2588 |
-| `CODEX_EXEC_LOOP_*` 환경 변수 | TUI, app-server adapter | 기존 사용자 설정이다 | N2 #2588 |
-| app-server `clientInfo.name` `codex-exec-loop-native` | `src/composition/production.rs` | Codex app-server에 보내는 클라이언트 정체성이다. 바꿀 때의 영향을 아직 확인하지 않았다 | N2 #2588 |
-| Electron package `@refinedstone/akra-desktop` | `desktop/package.json` | Electron이 이 이름으로 userData 위치를 정한다 | N2 #2588, R1 #2589 |
+| `.codex-exec-loop/planning/`, `.codex-exec-loop/runtime/` | 이전 코드·호환 fixture·`.gitignore` | 새 경로는 `.akra/`. 커널 잠금 아래에서 이전하며 충돌·복구 확인용 구 경로를 유지한다 | N2 #2588 |
+| `CODEX_EXEC_LOOP_*` 환경 변수 | 제거 변수 검사·호환 fixture | 새 변수는 `AKRA_*`. 구 변수는 사용하지 않으며 남아 있으면 시작을 거부하고 대체 이름을 알린다 | N2 #2588 |
+| app-server `clientInfo.name`의 과거 값 `codex-exec-loop-native` | 과거 기록·fixture | 현재 네이티브 adapter는 `akra-native`를 보낸다 | N2 #2588 |
+| Electron package `@refinedstone/akra-desktop` | `desktop/package.json`, ready 전 앱 정체성 | 표시명은 `Akra ADE`, userData는 `appData/Akra ADE`. ready 전 구 이름은 기존 safeStorage 키 정체성을 보존한다 | N2 #2588, R1 #2589 |
 | `RefinedStone/codex-exec-loop` URL | manifest의 `repository`·`homepage`·`bugs`, 문서 링크 | 저장소 rename 전에는 이 주소만 동작한다 | G1 #2591 |
 | 시험 fixture의 저장소 이름, 임시 디렉터리 접두사 | `src/**/tests*`, `tests/` | 시험 입력 값이다. 실행 동작에 영향이 없다 | 유지 |
 | `docs/validation/`, `docs/reviews/`, `.omo/evidence/` | 과거 기록 | 당시 사실을 기록한 문서다 | 유지 |

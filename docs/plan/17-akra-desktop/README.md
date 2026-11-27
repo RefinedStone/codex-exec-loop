@@ -97,6 +97,12 @@ Akra Desktop (Electron)  --WebSocket-->  akra-gateway (데몬)  --WebSocket-->  
 
 ## 단계와 상태
 
+아래 단계표는 각 단계 문서의 당시 계획·인수 기록이다. 2026-11-27 이후 현재 구현 여부는
+[제품 상태표](../../reference/product-status.md)와 [현재 제품 계약](../../reference/current-product.md)을
+먼저 확인한다. P2 골격·Gateway 연결과 R9 브라우저/agent 조작에는 실제 코드·시험 경로가 있으므로,
+오래된 `계획` 표시만 보고 새로 구현하지 않는다. 시험이 있다는 사실과 전체 OS·외부 사이트 인수
+완료는 구분하며, 실제 OS 잔여는 [#2846](https://github.com/RefinedStone/codex-exec-loop/issues/2846)에서 추적한다.
+
 규모는 전업 1인이 코딩 에이전트를 함께 쓰는 기준의 추정이다.
 
 | 단계 | 내용 | 상태 | 선행 조건 | 규모 |

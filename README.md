@@ -1,4 +1,4 @@
-# Akra
+# Akra ADE
 
 [한국어](docs/ko/README.md)
 
@@ -6,11 +6,13 @@ Akra ADE is a native Rust operator client for `codex app-server`. The Rust packa
 binary are `akra-ade`, the operator command is `akra`, and the repository remains named
 `codex-exec-loop` until the planned rename. See [Naming](docs/reference/naming.md).
 
-Akra keeps startup checks, session resume, prompt streaming, accepted planning, queue-driven
-continuation, and parallel worker delivery in one long-lived terminal workflow. The TUI is the
-primary surface; CLI, Admin, Telegram, and automation adapters reuse the same application services.
+Akra ADE brings conversations, code review, task criteria, execution evidence, and delivery results
+into one development workspace. Desktop is a source development build; the TUI, CLI, Admin,
+Telegram, and automation adapters reuse the same application services. See
+[product status and release boundaries](docs/reference/product-status.md) for the difference between
+implemented paths, UI coverage, real OS verification, and published releases.
 
-## Shipped Surfaces
+## Available Surfaces
 
 | Surface | Current role |
 | --- | --- |
@@ -36,7 +38,7 @@ Prerequisites:
 - access to the target workspace
 - on Linux, a working Codex sandbox helper (`bwrap` from the Codex installation or the system)
 
-Install the npm package:
+Install the published TUI/CLI package (this does not install Desktop):
 
 ```bash
 npm install -g @refinedstone/akra
@@ -44,7 +46,7 @@ cd /path/to/workspace
 akra
 ```
 
-Build from source:
+Build the checked-out source revision:
 
 ```bash
 . "$HOME/.cargo/env"
@@ -52,6 +54,7 @@ cargo build --release
 cargo run
 ```
 
+For Desktop, follow the [source installation and Gateway start path](docs/reference/product-status.md#install-and-start-the-source-desktop).
 The native packaging and release contract is in
 [Native Packaging and Release](docs/plan/13-native-packaging-and-operator-runbook.md).
 
@@ -154,6 +157,7 @@ permission requests.
 
 - [Documentation map](docs/README.md)
 - [Current product and operator contract](docs/reference/current-product.md)
+- [Implementation, UI, verification, and release status](docs/reference/product-status.md)
 - [Runtime architecture](docs/reference/architecture.md)
 - [Development and delivery guide](docs/reference/development.md)
 - [TUI visual contract](docs/design/07-tui-layered-architecture-and-aesthetic-contract.md)

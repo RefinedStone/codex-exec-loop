@@ -11,6 +11,7 @@ current pinned brief per product.
 
 | Need | Canonical document | Korean |
 | --- | --- | --- |
+| Implementation, UI, verification, releases, and remaining work | [reference/product-status.md](reference/product-status.md) | [ko/reference/product-status.md](ko/reference/product-status.md) |
 | Product surfaces, commands, planning, parallel flow, limits | [reference/current-product.md](reference/current-product.md) | [ko/reference/current-product.md](ko/reference/current-product.md) |
 | Global, project, environment, and command-line configuration | [reference/configuration.md](reference/configuration.md) | [ko/reference/configuration.md](ko/reference/configuration.md) |
 | Layer ownership, state authority, security boundaries | [reference/architecture.md](reference/architecture.md) | [ko/reference/architecture.md](ko/reference/architecture.md) |

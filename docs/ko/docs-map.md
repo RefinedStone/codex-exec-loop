@@ -11,6 +11,7 @@
 
 | 필요한 정보 | 영문 원본 | 한국어 |
 | --- | --- | --- |
+| 구현·UI·검증·배포·남은 작업 | [product-status.md](../reference/product-status.md) | [reference/product-status.md](reference/product-status.md) |
 | 제품 화면, 명령, planning, parallel 흐름, 제한 | [current-product.md](../reference/current-product.md) | [reference/current-product.md](reference/current-product.md) |
 | 전역·프로젝트·환경변수·명령행 설정 | [configuration.md](../reference/configuration.md) | [reference/configuration.md](reference/configuration.md) |
 | 계층·상태 권한·보안 경계 | [architecture.md](../reference/architecture.md) | [reference/architecture.md](reference/architecture.md) |
