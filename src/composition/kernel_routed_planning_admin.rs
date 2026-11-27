@@ -2,11 +2,15 @@
 //! 설계 `docs/plan/18-k4-9d-planning-mutations.md` §3.5).
 
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 
 use super::kernel_command_execution;
 use crate::adapter::inbound::kernel_protocol::{CommandResponse, CommandResult, KernelCommand};
+use crate::application::port::inbound::parallel_agent_profile_port::{
+    ParallelAgentProfileConfig, ParallelAgentProfilePort,
+};
 use crate::application::port::inbound::planning_admin_port::{
     PlanningAdminCrudOutcome, PlanningAdminDirectionDeleteRequest,
     PlanningAdminDirectionMutationRequest, PlanningAdminDraftKind, PlanningAdminDraftLoadRequest,
@@ -17,38 +21,72 @@ use crate::application::port::inbound::planning_admin_port::{
     PlanningAdminTaskMutationRequest,
 };
 use crate::application::port::inbound::stored_command_port::StoredCommand;
+use crate::application::port::outbound::kernel_gateway_port::KernelGatewayPort;
 use crate::application::service::planning::PlanningAdminFacadeService;
 use crate::domain::planning::PlanningResetRequest;
 
 /*
- * 입구(admin)의 `PlanningAdminPort` 이다. 읽기와 초안의 편집은 facade 가 직접 한다. 작업과 방향의 변경은 저장 명령으로
- * 바꿔서 저장소 커널에 보낸다. 명령은 Gateway 의 커널, 명령 전용 조립, 또는 TUI 가 커널을 쥔 저장소의 직접 경로 중
+ * 입구(admin)의 `PlanningAdminPort` 이다. 읽기와 초안의 편집은 facade 가 직접 한다. 작업, 방향, 파일의 변경과 초안의
+ * 승격은 저장 명령으로 바꿔서 저장소 커널에 보낸다. 명령은 Gateway 의 커널, 명령 전용 조립, 또는 TUI 가 커널을 쥔 저장소의 직접 경로 중
  * 하나로 간다. 어느 길이든 답은 실행이 끝난 뒤에 온다. 그 뒤에 화면의 값을 저장소에서 다시 읽는다.
  *
  * 커널 자신은 이 구현을 쓰지 않는다. 쓰면 명령이 자기에게 돌아온다 (`production::stored_command_port`).
  */
 pub(crate) struct KernelRoutedPlanningAdmin {
     direct: PlanningAdminFacadeService,
-    caller: &'static str,
+    sender: StoredCommandSender,
 }
 
 impl KernelRoutedPlanningAdmin {
     pub(crate) fn new(direct: PlanningAdminFacadeService, caller: &'static str) -> Self {
-        Self { direct, caller }
+        Self {
+            direct,
+            sender: StoredCommandSender {
+                caller,
+                gateway: None,
+            },
+        }
     }
 
-    // 커널이 있을 수 없는 폴더(대표 checkout 이 없는 저장소, 병렬 slot worktree)는 이전처럼 직접 바꾼다 (K4-9a 와 같다).
+    /// 시험이 실제 Gateway 대신 프로세스 안의 Gateway 로 보낸다.
+    #[cfg(test)]
+    pub(crate) fn through_gateway(mut self, gateway: Arc<dyn KernelGatewayPort>) -> Self {
+        self.sender.gateway = Some(gateway);
+        self
+    }
+
     fn has_repository_kernel(&self) -> bool {
-        super::production::repository_kernel_target(self.direct.workspace_dir()).is_ok()
+        has_repository_kernel(self.direct.workspace_dir())
     }
 
+    fn send(&self, command: StoredCommand) -> Result<CommandResult> {
+        self.sender.send(self.direct.workspace_dir(), command)
+    }
+}
+
+// 커널이 있을 수 없는 폴더(대표 checkout 이 없는 저장소, 병렬 slot worktree)는 이전처럼 직접 바꾼다 (K4-9a 와 같다).
+fn has_repository_kernel(workspace_dir: &str) -> bool {
+    super::production::repository_kernel_target(workspace_dir).is_ok()
+}
+
+/// 입구의 저장 명령을 저장소 커널에 보낸다. `caller` 는 그 명령의 기록에 남는 입구의 이름이다.
+struct StoredCommandSender {
+    caller: &'static str,
+    /// `None` 이면 이 컴퓨터의 Gateway 이다.
+    gateway: Option<Arc<dyn KernelGatewayPort>>,
+}
+
+impl StoredCommandSender {
     /*
      * 저장 명령 하나를 보내고 그 결과를 돌려준다. 거절은 `PlanningAdminMutationRefusal` 이다: 아무것도 바뀌지
      * 않았고, 입구가 409 와 그 글로 답한다. 실패는 커널이 댄 원인의 글이다.
      */
-    fn send(&self, command: StoredCommand) -> Result<CommandResult> {
-        let port =
-            kernel_command_execution::build(Path::new(self.direct.workspace_dir()), self.caller)?;
+    fn send(&self, workspace_dir: &str, command: StoredCommand) -> Result<CommandResult> {
+        let port = kernel_command_execution::build_with_gateway(
+            Path::new(workspace_dir),
+            self.caller,
+            self.gateway.clone(),
+        )?;
         let command = KernelCommand::from_stored(command);
         let answer: CommandResponse = serde_json::from_value(port.command(
             command.kind(),
@@ -196,19 +234,106 @@ impl PlanningAdminPort for KernelRoutedPlanningAdmin {
         &self,
         request: PlanningAdminDraftMutationRequest,
     ) -> Result<PlanningAdminDraftPromotionOutcome> {
-        PlanningAdminPort::promote_draft_session(&self.direct, request)
+        if !self.has_repository_kernel() {
+            return PlanningAdminPort::promote_draft_session(&self.direct, request);
+        }
+        let command = self.direct.stored_draft_promote_command(&request)?;
+        let StoredCommand::PromoteDraft {
+            expected_planning_revision,
+            ..
+        } = command
+        else {
+            bail!("the draft promotion did not become a promote_draft command");
+        };
+        match self.send(command)? {
+            CommandResult::DraftPromoted {
+                promoted_file_count,
+                is_valid,
+                planning_revision,
+            } => self.direct.draft_promotion_outcome(
+                request,
+                expected_planning_revision,
+                promoted_file_count,
+                is_valid,
+                planning_revision,
+            ),
+            other => bail!("the repository kernel answered promote_draft with {other:?}"),
+        }
     }
 
     fn export_active_files_for_edit(&self) -> Result<PlanningAdminFileSyncOutcome> {
-        self.direct.export_active_files_for_edit()
+        if !self.has_repository_kernel() {
+            return self.direct.export_active_files_for_edit();
+        }
+        match self.send(StoredCommand::ExportPlanningFiles)? {
+            CommandResult::PlanningFilesExported { directory, paths } => {
+                Ok(self.direct.file_export_outcome(&directory, paths))
+            }
+            other => bail!("the repository kernel answered export_planning_files with {other:?}"),
+        }
     }
 
     fn apply_exported_files(&self) -> Result<PlanningAdminFileSyncOutcome> {
-        self.direct.apply_exported_files()
+        if !self.has_repository_kernel() {
+            return self.direct.apply_exported_files();
+        }
+        match self.send(StoredCommand::ApplyPlanningFiles)? {
+            CommandResult::PlanningFilesApplied {
+                directory, paths, ..
+            } => Ok(self.direct.file_apply_outcome(&directory, paths)),
+            other => bail!("the repository kernel answered apply_planning_files with {other:?}"),
+        }
     }
 
     fn reset_workspace(&self, request: PlanningResetRequest) -> Result<PlanningAdminResetOutcome> {
         self.direct.reset_workspace(request)
+    }
+}
+
+/*
+ * 입구(admin)의 `ParallelAgentProfilePort` 이다 (plan 18 K4-9b 의 9b-A). 읽기는 직접 하고, 저장은 저장 명령
+ * `save_parallel_agent_profiles` 로 저장소 커널에 보낸다. 프로필은 커널의 대표 checkout 에 저장된다.
+ */
+pub(crate) struct KernelRoutedParallelAgentProfiles {
+    direct: Arc<dyn ParallelAgentProfilePort>,
+    sender: StoredCommandSender,
+}
+
+impl KernelRoutedParallelAgentProfiles {
+    pub(crate) fn new(direct: Arc<dyn ParallelAgentProfilePort>, caller: &'static str) -> Self {
+        Self {
+            direct,
+            sender: StoredCommandSender {
+                caller,
+                gateway: None,
+            },
+        }
+    }
+}
+
+impl ParallelAgentProfilePort for KernelRoutedParallelAgentProfiles {
+    fn load_config(&self, workspace_dir: &str) -> Result<ParallelAgentProfileConfig, String> {
+        self.direct.load_config(workspace_dir)
+    }
+
+    fn save_config(
+        &self,
+        workspace_dir: &str,
+        config: &ParallelAgentProfileConfig,
+    ) -> Result<(), String> {
+        if !has_repository_kernel(workspace_dir) {
+            return self.direct.save_config(workspace_dir, config);
+        }
+        let command = StoredCommand::SaveParallelAgentProfiles {
+            config: config.clone(),
+        };
+        match self.sender.send(workspace_dir, command) {
+            Ok(CommandResult::ParallelAgentProfilesSaved { .. }) => Ok(()),
+            Ok(other) => Err(format!(
+                "the repository kernel answered save_parallel_agent_profiles with {other:?}"
+            )),
+            Err(error) => Err(format!("{error:#}")),
+        }
     }
 }
 
@@ -551,6 +676,222 @@ mod tests {
                 "rejected planning_revision_stale",
                 "received delete_direction by akra-admin",
                 "rejected planning_revision_stale",
+            ]
+        );
+    }
+
+    // File sync writes files beside the repository. It is unavailable on Windows.
+    #[cfg(not(windows))]
+    #[test]
+    fn admin_file_sync_runs_as_kernel_commands_and_a_stale_export_is_refused() {
+        // plan 18 K4-9d-4.
+        let (workspace, admin) = admin("file-sync");
+        let exported = admin.export_active_files_for_edit().unwrap();
+        assert_eq!(
+            exported.notice,
+            "exported 1 planning support files for editing"
+        );
+        let file = std::path::Path::new(&workspace.0).join(&exported.paths[0]);
+        let body = std::fs::read_to_string(&file).unwrap();
+        std::fs::write(&file, format!("{body}\nAn edit by the operator.\n")).unwrap();
+
+        let applied = admin.apply_exported_files().unwrap();
+        assert_eq!(applied.notice, "applied 1 exported planning paths");
+        assert_eq!(applied.paths, exported.paths);
+
+        // Planning changes after the next export. The export recorded the older revision.
+        admin.export_active_files_for_edit().unwrap();
+        admin.upsert_task(task("", "A newer change", None)).unwrap();
+        let revision = admin.load_management_view().unwrap().planning_revision;
+        let stale = admin.apply_exported_files().unwrap_err();
+        let refusal = PlanningAdminMutationRefusal::find_in(&stale).expect("a refusal");
+        assert_eq!(refusal.reason, ReasonCode::PlanningRevisionStale);
+        assert_eq!(
+            admin.load_management_view().unwrap().planning_revision,
+            revision
+        );
+
+        assert_eq!(
+            command_records(&workspace),
+            [
+                "received export_planning_files by akra-admin",
+                "completed Done",
+                "received apply_planning_files by akra-admin",
+                "completed Done",
+                "received export_planning_files by akra-admin",
+                "completed Done",
+                "received create_task by akra-admin",
+                "completed Done",
+                "received apply_planning_files by akra-admin",
+                "rejected planning_revision_stale",
+            ]
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn an_apply_without_an_export_fails_with_its_cause() {
+        let (_workspace, admin) = admin("file-sync-missing");
+        let error = admin.apply_exported_files().unwrap_err();
+        assert!(PlanningAdminMutationRefusal::find_in(&error).is_none());
+        assert!(
+            error.to_string().contains("export again before applying"),
+            "{error:#}"
+        );
+    }
+
+    fn run_git(directory: &std::path::Path, args: &[&str]) {
+        let output = crate::test_utils::git_command()
+            .current_dir(directory)
+            .args(args)
+            .output()
+            .expect("git should run");
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn an_export_from_another_worktree_writes_into_the_primary_checkout() {
+        // plan 18 K4-9d-4: the executor uses the primary checkout of the kernel, not the folder of the admin.
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let root = crate::test_utils::platform_safe_temp_dir().join(format!(
+            "kernel-routed-admin-linked-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(root.join("primary")).unwrap();
+        let root = Workspace(root.canonicalize().unwrap().to_string_lossy().into_owned());
+        let primary = std::path::Path::new(&root.0).join("primary");
+        let linked = std::path::Path::new(&root.0).join("linked");
+        run_git(&primary, &["init", "-q"]);
+        run_git(
+            &primary,
+            &[
+                "-c",
+                "user.name=akra",
+                "-c",
+                "user.email=akra@localhost.invalid",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        );
+        run_git(
+            &primary,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "linked",
+                &linked.display().to_string(),
+            ],
+        );
+        let admin =
+            super::super::production::build_admin_application(linked.display().to_string()).facade;
+
+        let exported = admin.export_active_files_for_edit().unwrap();
+
+        assert_eq!(
+            exported.notice,
+            format!(
+                "exported 1 planning support files for editing in `{}`",
+                primary.display()
+            )
+        );
+        assert!(primary.join(&exported.paths[0]).is_file());
+        assert!(!linked.join(&exported.paths[0]).exists());
+        let applied = admin.apply_exported_files().unwrap();
+        assert!(
+            applied
+                .notice
+                .ends_with(&format!("in `{}`", primary.display())),
+            "{}",
+            applied.notice
+        );
+    }
+
+    #[test]
+    fn admin_draft_promotion_is_a_kernel_command_and_a_stale_draft_is_refused() {
+        // plan 18 K4-9d-5: the admin sends the revision of the draft from its memory (Q-9d-3).
+        let (workspace, admin) = admin("promote");
+        // The draft editors need the repository-scoped store, so the workspace is a git repository.
+        run_git(std::path::Path::new(&workspace.0), &["init", "-q"]);
+        let draft = admin
+            .create_draft_session(PlanningAdminDraftKind::FullPlanning, None)
+            .unwrap();
+        let request = |draft_name: &str| PlanningAdminDraftMutationRequest {
+            draft_name: draft_name.to_string(),
+            kind: PlanningAdminDraftKind::FullPlanning,
+            direction_id: None,
+            files: Vec::new(),
+        };
+        let promoted = admin
+            .promote_draft_session(request(&draft.draft_name))
+            .unwrap();
+        assert!(promoted.is_valid);
+        assert_eq!(promoted.promoted_file_count, 1);
+
+        // The admin moved its memory to the new revision, so the same draft promotes again.
+        admin
+            .promote_draft_session(request(&draft.draft_name))
+            .unwrap();
+
+        let stale_draft = admin
+            .create_draft_session(PlanningAdminDraftKind::FullPlanning, None)
+            .unwrap();
+        admin.upsert_task(task("", "A newer change", None)).unwrap();
+        let revision = admin.load_management_view().unwrap().planning_revision;
+        let stale = admin
+            .promote_draft_session(request(&stale_draft.draft_name))
+            .unwrap_err();
+        let refusal = PlanningAdminMutationRefusal::find_in(&stale).expect("a refusal");
+        assert_eq!(refusal.reason, ReasonCode::PlanningRevisionStale);
+        assert!(refusal.message.contains("reload"), "{}", refusal.message);
+        assert_eq!(
+            admin.load_management_view().unwrap().planning_revision,
+            revision
+        );
+
+        assert_eq!(
+            command_records(&workspace),
+            [
+                "received promote_draft by akra-admin",
+                "completed Done",
+                "received promote_draft by akra-admin",
+                "completed Done",
+                "received create_task by akra-admin",
+                "completed Done",
+                "received promote_draft by akra-admin",
+                "rejected planning_revision_stale",
+            ]
+        );
+    }
+
+    // The profile file is written beside the repository. It is unavailable on Windows.
+    #[cfg(not(windows))]
+    #[test]
+    fn admin_profile_save_is_a_kernel_command() {
+        // plan 18 K4-9b 9b-A.
+        let (workspace, _admin) = admin("profiles");
+        let profiles = super::super::production::build_admin_application(workspace.0.clone())
+            .parallel_agent_profile_port;
+        let mut config = profiles.load_config(&workspace.0).unwrap();
+        config.profiles.truncate(1);
+        config.profiles[0].display_name = "Only agent".to_string();
+
+        profiles.save_config(&workspace.0, &config).unwrap();
+
+        let saved = profiles.load_config(&workspace.0).unwrap();
+        assert_eq!(saved.profiles.len(), 1);
+        assert_eq!(saved.profiles[0].display_name, "Only agent");
+        assert_eq!(
+            command_records(&workspace),
+            [
+                "received save_parallel_agent_profiles by akra-admin",
+                "completed Done",
             ]
         );
     }

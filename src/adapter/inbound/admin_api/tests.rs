@@ -5715,3 +5715,129 @@ async fn a_stale_direction_form_gets_409_with_the_reason_and_changes_nothing() {
         "{body}"
     );
 }
+
+#[cfg(not(windows))]
+#[tokio::test]
+async fn a_failed_file_apply_answers_its_cause_and_not_a_bare_500() {
+    // plan 18 K4-9d-4: the file routes answer a failure with its cause, like the task routes.
+    let workspace = TempAdminWorkspace::new("file-apply-failure");
+    let router = admin_test_router(&workspace);
+    let (cookie, csrf_token) = bootstrap_admin_json_session(&router).await;
+
+    let json = router
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/planning/files/apply",
+            json!({}),
+            Some(&cookie),
+            Some(&csrf_token),
+        ))
+        .await
+        .expect("apply without an export should be served");
+    assert_eq!(json.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = json_body(json).await;
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("export again before applying")),
+        "{body}"
+    );
+
+    let html = router
+        .clone()
+        .oneshot(html_form_request(
+            "/admin/files/apply",
+            encoded_form(&[("csrf_token", csrf_token.as_str())]),
+            Some(&cookie),
+            false,
+        ))
+        .await
+        .expect("apply form without an export should be served");
+    assert_eq!(html.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let page = text_body(html).await;
+    assert!(page.contains("class=\"notice\""));
+    assert!(page.contains("export again before applying"));
+}
+
+#[tokio::test]
+async fn a_stale_draft_promotion_and_file_apply_get_409_with_the_reason() {
+    // plan 18 K4-9d-4, 9d-5: planning changed after the draft and the export were made.
+    let workspace = TempAdminWorkspace::new_git("stale-promotion");
+    let router = admin_test_router(&workspace);
+    let (cookie, csrf_token) = bootstrap_admin_json_session(&router).await;
+    let post = |uri: &str, body: serde_json::Value| {
+        json_request(Method::POST, uri, body, Some(&cookie), Some(&csrf_token))
+    };
+    let created = router
+        .clone()
+        .oneshot(post(
+            "/api/planning/drafts",
+            json!({ "kind": "full_planning" }),
+        ))
+        .await
+        .expect("draft create should be served");
+    let draft_name = json_body(created).await["draft_name"]
+        .as_str()
+        .expect("draft name")
+        .to_string();
+    #[cfg(not(windows))]
+    {
+        let exported = router
+            .clone()
+            .oneshot(post("/api/planning/files/export", json!({})))
+            .await
+            .expect("export should be served");
+        assert_eq!(exported.status(), StatusCode::OK);
+    }
+    let changed = router
+        .clone()
+        .oneshot(post(
+            "/api/planning/tasks",
+            json!({ "title": "A newer change" }),
+        ))
+        .await
+        .expect("task create should be served");
+    assert_eq!(changed.status(), StatusCode::OK);
+
+    let stale_routes = [
+        Some(format!("/api/planning/drafts/{draft_name}/promote")),
+        // File sync is unavailable on Windows.
+        cfg!(not(windows)).then(|| "/api/planning/files/apply".to_string()),
+    ];
+    for uri in stale_routes.into_iter().flatten() {
+        let response = router
+            .clone()
+            .oneshot(post(&uri, json!({ "kind": "full_planning", "files": [] })))
+            .await
+            .expect("stale change should be served");
+        assert_eq!(response.status(), StatusCode::CONFLICT, "{uri}");
+        let body = json_body(response).await;
+        assert_eq!(body["reason"], "planning_revision_stale", "{uri}");
+        assert!(
+            body["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("reload")),
+            "{body}"
+        );
+    }
+
+    // HTML: the editor page again, with the text as its notice.
+    let html = router
+        .clone()
+        .oneshot(html_form_request(
+            &format!("/admin/drafts/{draft_name}/promote"),
+            encoded_form(&[
+                ("csrf_token", csrf_token.as_str()),
+                ("kind", "full_planning"),
+            ]),
+            Some(&cookie),
+            false,
+        ))
+        .await
+        .expect("stale promote form should be served");
+    assert_eq!(html.status(), StatusCode::CONFLICT);
+    let page = text_body(html).await;
+    assert!(page.contains(&draft_name), "the editor page is shown");
+    assert!(page.contains("reload and retry"), "{page}");
+}

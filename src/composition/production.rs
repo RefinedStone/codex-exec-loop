@@ -290,8 +290,13 @@ pub(crate) fn build_admin_application_with_debug_harness(
         AppServerPromptLogQueryService::new(ports.app_server_prompt_log_port.clone()),
     );
     let parallel_agent_profile_service = parallel_agent_profile_service_from_ports(&ports);
-    let parallel_agent_profile_port: Arc<dyn ParallelAgentProfilePort> =
-        Arc::new(parallel_agent_profile_service.clone());
+    // 입구의 프로필 저장은 저장소 커널의 명령으로 간다 (plan 18 K4-9b 의 9b-A). 읽기는 직접 한다.
+    let parallel_agent_profile_port: Arc<dyn ParallelAgentProfilePort> = Arc::new(
+        super::kernel_routed_planning_admin::KernelRoutedParallelAgentProfiles::new(
+            Arc::new(parallel_agent_profile_service.clone()),
+            kernel_command_execution::CALLER_ADMIN,
+        ),
+    );
     let parallel_mode_service = parallel_mode_service_from_parts(
         &workspace_dir,
         ports.planning_authority_port.clone(),
@@ -359,20 +364,7 @@ pub(crate) fn build_admin_application_with_debug_harness(
         } else {
             production_pr_validation_rollout_evidence_query_port
         };
-    // 입구의 작업 변경은 저장소 커널의 명령으로 간다 (plan 18 K4-9d). 읽기와 초안의 편집은 facade 가 직접 한다.
-    let facade: Arc<dyn PlanningAdminPort> = Arc::new(
-        super::kernel_routed_planning_admin::KernelRoutedPlanningAdmin::new(
-            PlanningAdminFacadeService::from_planning_with_authority(
-                workspace_dir,
-                // 입구의 초기화는 저장소 커널의 명령으로 간다 (plan 18 K4-9a).
-                entrance_planning_services(&ports, kernel_command_execution::CALLER_ADMIN),
-                ports.planning_workspace_port,
-                ports.planning_authority_port,
-                ports.planning_task_repository_port,
-            ),
-            kernel_command_execution::CALLER_ADMIN,
-        ),
-    );
+    let facade: Arc<dyn PlanningAdminPort> = Arc::new(admin_planning(workspace_dir, &ports));
     ProductionAdminApplication {
         facade,
         parallel_mode_admin_port,
@@ -384,6 +376,32 @@ pub(crate) fn build_admin_application_with_debug_harness(
         pr_validation_command_port,
         review_center_query_port: Arc::new(review_center_read_service),
     }
+}
+
+// 입구의 planning 변경은 저장소 커널의 명령으로 간다 (plan 18 K4-9d). 읽기와 초안의 편집은 facade 가 직접 한다.
+fn admin_planning(
+    workspace_dir: String,
+    ports: &ProductionSharedPorts,
+) -> super::kernel_routed_planning_admin::KernelRoutedPlanningAdmin {
+    super::kernel_routed_planning_admin::KernelRoutedPlanningAdmin::new(
+        PlanningAdminFacadeService::from_planning_with_authority(
+            workspace_dir,
+            // 입구의 초기화는 저장소 커널의 명령으로 간다 (plan 18 K4-9a).
+            entrance_planning_services(ports, kernel_command_execution::CALLER_ADMIN),
+            ports.planning_workspace_port.clone(),
+            ports.planning_authority_port.clone(),
+            ports.planning_task_repository_port.clone(),
+        ),
+        kernel_command_execution::CALLER_ADMIN,
+    )
+}
+
+/// admin 의 planning 조립이다. 시험이 Gateway 를 바꿔 끼운다.
+#[cfg(test)]
+pub(crate) fn build_admin_planning(
+    workspace_dir: String,
+) -> super::kernel_routed_planning_admin::KernelRoutedPlanningAdmin {
+    admin_planning(workspace_dir, &build_shared_ports_for_prompt_logging(false))
 }
 
 pub(crate) fn build_telegram_application(workspace_dir: String) -> ProductionTelegramApplication {
@@ -1126,6 +1144,9 @@ fn stored_command_port_with_verification(
             store,
         ))
         .with_task_evidence(super::task_evidence::build(workspace_dir))
+        .with_parallel_agent_profiles(ParallelAgentProfileService::new(Arc::new(
+            FilesystemParallelAgentProfileRepositoryAdapter::new(),
+        )))
         .with_issue_collection(issues)
         .with_issue_decisions(super::issue_collection::build_decisions(workspace_dir))
         .with_issue_interventions(super::issue_collection::build_interventions(

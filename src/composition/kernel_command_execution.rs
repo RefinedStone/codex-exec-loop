@@ -26,6 +26,7 @@ use crate::application::port::inbound::stored_command_port::{
 };
 use crate::application::port::outbound::delegation_store_port::DelegationStorePort;
 use crate::application::port::outbound::kernel_event_log_port::KernelEventLogPort;
+use crate::application::port::outbound::kernel_gateway_port::KernelGatewayPort;
 use crate::application::port::outbound::planning_reset_route_port::{
     PlanningResetRouteOutcome, PlanningResetRoutePort,
 };
@@ -52,6 +53,15 @@ pub(crate) const CALLER_TELEGRAM: &str = "akra-telegram";
 
 /// `workspace` 가 속한 저장소의 커널에 명령을 보내는 port 이다. `caller` 는 그 명령의 기록에 남는 입구의 이름이다.
 pub(crate) fn build(workspace: &Path, caller: &'static str) -> Result<Box<dyn KernelCommandPort>> {
+    build_with_gateway(workspace, caller, None)
+}
+
+/// `build` 와 같다. `gateway` 가 있으면 이 컴퓨터의 Gateway 대신 그것에 보낸다 (시험의 프로세스 안 Gateway).
+pub(crate) fn build_with_gateway(
+    workspace: &Path,
+    caller: &'static str,
+    gateway: Option<Arc<dyn KernelGatewayPort>>,
+) -> Result<Box<dyn KernelCommandPort>> {
     let workspace = workspace
         .canonicalize()
         .with_context(|| format!("cannot select workspace `{}`", workspace.display()))?;
@@ -63,11 +73,14 @@ pub(crate) fn build(workspace: &Path, caller: &'static str) -> Result<Box<dyn Ke
         workspace: target.workspace_root,
         caller,
     });
-    Ok(Box::new(KernelCommandService::new(
+    let gateway = gateway.unwrap_or_else(|| {
         Arc::new(GatewayKernelClientAdapter::new(
             workspace.to_string_lossy().into_owned(),
             caller.to_string(),
-        )),
+        ))
+    });
+    Ok(Box::new(KernelCommandService::new(
+        gateway,
         local,
         UnreachableAnswers {
             no_gateway: unreachable_answer("The Akra Gateway is not running. Start it.")?,

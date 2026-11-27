@@ -795,6 +795,87 @@ fn admin_api_enters_application_through_inbound_ports() {
     );
 }
 
+/*
+ * plan 18 K4-9d D4: admin 의 planning 변경과 프로필 저장은 저장소 커널의 명령으로 간다. admin 조립이 admin adapter 에
+ * 주는 port 의 메서드 가운데 저장 명령을 보내지 않는 것은 허용 목록에만 있다: 읽기, 초안의 편집 (설계 §3.4), 커널로
+ * 가는 다른 길이 있는 초기화 (K4-9a).
+ */
+#[test]
+fn admin_mutations_enter_the_repository_kernel_outside_an_allow_list() {
+    let production = fs::read_to_string("src/composition/production.rs")
+        .expect("production composition should load");
+    let admin_assembly =
+        top_level_function_source(&production, "build_admin_application_with_debug_harness");
+    let admin_planning = top_level_function_source(&production, "admin_planning");
+    assert!(
+        admin_assembly.contains("Arc::new(admin_planning(")
+            && admin_planning.contains("KernelRoutedPlanningAdmin::new(")
+            && admin_assembly.contains("KernelRoutedParallelAgentProfiles::new("),
+        "the admin assembly must hand the kernel-routed planning and profile ports to the admin adapter"
+    );
+
+    let routed = fs::read_to_string("src/composition/kernel_routed_planning_admin.rs")
+        .expect("kernel-routed admin should load");
+    let syntax = syn::parse_file(&routed).expect("kernel-routed admin should parse");
+    let allowed_direct = [
+        "workspace_dir",
+        "load_overview",
+        "load_runtime_summary",
+        "load_management_view",
+        "load_draft_session",
+        "create_draft_session",
+        "save_draft_session",
+        "reset_workspace",
+        "load_config",
+    ];
+    let mut checked = Vec::new();
+    let mut violations = Vec::new();
+    for item in &syntax.items {
+        let syn::Item::Impl(item) = item else {
+            continue;
+        };
+        let Some((_, trait_path, _)) = &item.trait_ else {
+            continue;
+        };
+        let port = trait_path.to_token_stream().to_string();
+        if !["PlanningAdminPort", "ParallelAgentProfilePort"].contains(&port.as_str()) {
+            continue;
+        }
+        for item in &item.items {
+            let syn::ImplItem::Fn(method) = item else {
+                continue;
+            };
+            let name = method.sig.ident.to_string();
+            let mut visitor = MethodCallLineVisitor::default();
+            visitor.visit_block(&method.block);
+            let sends = visitor.calls.iter().any(|(call, _)| call == "send");
+            if !sends && !allowed_direct.contains(&name.as_str()) {
+                violations.push(format!("{port}::{name}"));
+            }
+            checked.push(format!("{port}::{name}"));
+        }
+    }
+    for routed_mutation in [
+        "PlanningAdminPort::upsert_task",
+        "PlanningAdminPort::delete_task",
+        "PlanningAdminPort::upsert_direction",
+        "PlanningAdminPort::delete_direction",
+        "PlanningAdminPort::promote_draft_session",
+        "PlanningAdminPort::export_active_files_for_edit",
+        "PlanningAdminPort::apply_exported_files",
+        "ParallelAgentProfilePort::save_config",
+    ] {
+        assert!(
+            checked.iter().any(|method| method == routed_mutation),
+            "the kernel-routed admin must implement {routed_mutation}"
+        );
+    }
+    assert!(
+        violations.is_empty(),
+        "admin mutations must be sent to the repository kernel as stored commands, or be listed as allowed direct calls: {violations:?}"
+    );
+}
+
 #[test]
 fn admin_boundary_contracts_are_not_owned_by_service_modules() {
     let planning_port = fs::read_to_string("src/application/port/inbound/planning_admin_port.rs")

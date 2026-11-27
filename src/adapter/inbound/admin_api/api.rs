@@ -670,15 +670,18 @@ pub(super) async fn promote_draft_api(
      */
     verify_header_csrf(&jar, &headers)?;
     verify_draft_name_path(&draft_name)?;
-    let result = state
+    let result = match state
         .facade
         .promote_draft_session(PlanningAdminDraftMutationRequest {
             draft_name,
             kind: request.kind,
             direction_id: request.direction_id,
             files: request.files,
-        })
-        .map_err(internal_server_error)?;
+        }) {
+        Ok(result) => result,
+        // 거절은 409 와 이유 코드와 글이고, 실패는 500 과 원인의 글이다 (plan 18 K4-9d).
+        Err(error) => return Ok(AdminMutationFailure::from_error(error).into_response()),
+    };
     Ok(Json(DraftPromoteApiResponse {
         promoted_file_count: result.promoted_file_count,
         is_valid: result.is_valid,
@@ -757,11 +760,11 @@ pub(super) async fn export_files_api(
      * 그래서 facade가 authority state를 editable file로 mirror하기 전, CSRF가 caller intent를 확인하는 전체 gate다.
      */
     verify_header_csrf(&jar, &headers)?;
-    let outcome = state
-        .facade
-        .export_active_files_for_edit()
-        .map_err(internal_server_error)?;
-    Ok(Json(outcome).into_response())
+    // 거절은 409 와 이유 코드와 글이고, 실패는 500 과 원인의 글이다 (plan 18 K4-9d).
+    Ok(match state.facade.export_active_files_for_edit() {
+        Ok(outcome) => Json(outcome).into_response(),
+        Err(error) => AdminMutationFailure::from_error(error).into_response(),
+    })
 }
 
 pub(super) async fn apply_files_api(
@@ -771,11 +774,11 @@ pub(super) async fn apply_files_api(
 ) -> std::result::Result<Response, StatusCode> {
     // apply는 export의 반대 방향이다. facade에게 edited file을 parse하고 planning authority를 갱신하게 한다.
     verify_header_csrf(&jar, &headers)?;
-    let outcome = state
-        .facade
-        .apply_exported_files()
-        .map_err(internal_server_error)?;
-    Ok(Json(outcome).into_response())
+    // 거절은 409 와 이유 코드와 글이고, 실패는 500 과 원인의 글이다 (plan 18 K4-9d).
+    Ok(match state.facade.apply_exported_files() {
+        Ok(outcome) => Json(outcome).into_response(),
+        Err(error) => AdminMutationFailure::from_error(error).into_response(),
+    })
 }
 
 pub(super) async fn reset_api(
