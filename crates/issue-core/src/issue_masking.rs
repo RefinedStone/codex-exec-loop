@@ -3,10 +3,10 @@
 use std::fmt;
 use std::ops::Range;
 
-use crate::domain::issue_policy::{
+use crate::issue_policy::{
     IssueDisclosurePolicy, IssueSensitiveSpanAction, IssueSensitiveSpanClass,
 };
-use crate::domain::issue_work::IssueSharedCopy;
+use crate::issue_work::IssueSharedCopy;
 
 /// 제거한 값의 자리에 두는 글이다. 복원할 수 없다.
 pub const ISSUE_REMOVED_PLACEHOLDER: &str = "[removed]";

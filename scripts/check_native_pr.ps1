@@ -156,7 +156,7 @@ function Invoke-WindowsPortableChecks {
     )
 
     Invoke-ExternalStep "Windows native target" "cargo" @(
-        "check", "--locked", "--all-features", "--lib", "--bins", "--target", $windowsTarget
+        "check", "--workspace", "--locked", "--all-features", "--lib", "--bins", "--target", $windowsTarget
     )
 
     $testFilters = @("process_liveness::tests::")
@@ -306,12 +306,14 @@ try {
         Invoke-ExternalStep "CI policy tests" "node" @(
             "--test",
             "scripts/ci-scope.test.mjs",
+            "scripts/crate-boundaries.test.mjs",
             "scripts/agent-plan.test.mjs",
             "scripts/native-rust-contracts.test.mjs",
             "scripts/npm-audit-gate.test.mjs"
         )
     }
     if ($Mode -in @("Full", "Rust")) {
+        Invoke-ExternalStep "Crate boundaries" "node" @("scripts/check_crate_boundaries.mjs")
         Test-TuiLayering
         Invoke-ExternalStep "Rust formatting" "cargo" @("fmt", "--all", "--", "--check")
     }
@@ -319,11 +321,12 @@ try {
         Invoke-NodeAdminChecks
     }
     if ($Mode -in @("Full", "Rust", "Portable")) {
+        Invoke-ExternalStep "Workspace member tests" "cargo" @("test", "--workspace", "--exclude", "akra-ade", "--locked", "--all-features", "--target", $windowsTarget)
         Invoke-WindowsPortableChecks -IncludeCleanHostContracts ($Mode -eq "Portable")
     }
     if ($Mode -in @("Full", "Rust")) {
         Invoke-ExternalStep "Rust clippy" "cargo" @(
-            "clippy", "--locked", "--all-targets", "--all-features", "--", "-D", "warnings"
+            "clippy", "--workspace", "--locked", "--all-targets", "--all-features", "--", "-D", "warnings"
         )
     }
 }

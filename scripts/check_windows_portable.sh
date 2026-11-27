@@ -8,7 +8,8 @@ target="x86_64-pc-windows-msvc"
 
 # Keep this CI path under Git Bash: clean-host ACL fixtures depend on the launcher.
 # Check validates production targets; the runner builds the lib test artifact only once.
-cargo check --locked --all-features --lib --bins --target "${target}"
+cargo test --workspace --exclude akra-ade --locked --all-features --target "${target}" --timings
+cargo check --workspace --locked --all-features --lib --bins --target "${target}"
 
 node scripts/run_native_rust_contracts.mjs --all-features --target "${target}" --timings -- \
   'process_liveness::tests::' \

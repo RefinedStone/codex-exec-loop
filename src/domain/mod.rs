@@ -22,23 +22,23 @@ pub(crate) mod git_graph;
 // git_operation 은 git 작업 엔진의 계획, 일지 기록, 되돌리기 규칙이다 (plan 27 G3).
 pub(crate) mod git_operation;
 // issue_work 는 외부 이슈의 참조와 공유본이다. 복원 평문은 가지지 않는다 (#2415).
-pub(crate) mod issue_work;
+pub(crate) use akra_issue_core::issue_work;
 // 이슈 자동화의 추적 장부 값과 상태 전이이다 (plan 28 IA1-1).
 pub(crate) mod issue_automation;
 // issue_publish_intent 는 이슈 게시 의도의 기록과 상태 규칙이다 (#2424).
-pub(crate) mod issue_publish_intent;
+pub(crate) use akra_issue_core::issue_publish_intent;
 // issue_policy 는 프로젝트의 이슈 규약과 대상별 공개 정책이다 (#2416).
-pub(crate) mod issue_policy;
+pub(crate) use akra_issue_core::issue_policy;
 // 공유본과 복원 위치를 계산하는 순수한 가림 규칙이다 (#2537).
-pub(crate) mod issue_masking;
+pub(crate) use akra_issue_core::issue_masking;
 // 원문을 보관하지 않고 알려진 비밀값의 위치만 찾는다 (#2537).
-pub(crate) mod issue_secret_spans;
+pub(crate) use akra_issue_core::issue_secret_spans;
 // issue_validation 은 이슈 필수 규약의 순수한 검증 규칙과 통과 결과이다 (#2418).
-pub(crate) mod issue_validation;
+pub(crate) use akra_issue_core::issue_validation;
 // issue_review 는 LLM 품질 검토의 권고와 그 적용이다. 검증 통과나 공유본을 만들지 않는다 (#2430).
-pub(crate) mod issue_review;
+pub(crate) use akra_issue_core::issue_review;
 // issue_template 은 대상 저장소의 이슈 템플릿에서 읽은 필수 입력과 판이다 (#2417).
-pub(crate) mod issue_template;
+pub(crate) use akra_issue_core::issue_template;
 // github_review는 review thread와 polling 결과를 서비스가 다루기 쉬운 값으로 표현한다.
 pub(crate) mod github_review;
 pub(crate) mod pr_review;
@@ -72,9 +72,10 @@ pub(crate) mod turn_terminal;
 // 작업 컨텍스트는 스레드에 나온 외부 문서를 코드로 인식하는 규칙을 가진다.
 pub(crate) mod work_context;
 
-pub(crate) mod issue_markdown;
+// Triage keeps the same shared Markdown parser; parser state remains private.
+pub(crate) use akra_issue_core::issue_markdown;
 
-pub mod issue_creation;
+pub(crate) use akra_issue_core::issue_creation;
 pub(crate) mod kernel_extension;
 pub(crate) mod storage_analysis;
 

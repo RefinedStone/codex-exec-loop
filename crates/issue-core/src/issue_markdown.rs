@@ -1,20 +1,20 @@
 //! 이슈 템플릿과 게시 검증이 공유하는 ATX 제목 및 fenced code 경계이다.
 #[derive(Default)]
-pub(crate) struct IssueMarkdownHeadings {
+pub struct IssueMarkdownHeadings {
     fence: Option<(u8, usize)>,
     comment: bool,
     mixed_comment_line: bool,
 }
 
 /// 제목이 아닌 줄도 코드 경계와 구별한다. 판정 목록/경로 파서는 코드 예제를 증거로 쓰지 않는다.
-pub(crate) enum IssueMarkdownLine<'a> {
+pub enum IssueMarkdownLine<'a> {
     Heading(usize, &'a str),
     Text(&'a str),
     Code,
 }
 
 impl IssueMarkdownHeadings {
-    pub(crate) fn heading<'a>(&mut self, line: &'a str) -> Option<(usize, &'a str)> {
+    pub fn heading<'a>(&mut self, line: &'a str) -> Option<(usize, &'a str)> {
         match self.line(line) {
             IssueMarkdownLine::Heading(level, title) => Some((level, title)),
             IssueMarkdownLine::Text(_) | IssueMarkdownLine::Code => None,
@@ -23,11 +23,11 @@ impl IssueMarkdownHeadings {
 
     /// 주석 때문에 줄 전체를 제외했지만 주석 밖에 보이는 내용도 있었는지 알린다.
     /// 완료 기준은 그 줄을 세지 않으며, 경로 판정은 읽지 못한 내용을 안전한 빈 목록으로 취급하지 않는다.
-    pub(crate) fn comment_excludes_visible_text(&self) -> bool {
+    pub fn comment_excludes_visible_text(&self) -> bool {
         self.mixed_comment_line
     }
 
-    pub(crate) fn line<'a>(&mut self, line: &'a str) -> IssueMarkdownLine<'a> {
+    pub fn line<'a>(&mut self, line: &'a str) -> IssueMarkdownLine<'a> {
         self.mixed_comment_line = false;
         if self.comment {
             self.scan_comments(line);

@@ -46,6 +46,7 @@ dependencies = [
 name = "akra-ade"
 version = "1.3.5"
 dependencies = [
+ "akra-issue-core",
  "anyhow",
  "askama",
  "axum",
@@ -98,6 +99,19 @@ dependencies = [
  "which",
  "windows-sys 0.61.2",
  "zeroize",
+]
+
+[[package]]
+name = "akra-issue-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2",
+ "toml",
 ]
 
 [[package]]

@@ -2,8 +2,8 @@
 //! Only the masked, approved shared copy is journaled. Raw draft text never belongs here.
 use serde::{Deserialize, Serialize};
 
-use crate::domain::issue_publish_intent::IssuePublishVaultField;
-use crate::domain::issue_work::{
+use crate::issue_publish_intent::IssuePublishVaultField;
+use crate::issue_work::{
     IssueFieldHash, IssueLocator, IssueProjectScope, IssueProvider, IssueReference, IssueSharedCopy,
 };
 

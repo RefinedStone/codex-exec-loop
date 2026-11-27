@@ -67,7 +67,7 @@ jobs:
           node-version: 22
 
       - name: Test CI and agent planning policy
-        run: node --test scripts/ci-scope.test.mjs scripts/agent-plan.test.mjs scripts/ci-performance.test.mjs scripts/native-rust-contracts.test.mjs scripts/ci-rust-test-inventory.test.mjs scripts/ci-cache.test.mjs scripts/native-confirmation-build-options.test.mjs
+        run: node --test scripts/ci-scope.test.mjs scripts/crate-boundaries.test.mjs scripts/agent-plan.test.mjs scripts/ci-performance.test.mjs scripts/native-rust-contracts.test.mjs scripts/ci-rust-test-inventory.test.mjs scripts/ci-cache.test.mjs scripts/native-confirmation-build-options.test.mjs
 
       - name: Classify validation scope
         id: classify
@@ -148,7 +148,7 @@ jobs:
         run: node scripts/ci-cache.mjs record restored
 
       - name: Run Rust tests
-        run: node scripts/ci-performance.mjs run rust-tests -- cargo test --locked --timings
+        run: node scripts/ci-performance.mjs run rust-tests -- cargo test --workspace --locked --timings
 
       - name: Test the built native confirmation process
         run: node scripts/ci-performance.mjs run native-confirmation -- node scripts/check_native_confirmation_process.mjs --timings
@@ -285,11 +285,14 @@ jobs:
       - name: Check TUI architecture
         run: node scripts/ci-performance.mjs run architecture -- bash scripts/check_tui_layering.sh
 
+      - name: Check workspace crate boundaries
+        run: node scripts/check_crate_boundaries.mjs
+
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
 
       - name: Run Rust clippy
-        run: node scripts/ci-performance.mjs run clippy -- cargo clippy --locked --all-targets --all-features -- -D warnings
+        run: node scripts/ci-performance.mjs run clippy -- cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
 
       - name: Save Rust registry cache
         id: save_registry
@@ -531,7 +534,12 @@ jobs:
       - name: Check native target
         if: matrix.target != 'x86_64-pc-windows-msvc'
         shell: bash
-        run: node scripts/ci-performance.mjs run native-check -- cargo check --locked --all-features --lib --bins --timings --target "${{ matrix.target }}"
+        run: node scripts/ci-performance.mjs run native-check -- cargo check --workspace --locked --all-features --lib --bins --timings --target "${{ matrix.target }}"
+
+      - name: Test workspace members on the native target
+        if: matrix.target != 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: cargo test --workspace --exclude akra-ade --locked --all-features --target "${{ matrix.target }}" --timings
 
       - name: Prepare and run native contract tests
         if: matrix.target != 'x86_64-pc-windows-msvc'
@@ -770,7 +778,7 @@ jobs:
         run: node scripts/ci-cache.mjs record restored
 
       - name: Check native smoke target
-        run: node scripts/ci-performance.mjs run smoke-check -- cargo check --locked --all-features --lib --bins --timings
+        run: node scripts/ci-performance.mjs run smoke-check -- cargo check --workspace --locked --all-features --lib --bins --timings
 
       - name: Save Rust registry cache
         id: save_registry

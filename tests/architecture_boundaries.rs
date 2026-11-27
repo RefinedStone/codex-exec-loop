@@ -508,7 +508,7 @@ fn vault_restore_contract_stays_out_of_general_kernel_and_gateway_surfaces() {
         &[
             "src/domain/kernel_event.rs",
             "src/domain/kernel_spec.rs",
-            "src/domain/issue_work.rs",
+            "crates/issue-core/src/issue_work.rs",
             "src/application/port/outbound/issue_core_port.rs",
             "src/application/port/outbound/kernel_event_log_port.rs",
             "src/application/port/outbound/kernel_gateway_port.rs",
@@ -545,7 +545,7 @@ fn raw_issue_snapshot_stays_out_of_general_kernel_and_gateway_surfaces() {
         &[
             "src/domain/kernel_event.rs",
             "src/domain/kernel_spec.rs",
-            "src/domain/issue_work.rs",
+            "crates/issue-core/src/issue_work.rs",
             "src/application/port/outbound/issue_core_port.rs",
             "src/application/port/outbound/kernel_event_log_port.rs",
             "src/application/port/outbound/kernel_gateway_port.rs",
