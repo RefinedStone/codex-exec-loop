@@ -179,6 +179,9 @@ describe("next turn model settings", () => {
     settings.setPolicy("t", "sandbox", "workspaceWrite");
     expect(settings.needsPolicyConsent("t")).toBe(true);
     expect(() => settings.setPolicy("t", "sandbox", "externalSandbox")).toThrow("정책 값");
+    settings.setPolicy("t", "sandbox", "readOnly");
+    settings.setModel("t", null);
+    expect(settings.prepare("t").params).toEqual({ approvalPolicy: "never", sandboxPolicy: { type: "readOnly", networkAccess: false } });
     settings.reset("t");
     expect(settings.prepare("t").params).toEqual({});
     settings.dispose();
