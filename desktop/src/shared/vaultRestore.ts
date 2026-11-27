@@ -20,6 +20,8 @@ export type VaultRestoreHold =
   | "profile_dev_renderer"
   | "profile_hidden_window"
   | "agent_working"
+  | "os_locked"
+  | "system_suspended"
   // 로컬 helper를 열 수 없거나 이 플랫폼이 native Vault 열람을 지원하지 않는다.
   | "source_unavailable"
   | "platform_unsupported"
@@ -133,6 +135,8 @@ const HOLD_TEXT: Record<VaultRestoreHold, string> = {
   profile_dev_renderer: "화면을 개발 서버에서 읽었습니다. 이 실행 방식에서는 열람을 보류합니다.",
   profile_hidden_window: "창을 숨기는 시험 방식으로 실행 중입니다. 이 실행 방식에서는 열람을 보류합니다.",
   agent_working: "이 앱에서 에이전트 턴이 실행 중입니다. 턴이 끝난 뒤에 다시 여세요.",
+  os_locked: "운영체제 화면이 잠겨 있습니다. 화면을 잠금 해제한 뒤 다시 확인하세요.",
+  system_suspended: "절전 상태입니다. 절전에서 돌아온 뒤 다시 확인하세요.",
   source_unavailable: "로컬 복원 경로를 열 수 없습니다. 공유본만 볼 수 있습니다.",
   platform_unsupported: "현재 환경에서는 신뢰할 수 있는 로컬 Vault 열람 경로를 사용할 수 없습니다. 공유본만 볼 수 있습니다.",
   confirmation_cancelled: "확인을 취소했습니다. 복원본을 열지 않았습니다.",

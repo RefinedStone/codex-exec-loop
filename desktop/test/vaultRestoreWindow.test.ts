@@ -160,6 +160,56 @@ describe("dedicated Vault window lifetime", () => {
     expect(f.source).toHaveBeenCalledTimes(1);
   });
 
+  it("fences all windows and new opens until both OS power holds are released", async () => {
+    const f = fixture();
+    send(f.window, VAULT_RESTORE_CHANNELS.ready);
+    const first = f.created[0]!;
+    const otherOpener = new FakeWindow();
+    f.windows.open(otherOpener as unknown as BrowserWindow, TARGET);
+    const other = allWindows.at(-1)!;
+    send(other, VAULT_RESTORE_CHANNELS.ready);
+    const second = f.created[1]!;
+    const restoring = deferred<{ kind: "restored"; title: string; body: string }>();
+    second.channel.restore.mockImplementation(() => restoring.promise);
+    second.prepared.resolve({ kind: "prepared" });
+    await microtasks();
+    expect(second.channel.restore).toHaveBeenCalledTimes(1);
+
+    f.windows.lockAll("os_lock");
+    expect(first.channel.close).toHaveBeenCalledTimes(1);
+    expect(second.channel.close).toHaveBeenCalledTimes(1);
+    first.prepared.resolve({ kind: "prepared" });
+    restoring.resolve({ kind: "restored", title: "late title", body: "late-private-canary" });
+    await microtasks();
+    expect(first.channel.restore).not.toHaveBeenCalled();
+    expect(JSON.stringify(other.webContents.send.mock.calls)).not.toContain("late-private-canary");
+
+    // Queued unlocks and new windows cannot start another helper while locked.
+    send(f.window, VAULT_RESTORE_CHANNELS.unlock);
+    f.windows.open(f.opener as unknown as BrowserWindow, {
+      ...TARGET, issue: { ...TARGET.issue, issue_id: "I_next" },
+    });
+    const next = allWindows.at(-1)!;
+    send(next, VAULT_RESTORE_CHANNELS.ready);
+    expect(f.source).toHaveBeenCalledTimes(2);
+    expect(next.webContents.send).toHaveBeenLastCalledWith(
+      VAULT_RESTORE_CHANNELS.state, { phase: "held", reason: "os_locked" },
+    );
+
+    f.windows.lockAll("suspend");
+    f.windows.releasePowerHold("os_lock");
+    send(next, VAULT_RESTORE_CHANNELS.unlock);
+    expect(next.webContents.send).toHaveBeenLastCalledWith(
+      VAULT_RESTORE_CHANNELS.state, { phase: "held", reason: "system_suspended" },
+    );
+    expect(f.source).toHaveBeenCalledTimes(2);
+    f.windows.releasePowerHold("suspend");
+    expect(f.source).toHaveBeenCalledTimes(2); // no automatic confirmation
+    send(next, VAULT_RESTORE_CHANNELS.unlock);
+    expect(f.source).toHaveBeenCalledTimes(3);
+    expect(f.created[2]!.channel.prepare).toHaveBeenCalledTimes(1);
+  });
+
   it("ignores the general window and nested frames on the private channels", () => {
     const f = fixture();
     send(f.opener, VAULT_RESTORE_CHANNELS.ready);

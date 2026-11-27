@@ -103,6 +103,30 @@ try {
   check("unsupported reconnect is absent from the dedicated screen", await restore.getByTestId("vault-restore-review").count() === 0
     && (await restore.getByTestId("vault-restore-detail").textContent()).includes("재연결을 지원하지 않습니다"));
 
+  // The production power event listeners are exercised with synthetic events in
+  // this disposable Electron process. Native approval remains blocked.
+  await showSynthetic({ phase: "restored", ...synthetic, expiresAt: Date.now() + 60_000 });
+  await restore.getByTestId("vault-restored-body").waitFor();
+  await app.evaluate(({ powerMonitor }) => powerMonitor.emit("lock-screen"));
+  await restore.locator('#root[data-phase="locked"]').waitFor();
+  check("the power lock event masks plaintext", !(await restore.locator("body").textContent()).includes("synthetic-private-body"));
+  await restore.getByTestId("vault-restore-unlock").click();
+  await restore.locator('#root[data-phase="held"]').waitFor();
+  check("unlock remains held during OS lock", (await restore.getByTestId("vault-restore-detail").textContent()).includes("화면이 잠겨 있습니다"));
+  await app.evaluate(({ powerMonitor }) => {
+    powerMonitor.emit("suspend");
+    powerMonitor.emit("unlock-screen");
+  });
+  await restore.locator('#root[data-phase="locked"]').waitFor();
+  await restore.getByTestId("vault-restore-unlock").click();
+  await restore.locator('#root[data-phase="held"]').waitFor();
+  check("screen unlock does not release the suspend hold", (await restore.getByTestId("vault-restore-detail").textContent()).includes("절전 상태"));
+  await app.evaluate(({ powerMonitor }) => powerMonitor.emit("resume"));
+  check("resume does not reveal or automatically reopen", (await restore.getByTestId("vault-restored-body").count()) === 0);
+  await restore.getByTestId("vault-restore-unlock").click();
+  await restore.locator('#root[data-phase="held"]').waitFor();
+  check("fresh unlock after resume still honors the automation profile", (await restore.getByTestId("vault-restore-detail").textContent()).includes("자동화"));
+
   // 화면만 검증하는 재연결 fixture다. 실제 native 쓰기 확인으로 간주하지 않는다.
   const reviewText = "합성 공유본 <img src=x onerror=alert(1)> [[mask]]";
   await app.evaluate(({ ipcMain }) => {

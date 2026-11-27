@@ -44,3 +44,13 @@ cargo test --locked --all-features --lib --target x86_64-pc-windows-msvc storage
 ```
 
 Windows native gate의 기존 `gateway::tests::issue_shared_copy_flow::`와 `filesystem::evidence_vault_store::` inventory가 이 시험을 포함한다. 다른 OS에서는 Windows 공유 잠금 fixture가 컴파일되지 않는다. 실제 실행 결과는 PR에 기록한다. 이번 증거는 저장 open과 pointer rename의 공유 거절이며 ENOSPC, fsync/flush, payload commit 중단 또는 물리적 전원 차단의 증거가 아니다.
+
+## OS 전원 이벤트와 복원 창의 재열람 경계 (#2705)
+
+화면 잠금 및 절전은 각각 독립적인 보류 상태로 기록한다. 이벤트 수신 시 모든 전용 창의 현재 열람 및 native channel을 폐기하고, 보류 상태가 유지되는 동안 뒤늦은 unlock IPC와 새 창의 ready도 helper를 시작하지 않는다. unlock-screen은 화면 잠금만, resume은 절전만 해제한다. 해제 자체는 열람을 시작하지 않는다. 일반적인 실행 프로필 검사 뒤 실제 OS idle state가 locked인지도 확인한다.
+
+Windows x64, prerelease 1d538c2fe 기반:
+- vaultRestoreWindow/vaultRestore/vaultRestoreSource 단위시험 114/114, Desktop typecheck 및 production build 통과.
+- 실제 Electron + fake Gateway 화면 시험 통과. 폐기 프로필에서 합성 powerMonitor 이벤트와 synthetic restored state를 사용해 재가림, 보류 중 재열람, 겹친 화면 잠금과 절전, resume 후 자동 복원 금지를 확인했다.
+- 다중 창 단위시험에서는 지연된 native prepare/restore 대역의 응답을 두 창에서 동시에 무효화하고 새 창도 보류하는 것을 검사했다.
+- 실제 OS 잠금 이벤트, 대화형 OS 확인, 실제 Credential Manager/Vault, 외부 API는 이 시험에서 사용하지 않았다. 해당 native 인수는 #2704/#2724에 남긴다.
