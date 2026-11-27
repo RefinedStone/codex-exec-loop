@@ -12,6 +12,8 @@ export const OLD_REPOSITORY = "RefinedStone/codex-exec-loop";
 export const NEW_REPOSITORY = "RefinedStone/akra-ade";
 
 
+const ACTIVE_RUN_STATES = ["queued", "in_progress", "waiting", "requested", "pending"];
+const ISSUE_SAMPLES = [2414, 2555, 2584, 2591];
 const sorted = (items, key) => [...items].sort((a, b) => String(key(a)).localeCompare(String(key(b)), "en"));
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
@@ -46,7 +48,7 @@ function remoteRefs(repository) {
   });
   return output.trim().split(/\r?\n/).filter(Boolean).map(line => {
     const [sha, ref] = line.split("\t");
-    assert.match(sha, /^[a-f0-9]{40,64}$/);
+    assert.match(sha, /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
     assert.ok(ref.startsWith("refs/heads/") || ref.startsWith("refs/tags/"));
     return { ref, sha };
   }).sort((a, b) => a.ref.localeCompare(b.ref, "en"));
@@ -68,7 +70,7 @@ export function capture(phase, api = readApi, readRefs = remoteRefs) {
     number: pr.number, id: pr.id, base: pr.base.ref, baseRepoId: pr.base.repo?.id,
     head: pr.head.ref, headRepoId: pr.head.repo?.id ?? null, headSha: pr.head.sha,
   })), x => x.number);
-  const issueSamples = [2414, 2555, 2584, 2591].map(number => {
+  const issueSamples = ISSUE_SAMPLES.map(number => {
     const issue = api(prefix + "/issues/" + number);
     assert.equal(issue.number, number);
     assert.ok(Number.isSafeInteger(issue.id) && !issue.pull_request, "issue identity is not readable");
@@ -95,18 +97,71 @@ export function capture(phase, api = readApi, readRefs = remoteRefs) {
   assert.deepEqual(legacyRefs, refs, "legacy Git refs differ from canonical refs");
   for (const branch of branches) assert.ok(refs.some(ref => ref.ref === "refs/heads/" + branch.name && ref.sha === branch.sha),
     "branch changed during capture; take a new snapshot in a quiet window");
-  const activeRuns = ["queued", "in_progress", "waiting", "requested", "pending"].flatMap(status => {
+  const activeRuns = ACTIVE_RUN_STATES.map(status => {
     const data = api(prefix + "/actions/runs?status=" + status + "&per_page=100");
     assert.ok(Number.isInteger(data.total_count) && Array.isArray(data.workflow_runs));
-    return [{ status, count: data.total_count }];
+    return { status, count: data.total_count };
   });
-  return { schema: 1, capturedAt: new Date().toISOString(), phase, repository: {
+  const snapshot = { schema: 1, capturedAt: new Date().toISOString(), phase, repository: {
     id: repo.id, name: repo.full_name, defaultBranch: repo.default_branch,
     private: repo.private, visibility: repo.visibility, archived: repo.archived,
   }, branches, pulls, issueSamples, releases, rulesets, refs, activeRuns };
+  validateSnapshot(snapshot, phase);
+  return snapshot;
+}
+
+const nonempty = value => typeof value === "string" && value.trim().length > 0;
+const positiveId = value => Number.isSafeInteger(value) && value > 0;
+const count = value => Number.isSafeInteger(value) && value >= 0;
+const boolean = value => typeof value === "boolean";
+const sha = value => typeof value === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value);
+const hash = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+const record = value => value !== null && typeof value === "object" && !Array.isArray(value);
+
+function entries(values, label, validate, key) {
+  assert.ok(Array.isArray(values), "missing array: " + label);
+  assert.ok(values.every(value => record(value) && validate(value)), "invalid " + label + " entry");
+  assert.equal(new Set(values.map(key)).size, values.length, "duplicate " + label + " entry");
+}
+
+export function validateSnapshot(snapshot, phase) {
+  assert.ok(record(snapshot) && snapshot.schema === 1 && snapshot.phase === phase, "invalid snapshot envelope");
+  assert.ok(nonempty(snapshot.capturedAt) && Number.isFinite(Date.parse(snapshot.capturedAt)), "missing capture time");
+  const repo = snapshot.repository;
+  assert.ok(record(repo) && repo.id === REPOSITORY_ID && repo.name === (phase === "before" ? OLD_REPOSITORY : NEW_REPOSITORY)
+    && nonempty(repo.defaultBranch) && boolean(repo.private) && boolean(repo.archived)
+    && ["public", "private", "internal"].includes(repo.visibility), "invalid repository identity or settings");
+  entries(snapshot.branches, "branches", b => nonempty(b.name) && sha(b.sha) && boolean(b.protected), b => b.name);
+  assert.ok(snapshot.branches.some(b => b.name === "prerelease") && snapshot.branches.some(b => b.name === repo.defaultBranch),
+    "branches missing prerelease or default branch");
+  entries(snapshot.refs, "refs", r => nonempty(r.ref) && /^(refs\/heads\/|refs\/tags\/).+/.test(r.ref) && sha(r.sha), r => r.ref);
+  const headRefs = new Map(snapshot.refs.filter(r => r.ref.startsWith("refs/heads/")).map(r => [r.ref.slice(11), r.sha]));
+  assert.ok(headRefs.size === snapshot.branches.length && snapshot.branches.every(b => headRefs.get(b.name) === b.sha),
+    "branches and Git refs disagree");
+  entries(snapshot.pulls, "pulls", p => positiveId(p.id) && positiveId(p.number) && nonempty(p.base)
+    && p.baseRepoId === REPOSITORY_ID && nonempty(p.head) && (p.headRepoId === null || positiveId(p.headRepoId))
+    && sha(p.headSha), p => p.number);
+  assert.equal(new Set(snapshot.pulls.map(p => p.id)).size, snapshot.pulls.length, "duplicate pull IDs");
+  entries(snapshot.issueSamples, "issueSamples", i => positiveId(i.id) && positiveId(i.number)
+    && ["open", "closed"].includes(i.state), i => i.number);
+  assert.deepEqual(snapshot.issueSamples.map(i => i.number).sort((a,b) => a-b), ISSUE_SAMPLES, "issueSamples missing required identities");
+  assert.equal(new Set(snapshot.issueSamples.map(i => i.id)).size, ISSUE_SAMPLES.length, "duplicate issue IDs");
+  entries(snapshot.releases, "releases", r => positiveId(r.id) && nonempty(r.tag) && boolean(r.draft)
+    && boolean(r.prerelease) && Array.isArray(r.assets), r => r.id);
+  for (const release of snapshot.releases) {
+    entries(release.assets, "release assets", a => positiveId(a.id) && nonempty(a.name) && count(a.size)
+      && (a.digest === null || nonempty(a.digest)), a => a.id);
+  }
+  entries(snapshot.rulesets, "rulesets", r => positiveId(r.id) && nonempty(r.name)
+    && ["branch", "tag", "push"].includes(r.target) && ["active", "disabled", "evaluate"].includes(r.enforcement)
+    && hash(r.contract), r => r.id);
+  entries(snapshot.activeRuns, "activeRuns", r => ACTIVE_RUN_STATES.includes(r.status) && count(r.count), r => r.status);
+  assert.deepEqual(snapshot.activeRuns.map(r => r.status).sort(), [...ACTIVE_RUN_STATES].sort(), "activeRuns missing required statuses");
 }
 
 export function compare(before, after) {
+  validateSnapshot(before, "before");
+  validateSnapshot(after, "after");
   assert.equal(before.schema, 1);
   assert.equal(after.schema, 1);
   assert.equal(before.phase, "before");
