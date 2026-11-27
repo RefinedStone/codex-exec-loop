@@ -5,18 +5,12 @@ use zeroize::Zeroize;
 use super::evidence_vault_port::{VaultRecordKey, VaultRecordScope, VaultStoreError};
 use crate::domain::issue_work::{IssueProjectScope, IssueReference};
 
-/*
- * Evidence Vault 의 백업 계약이다 (#2432). 암호화한 레코드와 복구 키로 감싼 장치 키를 보관 파일 한 개로 내보내고,
- * 복구 키로 다른 장치의 Vault 에 가져온다.
- *
- * 보관 파일에는 복구 키와 평문이 없다. 가져오기는 사용자가 승인한 프로젝트의 레코드만 로컬 장치 키로 다시
- * 암호화해 쓴다. 원격 이슈의 ID 는 바꾸지 않는다. 읽을 수 있는 로컬 연결과 로컬 장치 키는 바꾸지 않는다.
- *
- * 이 파일의 요청 타입은 `Serialize` 를 구현하지 않고 `Debug` 는 키를 가린다.
- */
+/* V2 exports contain only explicitly selected records encrypted under an independent archive key.
+ * V1 import remains supported. Only legacy archives wrap the original device key.
+ * These request types are not serialized; their key values redact Debug output. */
 
 /// 백업 계약의 판이다. 요청, 응답, 오류의 뜻이 바뀌면 올린다.
-pub const EVIDENCE_VAULT_BACKUP_CONTRACT_VERSION: u32 = 4;
+pub const EVIDENCE_VAULT_BACKUP_CONTRACT_VERSION: u32 = 5;
 
 /// 복구 키의 길이이다 (256 bit).
 pub const VAULT_RECOVERY_KEY_LEN: usize = 32;
@@ -85,7 +79,7 @@ impl fmt::Debug for VaultRecoveryKey {
 pub struct VaultBackupExportRequest {
     /// 내보낼 레코드의 범위이다. 레코드가 없는 범위는 건너뛴다.
     pub scopes: Vec<VaultRecordScope>,
-    /// 이 장치의 키이다. 복구 키로 감싸서 보관 파일에 넣는다.
+    /// Source-only key: authenticates the selected records. It must not be serialized or wrapped on export.
     pub key: VaultRecordKey,
     pub recovery_key: VaultRecoveryKey,
 }
@@ -119,6 +113,8 @@ pub struct VaultBackupImportRequest {
 /// 가져오기의 결과이다. 평문은 없다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultBackupImportReport {
+    /// Authenticated archive format; v1 wraps a device key and v2 wraps only an archive key.
+    pub format_version: u32,
     /// 보관 파일의 안정 식별자이다.
     pub backup_id: String,
     /// 이 호출이 연결(`CurrentVersion`)을 쓴 이슈이다. 프로젝트는 로컬 프로젝트이다.
@@ -204,7 +200,7 @@ pub trait EvidenceVaultBackupPort: Send + Sync {
         EVIDENCE_VAULT_BACKUP_CONTRACT_VERSION
     }
 
-    /// 레코드를 암호문 그대로 담고 장치 키를 복구 키로 감싼 보관 파일의 내용을 만든다. Vault 를 바꾸지 않는다.
+    /// Reseal the selected records under a fresh archive-only key. Never wrap the source device key.
     fn export(&self, request: VaultBackupExportRequest) -> Result<String, VaultBackupError>;
 
     /// Authenticate and stage all records without creating a destination key or writing to the vault.

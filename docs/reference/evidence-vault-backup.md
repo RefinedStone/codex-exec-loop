@@ -14,7 +14,7 @@ Code: `EvidenceVaultBackupService` (`src/application/service/evidence_vault_back
 - `export` takes a list of issues. For each issue that has a restore binding it exports the
   `CurrentVersion` record and the `ConfirmedVersion` records of that version. Issues without a
   binding and publish-intent records are not exported.
-- Each record is verified with the device key before it goes into the archive. A record that
+- Each selected record is opened with the device key and resealed with a new random archive-only key. A record that
   fails stops the export. The archived `CurrentVersion` must match the selected field scopes;
   otherwise `BindingChanged` asks the caller to retry with a fresh selection.
 - `export` makes a new recovery key (32 bytes from the OS random source) and returns it together
@@ -24,20 +24,20 @@ Code: `EvidenceVaultBackupService` (`src/application/service/evidence_vault_back
 - `export` does not change the vault. It returns no restored plaintext. The caller writes the
   archive content to a file that the user selects.
 
-## Archive format (version 1)
+## Archive format (v2 export, v1/v2 import)
 
-The archive is one JSON document.
+The archive is one JSON document. New exports use v2 only. A v2 archive and its recovery key open the selected records; they do not yield the device key. **Legacy v1 is different:** anyone holding both a v1 archive and its recovery key can recover the exporting device key. Do not treat v1 as a selection-limited secret.
 
 | Field | Content |
 | --- | --- |
-| `formatVersion` | `1`. An unknown version is rejected as `UnsupportedFormat`. |
+| `formatVersion` | `2` on export. The reader also accepts `1`. An unknown version is rejected as `UnsupportedFormat`. |
 | `algorithm` | `chacha20-poly1305` (key wrap). |
 | `kdf` | `hkdf-sha256`. |
 | `backupId` | 16 random bytes, hexadecimal. Stable identifier of the archive and HKDF salt. |
-| `keyId` | Key identifier of the device key that sealed the records. |
+| `keyId` | Identifier of the archive key in v2 (`archive-` plus `backupId`); device key identifier in v1. |
 | `wrapNonce` | base64, 96-bit random nonce of the key wrap. |
-| `wrappedKey` | base64, the device key sealed under the wrap key, with the authentication tag. |
-| `records` | List of `issue`, `field`, `binding`, and `record`. `record` is the unchanged content of the record file (see the record format in [architecture](./architecture.md)). |
+| `wrappedKey` | base64, the archive-only key (v2) or device key (v1), encrypted under the wrap key with an authentication tag. |
+| `records` | List of `issue`, `field`, `binding`, and `record`. In v2 `record` is the selected content resealed under the archive-only key; v1 copied the device-encrypted file (see the record format in [architecture](./architecture.md)). |
 
 - Wrap key: HKDF-SHA256 from `ring`, input key material = recovery key, salt = `backupId` bytes,
   info = `akra-evidence-vault-backup-wrap-key-v1`, output = 32 bytes. The recovery key has 256 bits
@@ -57,7 +57,7 @@ approved projects. Each approval names one project of the archive and the local 
 receives its records.
 
 1. A cancelled decision stops before the key store and the vault are touched (`NotApproved`).
-2. The whole archive is verified before the first write: the device key must unwrap with the
+2. The whole archive is verified before the first write: the wrapped record key must authenticate with the
    recovery key, and every record must open with that key and its original scope. A wrong
    recovery key or a changed header or record list is `RecoveryKeyRejected`. An unreadable archive
    or a failed record is `CorruptArchive`. Nothing is written in these cases.
@@ -69,8 +69,7 @@ receives its records.
    Malformed archives, wrong recovery keys, and project-list previews leave a fresh device key store
    untouched. An approved installation on a device without a key uses the
    [coordinated initializer](./evidence-vault-key-initialization.md). An unresolved attempt stops
-   installation with `Locked(KeyStoreUnavailable)` before the first record write. The exporting
-   device key is used in memory only and is not stored.
+   installation with `Locked(KeyStoreUnavailable)` before the first record write. For v1 the exporting device key is used in memory only and is not stored. V2 never imports that key.
 5. A readable local `CurrentVersion` is never changed (`kept_local`), including in recovery mode.
    An unreadable binding returns `LocalRecoveryRequired` in `PreserveLocal` mode. Only explicit
    `RecoverUnreadable` approval replaces that issue's backup field records and installs its binding
@@ -98,7 +97,7 @@ restore is held and the user reconnects on that issue (see [architecture](./arch
 - Failure after the pointer replacement is reported as
   `Record(VaultStoreError::WriteOutcomeUnknown)`. Reload before retrying; do not assume rollback.
   A retry which sees a readable pointer preserves it and reports `kept_local`.
-- Restored plaintext and the unwrapped device key exist in process memory only during the import.
+- Restored plaintext and the unwrapped record key exist in process memory only during the import.
   They are not written to a temporary file or a log.
 
 ## Limits
@@ -106,8 +105,7 @@ restore is held and the user reconnects on that issue (see [architecture](./arch
 - A lost recovery key cannot be made again. Without it the archive cannot be opened by Akra or by
   anyone else; the records in it stay ciphertext. The vault on the original device is not affected
   and a new export makes a new recovery key.
-- The recovery key and the archive together are equal to the device key of the exporting device at
-  the time of the export. Keep them in different places.
+- Keep the archive and its recovery key in different places. V2 limits recovery to the exported selection. V1 does not: its archive and key together expose the source device key at export time.
 - A new export does not cancel an older archive or an older recovery key.
 - Records made after the export are not in the archive.
 - The exporting device and the importing device do not synchronize. An import is a one-time copy.

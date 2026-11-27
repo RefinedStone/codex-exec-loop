@@ -96,7 +96,7 @@ impl EvidenceVaultBackupService {
     ) -> Result<VaultBackupExport, VaultBackupFailure> {
         let key = self
             .unlock
-            .sealing_key()
+            .existing_key()
             .map_err(VaultBackupFailure::Locked)?;
         let mut scopes = Vec::new();
         for issue in issues {
@@ -388,7 +388,7 @@ mod tests {
         let (source, export) = exported("export");
         let archive = archive_json(&export.archive);
 
-        assert_eq!(archive["formatVersion"], 1);
+        assert_eq!(archive["formatVersion"], 2);
         assert_eq!(archive["algorithm"], "chacha20-poly1305");
         assert_eq!(archive["kdf"], "hkdf-sha256");
         assert_eq!(archive["records"].as_array().expect("records").len(), 6);
@@ -536,7 +536,7 @@ mod tests {
             Err(VaultBackupError::CorruptArchive)
         );
         assert_eq!(
-            edited(&|archive| archive["formatVersion"] = 2.into()),
+            edited(&|archive| archive["formatVersion"] = 3.into()),
             Err(VaultBackupError::UnsupportedFormat)
         );
         // 레코드의 암호문, 레코드 목록, 범위, 머리말, 감싼 키는 모두 감싼 키의 인증에 묶여 있다.
