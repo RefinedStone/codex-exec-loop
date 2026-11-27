@@ -75,6 +75,9 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension};
 use std::sync::{Arc, Barrier};
 
+#[path = "tests/published_v5.rs"]
+mod authority_store_published_v5;
+
 use super::{
     ADMIN_FILE_SYNC_CLAIM_KIND, ADMIN_TASK_MUTATION_CLAIM_KIND, DISTRIBUTOR_QUEUE_CLAIM_KIND,
     OFFICIAL_REFRESH_CLAIM_KIND, OFFICIAL_REFRESH_SCOPE_KEY, open_authority_connection,

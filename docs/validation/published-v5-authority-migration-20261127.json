@@ -1,0 +1,179 @@
+{
+  "schema": 1,
+  "sourceBaseSha": "de1a879deb0b5407b437762faf1530330e8e2f6c",
+  "platform": "Windows 10.0.26200 x64",
+  "rust": "1.95.0",
+  "profile": "debug",
+  "oldRelease": {
+    "tag": "v1.3.5",
+    "assetId": 452661989,
+    "archiveSha256": "496097730bc8b7cb37d6d79759456bc68bf47d5995eaad8e029a1d741ca01eaa"
+  },
+  "candidateArchiveSha256": "dc17c575773a93e1675c88d72775656c8d048bd09d5c5303e6b7bc1f7e0b26d2",
+  "unitTests": {
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0
+  },
+  "mutation": {
+    "exit": 101,
+    "passed": 0,
+    "failed": 3,
+    "restored": true
+  },
+  "genuineArchiveUpgradeExit": 0,
+  "migration": {
+    "exit": 0,
+    "reopenExit": 0,
+    "schema": "21",
+    "planningRevision": 4,
+    "taskIds": [
+      "task-worker-20261127T205948Z-55522956acfc",
+      "task-worker-20261127T205920Z-af05a4c04a1c"
+    ],
+    "allLegacyTaskFieldsPreserved": true,
+    "canonicalRootPreserved": true,
+    "queueHead": "task-worker-20261127T205920Z-af05a4c04a1c",
+    "oldBinaryDowngrade": {
+      "exit": 1,
+      "error": "unsupported authority-store schema version: 21",
+      "beforeSha256": "1c64cfc5c01b46b06beb1375470fa06759d6359f1c0ba49242c30d62eb3caad1",
+      "afterSha256": "1c64cfc5c01b46b06beb1375470fa06759d6359f1c0ba49242c30d62eb3caad1",
+      "unchanged": true
+    }
+  },
+  "rejections": [
+    {
+      "key": "schema_version",
+      "value": "4",
+      "exit": 1,
+      "error": "unsupported authority-store schema version: 4",
+      "beforeSha256": "767179699a20711fe90535484c200df7cc88f7992e55cc0a7c0597a92b517823",
+      "afterSha256": "767179699a20711fe90535484c200df7cc88f7992e55cc0a7c0597a92b517823",
+      "unchanged": true
+    },
+    {
+      "key": "schema_version",
+      "value": "6",
+      "exit": 1,
+      "error": "unsupported authority-store schema version: 6",
+      "beforeSha256": "b9a0d6f87d0d897b8f94eb2196406215a2201384c3d5e09f8a52185c78f41f0a",
+      "afterSha256": "b9a0d6f87d0d897b8f94eb2196406215a2201384c3d5e09f8a52185c78f41f0a",
+      "unchanged": true
+    },
+    {
+      "key": "schema_version",
+      "value": "22",
+      "exit": 1,
+      "error": "unsupported authority-store schema version: 22",
+      "beforeSha256": "34f6d1235c7c8cebacb846dea32e0c025fdbf7cc46b401feec90d6e83b0453e5",
+      "afterSha256": "34f6d1235c7c8cebacb846dea32e0c025fdbf7cc46b401feec90d6e83b0453e5",
+      "unchanged": true
+    },
+    {
+      "key": "schema_version",
+      "value": "not-a-version",
+      "exit": 1,
+      "error": "unsupported authority-store schema version: not-a-version",
+      "beforeSha256": "b6d7469214380f72294ca56d7c67d48a69fbd56b1e38ab78ed96f3eab4e6b2a7",
+      "afterSha256": "b6d7469214380f72294ca56d7c67d48a69fbd56b1e38ab78ed96f3eab4e6b2a7",
+      "unchanged": true
+    },
+    {
+      "key": "mode",
+      "value": "foreign-store",
+      "exit": 1,
+      "error": "unsupported authority-store mode: foreign-store",
+      "beforeSha256": "3f9b296241a085010802b1eeadf75577bd5533ef1b5633e2367b1a2b6c3dc1f0",
+      "afterSha256": "3f9b296241a085010802b1eeadf75577bd5533ef1b5633e2367b1a2b6c3dc1f0",
+      "unchanged": true
+    },
+    {
+      "key": "canonical_repo_root",
+      "value": "foreign-repository",
+      "exit": 1,
+      "error": "legacy authority-store is bound to a different canonical repository",
+      "beforeSha256": "d2925c3fbe5c9fb65856d3caff55495c10d9afe3b7c7068ab072612e5dece870",
+      "afterSha256": "d2925c3fbe5c9fb65856d3caff55495c10d9afe3b7c7068ab072612e5dece870",
+      "unchanged": true
+    },
+    {
+      "key": "repository_identity",
+      "value": "foreign-incarnation",
+      "exit": 1,
+      "error": "authority-store is bound to a different repository identity",
+      "beforeSha256": "6959e67833a169d5921b89ca283a0a91d9116a994e72abc1f3159424966f0a82",
+      "afterSha256": "6959e67833a169d5921b89ca283a0a91d9116a994e72abc1f3159424966f0a82",
+      "unchanged": true
+    }
+  ],
+  "rollback": {
+    "exit": 1,
+    "error": "failed to update authority metadata `schema_version`",
+    "beforeSha256": "ae443dca162b6cf2efdc644337dfca7aab90c099e615afb8a0149a9af3498c25",
+    "afterSha256": "ae443dca162b6cf2efdc644337dfca7aab90c099e615afb8a0149a9af3498c25",
+    "unchanged": true
+  },
+  "repositoryGate": {
+    "command": "node scripts/agent-plan.mjs --base origin/codex/owner-receipts-st01a21ea2 --run",
+    "exit": 1,
+    "restarted": false,
+    "passedContracts": 107,
+    "passedTestsInCompletedContracts": 991,
+    "authoritySelectorPassed": 8,
+    "failedContract": {
+      "package": "akra-native",
+      "name": "member remainder",
+      "passed": 28,
+      "failed": 3,
+      "ignored": 1
+    },
+    "failures": [
+      "trusted_executable::fingerprint::tests::pinned_native_format_and_digest_describe_the_same_bytes",
+      "trusted_executable::fingerprint::tests::a_modified_pinned_executable_cannot_keep_its_prepared_identity",
+      "trusted_executable::tests::native_host_git_and_node_formats_are_accepted"
+    ],
+    "cause": "Windows executable ancestor ACL validation rejects the existing Local AppData and Node installation parent directories. Failing source files are unchanged by this patch; a separate baseline run was not performed.",
+    "desktop": {
+      "passed": 1527,
+      "skipped": 8
+    },
+    "clippy": {
+      "exit": 0,
+      "arguments": "--locked --all-targets --all-features --target x86_64-pc-windows-msvc -- -D warnings"
+    }
+  },
+  "preIncarnationRecoveryExperiment": {
+    "dateUtc": "2026-11-27T21:47:03.074Z",
+    "genuineOldTaskId": "task-worker-20261127T214609Z-de2cfd20562a",
+    "sourceSchema": 5,
+    "sourceSha256": "39587910f7fcb58fe0ff9e1a273a29a0608f335e33aa19d1cead826443b5b443",
+    "firstCandidateReadExit": 1,
+    "firstCandidateError": "planning task authority is unavailable",
+    "isolatedNamespace": true,
+    "occupiedDestinationCopyError": "EEXIST",
+    "occupiedDestinationUnchanged": true,
+    "copyToFreshProfileExit": 0,
+    "allLegacyTaskRowsPreserved": true,
+    "migratedSchema": "21",
+    "planningRevision": "5",
+    "repositoryIdentityBound": true,
+    "sourceSha256After": "39587910f7fcb58fe0ff9e1a273a29a0608f335e33aa19d1cead826443b5b443",
+    "scope": "Disposable quiescent fixture copied explicitly into an absent destination in a separate profile. This is an experiment, not a product recovery command. No identity markers were rewritten.",
+    "remaining": [
+      "Explicit source identity confirmation for ambiguous historical repositories",
+      "Source writer quiescence and race-safe source/destination identity checks",
+      "Product recovery command with atomic publish, no-clobber and private-file validation",
+      "Existing destination reconciliation is unsupported"
+    ]
+  },
+  "remainingGap": "Occupied pre-incarnation Git namespace recovery remains separate; no automatic adoption was added.",
+  "safety": {
+    "realUserProfiles": 0,
+    "credentialAccess": 0,
+    "modelCalls": 0,
+    "productProviderWrites": 0,
+    "settingsChanges": 0,
+    "packagePublications": 0
+  }
+}
