@@ -464,6 +464,15 @@ impl AppServerConnectionConfig {
     }
 
     #[cfg(test)]
+    pub(super) fn with_test_script(mut self, script: &Path) -> Self {
+        self.executable_prefix_args = vec![script.as_os_str().to_owned()];
+        self.response_timeout = Duration::from_secs(5);
+        self.approval_timeout = Duration::from_secs(5);
+        self.interrupt_total_timeout = Duration::from_secs(5);
+        self
+    }
+
+    #[cfg(test)]
     pub(super) fn with_test_elevated_environment(mut self) -> Self {
         self.shell_environment_inherit = ShellEnvironmentInherit::All;
         self.process_environment_policy = ProcessEnvironmentPolicy::All;

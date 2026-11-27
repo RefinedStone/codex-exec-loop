@@ -7,6 +7,7 @@ use crate::domain::planning::verification::{
 use crate::domain::planning::{TaskAcceptanceChannel, TaskStatus};
 use std::sync::atomic::Ordering;
 
+mod evaluation;
 mod fences;
 mod fixtures;
 mod leases;
