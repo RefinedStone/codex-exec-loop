@@ -49,6 +49,7 @@ dependencies = [
  "akra-issue-core",
  "akra-native",
  "akra-verification",
+ "akra-verification-native",
  "anyhow",
  "askama",
  "axum",
@@ -139,6 +140,21 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "akra-verification-native"
+version = "0.1.0"
+dependencies = [
+ "akra-native",
+ "akra-verification",
+ "anyhow",
+ "chrono",
+ "libc",
+ "rand 0.8.6",
+ "serde_json",
+ "sha2",
+ "tracing",
 ]
 
 [[package]]
