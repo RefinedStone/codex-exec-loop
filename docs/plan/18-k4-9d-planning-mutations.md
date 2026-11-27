@@ -2,7 +2,7 @@
 
 ## 문서 상태
 
-- 상태: **구현 중**. 9d-1 (2026-11-13), 9d-2 와 9d-3 (2026-11-18) 을 구현했다 (§8). 나머지 조각은 제안이다. 현재 제품 동작의 기준은 `docs/reference/` 이다.
+- 상태: **구현 중**. 9d-1 (2026-11-13), 9d-2 와 9d-3 (2026-11-18), 9d-6 (2026-11-26), 9d-4 와 9d-5 와 9d-7 의 입구 경계 시험 (2026-11-27, #2801) 을 구현했다 (§8). 9d-7 의 프롬프트 기록 정리는 제안이다. 현재 제품 동작의 기준은 `docs/reference/` 이다.
 - 상위 문서: [K4 명령 스펙](18-k4-command-spec.md) §2.2, §3.7 의 순서 4, §4 의 K4-9d. 같은 방법의 앞 조각은 §8 의
   K4-9a (planning 초기화)이다.
 - 이 문서를 따로 둔 이유: K4 설계는 K4-9d 를 한 줄로 적었다. 2026-11-13 의 코드 조사와 독립 리뷰(§7)에서 그 한 줄에 새
@@ -198,10 +198,10 @@ K4 설계는 `upsert_task` 처럼 "만들기와 고치기"를 한 명령으로 �
 | 9d-1 (구현 2026-11-13, §8) | 저장 명령의 실행기 (port 와 구현). 커널 입력을 "core 명령 또는 저장 명령"으로 넓힌다. 답의 `result` 와 스펙의 모양. 이유 코드 `planning_revision_stale`, `planning_locked` 와 서비스의 타입 오류. 명령 전용 조립의 `planning` 조회. 옛 Gateway 의 판별을 명령으로 넓힌다. 첫 명령 셋: `create_task`, `update_task`, `delete_task` | 확장 (`akra kernel planning create_task …` 가 된다. 입구는 그대로이다) | 실행기 시험 (다섯 갈래, 낡은 revision, guard, 결과), 프로토콜 시험, 명령 전용 조립 시험, Gateway 커널 시험 (실행 뒤와 거절 뒤의 `planning` 이벤트), 커널 시뮬레이션 (가짜 실행기. 기록과 거절의 불변식), 스펙·Desktop 타입·skill 일치 |
 | 9d-2 (구현 2026-11-18, §8) | admin 의 작업 변경이 커널 명령으로 간다. 지우기 폼에 revision. 처리기의 오류 타입, 409 와 원인의 글 | 전환 (지우기에 revision 이 필수가 된다) | 입구 시험 (기록의 호출자, 낡은 폼의 409), admin 시험 (JSON, HTML, HTMX) |
 | 9d-3 (구현 2026-11-18, §8) | 방향: 명령 셋과 admin | 전환 (고치기·지우기에 revision 이 필수가 된다) | 같다 |
-| 9d-4 | 파일 내보내기·적용: 명령 둘과 admin | 유지 | 같다. 작업 공간이 대표 checkout 과 다른 경우 |
-| 9d-5 | 초안의 승격: 명령 하나, 입력을 받는 승격 함수, admin | 유지 | 같다. 명령 전용 조립에서 승격이 되는지 본다 |
+| 9d-4 (구현 2026-11-27, §8) | 파일 내보내기·적용: 명령 둘과 admin | 유지 | 같다. 작업 공간이 대표 checkout 과 다른 경우 |
+| 9d-5 (구현 2026-11-27, §8) | 초안의 승격: 명령 하나, 입력을 받는 승격 함수, admin | 유지 | 같다. 명령 전용 조립에서 승격이 되는지 본다 |
 | 9d-6 (구현 2026-11-26, #2802) | `planning-tool` 의 선택 revision 과 worker 의 skill | 확장 | skill 파일 시험, 도구 요청 시험 (모델 턴 없음) |
-| 9d-7 | 읽기 경로에서 프롬프트 기록 정리를 뺀다. 입구 경계 시험 | 유지 | 구조 시험 |
+| 9d-7 (입구 경계 시험만 구현 2026-11-27, §8) | 읽기 경로에서 프롬프트 기록 정리를 뺀다. 입구 경계 시험 | 유지 | 구조 시험 |
 
 - 9d-1 이 나머지의 전제이다. 9d-2 ~ 9d-5 는 서로 독립이다.
 
@@ -445,3 +445,63 @@ revision 의 거절과 그 기록, 실패의 원인), admin 의 router 시험 (�
   422 이다. 작업의 route 도 같다 (9d-2 의 모양이다).
 - 만들기의 다시 하기(충돌 뒤의 재시도, 세 번 뒤의 `planning_locked`)와 방향 route 의 `planning_locked` → 409 에는
   시험이 없다. 타입의 길은 작업과 같다.
+
+### 9d-4, 9d-5, 9d-7 의 입구 경계 시험, K4-9b 의 9b-A (2026-11-27, #2801)
+
+만든 것:
+
+- 명령 넷 (`state: store`, 기록에 남는다):
+  - `export_planning_files`, `apply_planning_files` (입력 없음). 결과는 `planning_files_exported` (`directory`,
+    `paths`)와 `planning_files_applied` (`directory`, `paths`, 새 revision)이다. `directory` 는 파일이 있는 작업
+    공간(커널의 대표 checkout)이다.
+  - `promote_draft` (초안 이름, 종류, 방향 id, `expected_planning_revision`). 결과는 `draft_promoted`
+    (`promoted_file_count`, `is_valid`, 승격했을 때의 새 revision)이다. 낡은 revision 은 `planning_revision_stale`
+    로 거절된다: 승격 함수의 revision 검사와 저장의 충돌이 글자 오류 대신 거절의 타입을 돌려준다.
+  - `save_parallel_agent_profiles` (`profiles`, `scope: parallel`). 결과는 `parallel_agent_profiles_saved`
+    (`directory`)이다. 프로필 파일은 커널의 대표 checkout 에 쓴다. 커널이 배분할 때 그 파일을 읽기 때문이다.
+- facade: 파일의 admin 과 저장 명령이 함께 쓰는 함수 (`export_operator_planning_files`,
+  `apply_operator_planning_files`)와 화면의 결과 (`file_export_outcome`, `file_apply_outcome`). 승격은 셋으로
+  나눴다: admin 이 화면의 글을 초안에 저장하고 메모리의 revision 으로 명령을 만든다
+  (`stored_draft_promote_command`), 실행기가 저장된 초안을 올린다 (`promote_operator_draft`), admin 이 메모리를 새
+  revision 으로 옮기고 화면을 다시 읽는다 (`draft_promotion_outcome`).
+- 입구: `KernelRoutedPlanningAdmin` 이 파일과 승격을 커널 명령으로 보낸다. 같은 파일의
+  `KernelRoutedParallelAgentProfiles` 가 admin 의 프로필 저장을 보낸다 (읽기는 직접 한다). 파일이 admin 의 작업
+  공간이 아닌 폴더에 있으면 알림이 그 폴더를 말한다 ("... in `<폴더>`").
+- 처리기: 파일과 승격 route 의 거절은 409 와 글, 그 밖의 실패는 500 과 원인의 글이다. 파일과 프로필의 폼은 controls
+  화면과 알림으로 답하고, 승격의 폼은 초안 화면과 알림으로 답한다.
+- 커널 호스트: 파일 적용과 승격한 승격은 그 revision 의 planning 읽기를 기다려 답한다. 내보내기, 검사에 실패한 승격,
+  프로필 저장은 기다리지 않는다.
+- 입구 경계 시험 (`tests/architecture_boundaries.rs`): admin 조립이 두 kernel-routed port 를 쓴다. 그 port 의 메서드
+  가운데 저장 명령을 보내지 않는 것은 허용 목록(읽기, 초안의 만들기·읽기·저장, 초기화)에만 있다.
+- Gateway 가 그 저장소의 커널을 쥔 시험 (`src/adapter/inbound/gateway/tests/admin_planning.rs`): 프로세스 안의
+  Gateway 와 실제 저장소 커널로 admin 의 작업 만들기와 낡은 고치기를 보낸다. 시험만 Gateway 를 바꿔 끼운다
+  (`KernelRoutedPlanningAdmin::through_gateway`, `kernel_command_execution::build_with_gateway`).
+
+동작이 바뀐 것:
+
+- admin 의 작업 공간이 저장소의 대표 checkout 이 아니면(같은 저장소의 다른 worktree) 파일과 프로필은 대표 checkout
+  에 쓰이고 거기서 읽힌다. 전에는 admin 의 작업 공간이었다. 설계 §3.1 대로이다.
+- 승격의 실패가 500 만이 아니라 원인의 글을 답한다. 낡은 초안은 409 이다.
+- 승격은 커널에 보내기 전에 화면의 글을 초안에 저장한다 (검사 한 번이 더 돈다).
+
+설계와 다른 점:
+
+- `save_parallel_agent_profiles` 의 끝은 설계의 "저장의 완료"와 같지만, 답에 `result` 를 싣는다 (`directory`).
+  다른 저장 명령과 같이 입구가 결과로 끝을 안다.
+- 9d-7 의 "읽기 경로에서 프롬프트 기록 정리를 뺀다"는 하지 않았다. admin 조립은 아직 시작할 때 프롬프트 기록을
+  정리한다 (`maintain_prompt_logs_best_effort`).
+
+확인: 프로토콜 시험 (명령의 왕복, 스펙 파일 일치), 조립 시험 (실제 admin 조립과 명령 전용 조립: 네 변경의 기록과
+호출자 `akra-admin`, 내보낸 뒤에 planning 이 바뀐 적용과 낡은 초안의 승격의 `planning_revision_stale`, 내보내지
+않은 적용의 실패, 다른 worktree 에서 보낸 내보내기가 대표 checkout 에 쓰는가), Gateway 시험 (위), admin 의 router
+시험 (파일 실패의 500 과 글: JSON 과 폼), 구조 시험, 스펙·Desktop 타입·skill 일치. 파일 동기화와 프로필 쓰기는
+Windows 에서 쓸 수 없다 (전과 같다). 그 시험은 Windows 에서 돌지 않는다. 모델 턴은 없다.
+
+남긴 것:
+
+- 적용의 답의 revision 은 authority 저장의 값이다. 저장소가 result output 을 가지는 작업 공간에서는 그 뒤의 쓰기가
+  없다. 파일만 있는 작업 공간의 쓰기는 revision 을 올리지 않는다.
+- 파일과 승격 route 의 409 는 router 시험이 없다. 조립 시험이 거절의 타입을 본다.
+- admin 의 controls 화면은 프로필을 admin 의 작업 공간에서 읽는다. 다른 worktree 에서 연 admin 은 저장한 값을 다시
+  보지 못한다.
+- 9d-7 의 프롬프트 기록 정리 (위).
