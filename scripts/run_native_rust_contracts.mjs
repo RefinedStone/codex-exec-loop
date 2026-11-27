@@ -25,12 +25,14 @@ export function parseContractArguments(argv) {
   const options = [];
   const selection = {};
   let includeMembers = false;
+  let allTests = false;
   const seen = new Set();
   for (let index = 0; index < input.length; index += 1) {
     const option = input[index];
     if (seen.has(option)) throw new Error("Duplicate option: " + option);
     seen.add(option);
     if (option === "--include-members") { includeMembers = true; continue; }
+    if (option === "--all-tests") { allTests = true; continue; }
     if (booleanOptions.has(option)) { options.push(option); continue; }
     if (!valueOptions.has(option) && !selectors.has(option)) throw new Error("Unsupported Cargo option: " + option);
     const value = input[++index];
@@ -39,7 +41,7 @@ export function parseContractArguments(argv) {
     else options.push(option, value);
   }
   if (seen.has("--all-features") && seen.has("--features")) throw new Error("Use either --all-features or --features.");
-  if ((!filters.length && !selection.contractId)
+  if ((!filters.length && !selection.contractId && !(includeMembers && selection.package) && !allTests)
     || filters.some((filter) => !filter.trim() || filter.startsWith("-"))) {
     throw new Error("At least one nonempty test filter is required; libtest flags are not filters.");
   }
@@ -50,8 +52,9 @@ export function parseContractArguments(argv) {
   if (selection.contractId && (selection.package || filters.length)) {
     throw new Error("A registry contract ID supplies its own package, target and filter.");
   }
-  if (includeMembers && Object.keys(selection).length) throw new Error("--include-members cannot narrow the package selector.");
-  return {options, filters, ...(Object.keys(selection).length ? {selection} : {}), ...(includeMembers ? {includeMembers:true} : {})};
+  if (includeMembers && (selection.contractId || selection.targetKind || selection.targetName)) throw new Error("--include-members requires complete member targets, not a narrowed target or contract ID.");
+  if (allTests && (includeMembers || selection.contractId || !selection.package || !selection.targetKind || !selection.targetName)) throw new Error("--all-tests requires one explicit package and target kind/name.");
+  return {options, filters, ...(Object.keys(selection).length ? {selection} : {}), ...(includeMembers ? {includeMembers:true} : {}), ...(allTests ? {allTests:true} : {})};
 }
 
 export const libraryTestExecutable = exactTestExecutable;
@@ -131,6 +134,9 @@ export async function runNativeContracts(argv, {
   }
   metadata ??= JSON.parse(invoke("cargo", ["metadata", "--locked", "--format-version", "1", ...metadataOptions(options)]));
   const requests = resolveContractTargets(metadata, selection, ownership, parsed.includeMembers);
+  if (parsed.includeMembers && selection?.package && requests.some((request) => request.package === ownership.rootPackage || request.package === "akra-ade")) {
+    throw new Error("Root full validation must use the full gate; --include-members --package selects an independent member.");
+  }
   const buildGroups = new Map();
   for (const request of requests) {
     const key = request.target.kind + ":" + (request.target.kind === "lib" ? "" : request.target.name);
@@ -155,6 +161,7 @@ export async function runNativeContracts(argv, {
   }
   const assignments = planContractFilters(prepared, filters, ownership.transfers ?? [], Boolean(selection?.package));
   if (parsed.includeMembers) assignments.push(...remainingMemberTests(prepared, assignments));
+  if (parsed.allTests) assignments.push(...remainingMemberTests(prepared, assignments, {includeRoot:true, allowEmpty:true}));
   write("Prepared " + prepared.length + " package/target executables for " + filters.length + " native contract filters.\n");
   const optionsValue = (flag, fallback) => {
     const index = options.indexOf(flag); return index < 0 ? fallback : options[index + 1];
@@ -196,7 +203,7 @@ export async function runNativeContracts(argv, {
   }
   if (parsed.includeMembers) {
     for (const pkg of metadata.packages) {
-      if (!metadata.workspace_members.includes(pkg.id) || pkg.name === "akra-ade") continue;
+      if (!prepared.some((request) => request.packageId === pkg.id) || pkg.name === "akra-ade") continue;
       const docTarget = pkg.targets.find((target) => target.kind.includes("lib") && target.doctest === true);
       if (!docTarget) continue;
       const started = performance.now();

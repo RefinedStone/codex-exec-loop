@@ -45,13 +45,21 @@ try {
     cwd:directory,env,record(){},write(){},
   });
   assert.equal(explicit.executedTests,1);
+  const member=await runNativeContracts(["--include-members","--package","feature","--"],{
+    cwd:directory,env,record(){},write(){},
+  });
+  assert.deepEqual(member,{preparedTargets:2,executedGroups:2,executedTests:4});
+  const singleTarget=await runNativeContracts(["--all-tests","--package","feature","--target-kind","lib","--target-name","shared","--","native::contract"],{
+    cwd:directory,env,record(){},write(){},
+  });
+  assert.deepEqual(singleTarget,{preparedTargets:1,executedGroups:2,executedTests:3});
   const report={schemaVersion:1,capturedAt:new Date().toISOString(),platform:process.platform,
-    result,explicit,resultRecords:records,
+    result,explicit,member,singleTarget,resultRecords:records,
     checks:["same-name targets in different packages","moved filter inventory","non-overlapping member remainder",
       "ignored helper not enabled","integration target executed","doctest executed","explicit package/integration target"]};
   mkdirSync(resolve(reportFile,".."),{recursive:true});
   writeFileSync(reportFile,JSON.stringify(report,null,2)+"\n");
-  console.log(JSON.stringify({result,explicit,reportFile}));
+  console.log(JSON.stringify({result,explicit,member,singleTarget,reportFile}));
 } finally {
   rmSync(directory,{recursive:true,force:true});
 }
