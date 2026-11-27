@@ -96,10 +96,11 @@ impl GitHistoryPort for GitHistoryAdapter {
             .iter()
             .find(|(marker, _)| git_dir.join(marker).exists())
             .map(|(_, name)| (*name).to_string());
+        // 폴더가 저장소의 하위 폴더여도 작업 트리 전체의 충돌을 센다 (`:/` 는 맨 위 폴더이다).
         // index 만 읽는다. 작업 트리의 파일을 읽지 않으므로 필터와 줄 끝 설정이 닿지 않는다. 충돌한 파일은 단계마다
         // 한 줄이다 (`<mode> <object> <stage>\t<path>`).
         let unmerged = required(
-            git_output(repository, &["ls-files", "--unmerged", "-z"])?,
+            git_output(repository, &["ls-files", "--unmerged", "-z", "--", ":/"])?,
             "git ls-files",
         )?;
         let conflicted: HashSet<&str> = unmerged
@@ -753,12 +754,22 @@ mod tests {
             "the cherry-pick should stop on the conflict"
         );
 
+        let progress = GitWorktreeProgress {
+            operation: Some("cherry-pick".to_string()),
+            conflicted_files: 1,
+        };
         assert_eq!(
             adapter.read_worktree_progress(&repository).unwrap(),
-            GitWorktreeProgress {
-                operation: Some("cherry-pick".to_string()),
-                conflicted_files: 1,
-            }
+            progress
+        );
+        // 하위 폴더에서 읽어도 맨 위 폴더의 충돌을 센다.
+        let nested = directory.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        assert_eq!(
+            adapter
+                .read_worktree_progress(&nested.display().to_string())
+                .unwrap(),
+            progress
         );
         let _ = std::fs::remove_dir_all(&directory);
     }
