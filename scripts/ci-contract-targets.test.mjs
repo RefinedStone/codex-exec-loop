@@ -160,3 +160,25 @@ test("all-tests mode requires exact package/target identity and permits a legiti
   });
   assert.deepEqual(result,{preparedTargets:1,executedGroups:1,executedTests:0});
 });
+
+test("complete member validation runs an empty harness and refuses an unproven custom harness", async () => {
+  const args = ["--include-members", "--package", "feature", "--"];
+  const calls = [];
+  const settings = { metadata, ownership, write(){}, record(){}, run(command, argv) {
+    calls.push({command, argv});
+    if (command === "cargo") return {status:0, stdout:json(artifact(featureId, "empty-exe"))};
+    if (argv.includes("--list")) return {status:0, stdout:""};
+    return {status:0, stdout:"test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"};
+  }};
+  const result = await runNativeContracts(args, settings);
+  assert.deepEqual(result, {preparedTargets:1, executedGroups:1, executedTests:0});
+  assert.ok(calls.some(({command, argv}) => command === "empty-exe" && !argv.includes("--list")));
+  await assert.rejects(runNativeContracts(args, {...settings, run(command, argv) {
+    if (command === "cargo") return {status:0, stdout:json(artifact(featureId, "custom-exe"))};
+    return {status:0, stdout:""};
+  }}), /expected non-ignored inventory/);
+  await assert.rejects(runNativeContracts(args, {...settings, run(command, argv) {
+    if (command === "cargo") return {status:0, stdout:json(artifact(featureId, "custom-exe"))};
+    return {status:0, stdout:"custom harness output\n"};
+  }}), /Unsupported libtest inventory/);
+});
