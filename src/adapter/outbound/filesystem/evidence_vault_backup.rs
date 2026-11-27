@@ -27,9 +27,9 @@ use super::evidence_vault_store::{
 };
 use super::vault_fs;
 use crate::application::port::outbound::evidence_vault_backup_port::{
-    EvidenceVaultBackupPort, VaultBackupError, VaultBackupExportRequest, VaultBackupImportReport,
-    VaultBackupImportRequest, VaultBackupProjectApproval, VaultBackupRecoveryMode,
-    VaultRecoveryKey,
+    EvidenceVaultBackupPort, VaultBackupError, VaultBackupExportRequest, VaultBackupImportPlan,
+    VaultBackupImportReport, VaultBackupProjectApproval, VaultBackupRecoveryMode,
+    VaultBackupSelection, VaultRecoveryKey,
 };
 use crate::application::port::outbound::evidence_vault_port::{
     EvidenceVaultStorePort, VaultBindingCommitPolicy, VaultBindingCommitRequest,
@@ -279,37 +279,43 @@ impl EvidenceVaultBackupPort for FilesystemEvidenceVaultBackupAdapter {
         Ok(body)
     }
 
-    fn import(
+    fn prepare_import(
         &self,
-        request: VaultBackupImportRequest,
-    ) -> Result<VaultBackupImportReport, VaultBackupError> {
+        request: VaultBackupSelection<'_>,
+    ) -> Result<VaultBackupImportPlan<'_>, VaultBackupError> {
         if request.archive.len() > MAX_ARCHIVE_BYTES {
             return Err(VaultBackupError::ArchiveTooLarge);
         }
-        let archive = parse_archive(&request.archive)?;
-        let source_key = unwrap_source_key(&archive, &request.recovery_key)?;
-
-        // Authenticate the entire archive before the first local write. Version
-        // records and their pointer are then committed once per approved issue.
-        let (staged, unapproved_projects) = stage_import(&archive, &source_key, &request.projects)?;
-        let approval_digest = Sha256::digest(wrap_associated_data(&archive)).into();
-        let store = FilesystemEvidenceVaultStoreAdapter::new(self.vault_root.clone());
-        let outcomes = commit_import_bindings(
-            &store,
-            &request.local_key,
-            &archive.backup_id,
-            approval_digest,
-            request.recovery_mode,
-            staged,
-        )?;
-
-        Ok(VaultBackupImportReport {
-            backup_id: archive.backup_id,
-            imported: outcomes.imported,
-            kept_local: outcomes.kept_local,
-            recovered: outcomes.recovered,
+        let archive = parse_archive(request.archive)?;
+        let source_key = unwrap_source_key(&archive, request.recovery_key)?;
+        let (staged, unapproved_projects) = stage_import(&archive, &source_key, request.projects)?;
+        let mut report = VaultBackupImportReport {
+            backup_id: archive.backup_id.clone(),
+            imported: Vec::new(),
+            kept_local: Vec::new(),
+            recovered: Vec::new(),
             unapproved_projects,
-        })
+        };
+        if staged.is_empty() {
+            return Ok(VaultBackupImportPlan::ReadOnly(report));
+        }
+        let approval_digest = Sha256::digest(wrap_associated_data(&archive)).into();
+        let recovery_mode = request.recovery_mode;
+        Ok(VaultBackupImportPlan::Install(Box::new(move |local_key| {
+            let store = FilesystemEvidenceVaultStoreAdapter::new(self.vault_root.clone());
+            let outcomes = commit_import_bindings(
+                &store,
+                local_key,
+                &report.backup_id,
+                approval_digest,
+                recovery_mode,
+                staged,
+            )?;
+            report.imported = outcomes.imported;
+            report.kept_local = outcomes.kept_local;
+            report.recovered = outcomes.recovered;
+            Ok(report)
+        })))
     }
 }
 

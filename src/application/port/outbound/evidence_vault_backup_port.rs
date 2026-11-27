@@ -16,7 +16,7 @@ use crate::domain::issue_work::{IssueProjectScope, IssueReference};
  */
 
 /// 백업 계약의 판이다. 요청, 응답, 오류의 뜻이 바뀌면 올린다.
-pub const EVIDENCE_VAULT_BACKUP_CONTRACT_VERSION: u32 = 3;
+pub const EVIDENCE_VAULT_BACKUP_CONTRACT_VERSION: u32 = 4;
 
 /// 복구 키의 길이이다 (256 bit).
 pub const VAULT_RECOVERY_KEY_LEN: usize = 32;
@@ -178,6 +178,26 @@ impl fmt::Display for VaultBackupError {
 
 impl std::error::Error for VaultBackupError {}
 
+/// Single-use installation of an authenticated selection.
+pub type VaultBackupInstallation<'a> =
+    Box<dyn FnOnce(&VaultRecordKey) -> Result<VaultBackupImportReport, VaultBackupError> + 'a>;
+
+/// Authenticated outcome before attempting to obtain (and possibly initialize) the destination key.
+pub enum VaultBackupImportPlan<'a> {
+    /// No approved issue will be written. Project selection never needs local credentials.
+    ReadOnly(VaultBackupImportReport),
+    /// Commits only the verified, approved records; cannot be replayed with different archive bytes.
+    Install(VaultBackupInstallation<'a>),
+}
+
+/// Immutable archive bytes and the user's source-to-destination decisions.
+pub struct VaultBackupSelection<'a> {
+    pub archive: &'a str,
+    pub recovery_key: &'a VaultRecoveryKey,
+    pub projects: &'a [VaultBackupProjectApproval],
+    pub recovery_mode: VaultBackupRecoveryMode,
+}
+
 pub trait EvidenceVaultBackupPort: Send + Sync {
     /// 구현이 따르는 계약의 판이다.
     fn contract_version(&self) -> u32 {
@@ -187,10 +207,25 @@ pub trait EvidenceVaultBackupPort: Send + Sync {
     /// 레코드를 암호문 그대로 담고 장치 키를 복구 키로 감싼 보관 파일의 내용을 만든다. Vault 를 바꾸지 않는다.
     fn export(&self, request: VaultBackupExportRequest) -> Result<String, VaultBackupError>;
 
-    /// 보관 파일 전체를 검증한 뒤에 승인한 프로젝트의 레코드를 쓴다. 검증에 실패하면 아무것도 쓰지 않는다.
-    /// 이슈의 연결은 그 이슈의 다른 레코드 뒤에 쓴다. 중간에 멈춘 가져오기는 다시 부르면 끝난다.
+    /// Authenticate and stage all records without creating a destination key or writing to the vault.
+    fn prepare_import(
+        &self,
+        selection: VaultBackupSelection<'_>,
+    ) -> Result<VaultBackupImportPlan<'_>, VaultBackupError>;
+
+    /// Import with a key the caller already owns. Uses the same authenticated plan as first-time recovery.
     fn import(
         &self,
         request: VaultBackupImportRequest,
-    ) -> Result<VaultBackupImportReport, VaultBackupError>;
+    ) -> Result<VaultBackupImportReport, VaultBackupError> {
+        match self.prepare_import(VaultBackupSelection {
+            archive: &request.archive,
+            recovery_key: &request.recovery_key,
+            projects: &request.projects,
+            recovery_mode: request.recovery_mode,
+        })? {
+            VaultBackupImportPlan::ReadOnly(report) => Ok(report),
+            VaultBackupImportPlan::Install(install) => install(&request.local_key),
+        }
+    }
 }
