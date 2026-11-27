@@ -208,6 +208,39 @@ pub enum TaskCriterionEvidenceState {
     Blocked,
     Stale,
     Waived,
+    HumanPassed,
+    HumanFailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HumanEvidenceDecision {
+    Pass,
+    Fail,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HumanEvidenceReview {
+    pub review_id: String,
+    /// SHA-256 of the exact review text accepted by the native foreground dialog.
+    pub confirmation_sha256: String,
+    pub evidence_event_id: String,
+    pub scope: TaskEvidenceScope,
+    pub criterion_id: String,
+    pub artifact: TaskEvidenceArtifact,
+    pub tree_sha: String,
+    pub decision: HumanEvidenceDecision,
+}
+impl HumanEvidenceReview {
+    pub fn matches(&self, receipt: &TaskEvidenceReceipt) -> bool {
+        let r = &receipt.evidence;
+        self.scope == r.attempt.scope
+            && self.criterion_id == r.attempt.criterion_id
+            && self.evidence_event_id == receipt.event_id
+            && self.artifact == r.artifact
+            && self.tree_sha == r.recorded_tree.tree_sha
+    }
 }
 
 impl From<TaskEvidenceStatus> for TaskCriterionEvidenceState {

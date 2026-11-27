@@ -16709,7 +16709,9 @@
         "fail",
         "blocked",
         "stale",
-        "waived"
+        "waived",
+        "human_passed",
+        "human_failed"
       ],
       "type": "string"
     },
@@ -16804,6 +16806,7 @@
     "TaskDeliveryCriterionState": {
       "enum": [
         "host_passed",
+        "human_passed",
         "waived",
         "blocked"
       ],

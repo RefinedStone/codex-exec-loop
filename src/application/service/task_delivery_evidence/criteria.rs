@@ -137,6 +137,38 @@ fn criterion_outcome(
     if criterion.channel != TaskAcceptanceChannel::Command
         || criterion.verification_recipe.is_none()
     {
+        if criterion.channel != TaskAcceptanceChannel::Command {
+            let reviewed = task
+                .evidence
+                .iter()
+                .find(|e| e.evidence.attempt.criterion_id == criterion.id)
+                .and_then(|e| task.reviews.iter().find(|r| r.matches(e)).map(|r| (e, r)));
+            if let Some((e, r)) = reviewed {
+                if r.scope != task.scope
+                    || e.evidence.attempt.session_key != snapshot.queue.session_key
+                    || e.evidence.attempt.lease_generation != binding.lease_generation
+                    || r.tree_sha != source.source_tree_sha
+                {
+                    return Err(TaskDeliveryEvidenceReason::EvidenceStale);
+                }
+                dependencies
+                    .artifacts
+                    .verify_sealed(
+                        &dependencies.workspace,
+                        &e.evidence.attempt,
+                        &e.evidence.artifact,
+                    )
+                    .map_err(|_| invalid)?;
+                return match r.decision {
+                    crate::domain::planning::evidence::HumanEvidenceDecision::Pass => {
+                        Ok((TaskDeliveryCriterionState::HumanPassed, r.review_id.clone()))
+                    }
+                    crate::domain::planning::evidence::HumanEvidenceDecision::Fail => {
+                        Err(TaskDeliveryEvidenceReason::CriteriaNotMet)
+                    }
+                };
+            }
+        }
         return Err(TaskDeliveryEvidenceReason::EvidenceMissing);
     }
     let stored = task

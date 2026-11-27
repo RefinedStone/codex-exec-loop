@@ -488,7 +488,7 @@ export interface AkraBridge {
   skills: SkillsBridge;
   /** 로컬 복원본 창을 연다 (#2427). 복원한 글은 이 버스로 오지 않는다. */
   vaultRestore: VaultRestoreOpenerBridge;
-  openEvidencePreview?(target: EvidencePreview): Promise<void>;
+  openEvidencePreview?(target: EvidencePreview, review?: "pass" | "fail"): Promise<void>;
 }
 
 /** 앱 설정이다 (plan 26 U2). 값은 main 이 가지고 저장한다. */

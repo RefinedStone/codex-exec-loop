@@ -104,7 +104,7 @@ impl TaskEvidenceService {
     }
 }
 
-fn sanitized_text(bytes: &[u8]) -> Result<String> {
+pub(super) fn sanitized_text(bytes: &[u8]) -> Result<String> {
     let text = std::str::from_utf8(bytes).map_err(|_| TaskEvidenceError::Invalid)?;
     if text
         .chars()

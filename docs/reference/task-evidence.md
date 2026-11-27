@@ -85,6 +85,14 @@ symlink/reparse point, 빈 파일, 크기 초과, 파일 교체와 읽는 동안
 
 ## 현재 상태
 
+`data`, `http`, `screen` 기준에서 현재 Running lease가 제출한 증거는 정제된 사본을 확인하고
+사람이 통과 또는 실패로 기록할 수 있다. 버튼이나 helper 요청은 판정이 아니다. 기본 취소인 별도
+native 확인 창에서 정확한 task, 기준, scope, tree 및 artifact를 승인한 경우에만 장부를 쓴다.
+확인 후 같은 lease와 tree, sealed bytes를 재검사한다. 공개 상태 `human_passed`/`human_failed`는
+작업자 보고 및 `waived`와 구분된다. tree 변경은 `stale`이며 면제의 지속성을 물려받지 않는다.
+기존 작업자의 명시적 실패나 막힘은 전달을 차단한다. 사람 통과는 Auto의 기계 검증 조건을 대신하지 않는다.
+독립 helper가 호출자 지정 X/Wayland 서버를 사람 확인으로 믿지 않도록 Linux는 열람만 허용한다.
+
 Desktop에서 기준의 **정제된 증거 열기**를 누르면 main이 해당 scope·revision·criterion 및
 receipt event ID와 hash로 전용 로컬 helper에 요청한다. 읽을 수 있는 대상은 16 KiB 이하의
 sealed UTF-8 텍스트이며, 호스트 capture는 같은 한도 안에서 stdout/stderr를 풀어 보여 준다.

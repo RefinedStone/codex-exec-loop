@@ -11,8 +11,15 @@ async fn main() -> std::process::ExitCode {
     }
     // Private credential helpers never initialize recording/tracing or print a raw error.
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if matches!(args.as_slice(), [command] if matches!(command.as_str(), "provider-credential-prompt" | "provider-credential-migration" | "desktop-evidence-preview"))
-    {
+    if matches!(
+        args.first().map(String::as_str),
+        Some(
+            "provider-credential-prompt"
+                | "provider-credential-migration"
+                | "desktop-evidence-preview"
+                | "desktop-evidence-review"
+        )
+    ) {
         return match akra_ade::adapter::inbound::gateway::run_with_args(args).await {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(_) => std::process::ExitCode::FAILURE,

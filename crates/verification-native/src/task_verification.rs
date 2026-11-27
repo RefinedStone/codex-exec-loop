@@ -17,6 +17,7 @@ use akra_verification::verification::{
 
 mod context;
 mod declared;
+pub(crate) use declared::confirm_text;
 #[cfg(test)]
 mod diagnostics;
 mod environment;

@@ -4,16 +4,18 @@ import { type BrowserWindow, dialog } from "electron";
 import { isEvidencePreview } from "../shared/evidencePreview";
 
 /** Private pipe, then a modal. No artifact bytes return to renderer or diagnostics. */
-export async function openEvidencePreview(owner: BrowserWindow, executable: string, input: unknown): Promise<void> {
+export async function openEvidencePreview(owner: BrowserWindow, executable: string, input: unknown, review: unknown): Promise<void> {
   if (!isEvidencePreview(input) || !isAbsolute(input.workspace) || !isAbsolute(executable)) throw unavailable();
+  if (review !== undefined && review !== "pass" && review !== "fail") throw unavailable();
   const { workspace, ...target } = input;
   const text = await new Promise<string>((resolve, reject) => {
-    const child = execFile(executable, ["desktop-evidence-preview"], {
-      cwd: workspace, encoding: "utf8", timeout: 10_000, maxBuffer: 64 * 1024, windowsHide: true,
+    const child = execFile(executable, review ? ["desktop-evidence-review", review] : ["desktop-evidence-preview"], {
+      cwd: workspace, encoding: "utf8", timeout: review ? 125_000 : 10_000, maxBuffer: 64 * 1024, windowsHide: true,
     }, (error, stdout) => error ? reject(unavailable()) : resolve(stdout));
     child.stdin?.on("error", () => reject(unavailable()));
     child.stdin?.end(JSON.stringify(target));
   });
+  if (review) return;
   if (owner.isDestroyed() || !owner.isVisible()) throw unavailable();
   await dialog.showMessageBox(owner, { type: "info", title: "완료 기준 증거", message: "정제된 증거 (읽기 전용)",
     detail: text, buttons: ["닫기"], noLink: true });

@@ -75,6 +75,7 @@ enum GatewayCommand {
     DesktopConfirmationBridge,
     DesktopRestoreBridge,
     DesktopEvidencePreview,
+    DesktopEvidenceReview(crate::domain::planning::evidence::HumanEvidenceDecision),
     ProviderCredentialPrompt,
     ProviderCredentialMigration,
 }
@@ -99,7 +100,10 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
             return super::desktop_restore_bridge::run().await;
         }
         GatewayCommand::DesktopEvidencePreview => {
-            return super::gateway::evidence_preview::show();
+            return evidence_preview::show(None);
+        }
+        GatewayCommand::DesktopEvidenceReview(decision) => {
+            return evidence_preview::show(Some(decision));
         }
         GatewayCommand::ProviderCredentialPrompt => {
             return tokio::task::spawn_blocking(|| {
@@ -231,6 +235,15 @@ fn parse_args(args: &[String]) -> Result<GatewayCommand> {
         }
         [command] if command == "desktop-restore-bridge" => {
             Ok(GatewayCommand::DesktopRestoreBridge)
+        }
+        [command, decision] if command == "desktop-evidence-review" => {
+            use crate::domain::planning::evidence::HumanEvidenceDecision;
+            let verdict = match decision.as_str() {
+                "pass" => HumanEvidenceDecision::Pass,
+                "fail" => HumanEvidenceDecision::Fail,
+                _ => bail!("unknown evidence review decision"),
+            };
+            Ok(GatewayCommand::DesktopEvidenceReview(verdict))
         }
         [command] if command == "desktop-evidence-preview" => {
             Ok(GatewayCommand::DesktopEvidencePreview)

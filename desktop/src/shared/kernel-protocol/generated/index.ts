@@ -550,7 +550,7 @@ export type TaskAcceptanceCriterion = { readonly "channel": TaskAcceptanceChanne
 
 export type TaskCriterionEvidenceRecord = { readonly "artifact": TaskEvidenceArtifact; readonly "attempt": number; readonly "attempt_id": string; readonly "by": string; readonly "criterion_id": string; readonly "recorded_at": string; readonly "recorded_tree": TaskEvidenceTree; readonly "scope": TaskEvidenceScope; readonly "status": TaskEvidenceStatus; };
 
-export type TaskCriterionEvidenceState = ("pending" | "pass" | "fail" | "blocked" | "stale" | "waived");
+export type TaskCriterionEvidenceState = ("pending" | "pass" | "fail" | "blocked" | "stale" | "waived" | "human_passed" | "human_failed");
 
 export type TaskCriterionWaiverActor = ("human");
 
@@ -560,7 +560,7 @@ export type TaskCriterionWaiverRecord = { readonly "by": TaskCriterionWaiverActo
 
 export type TaskDeliveryCriterionObservation = { readonly "criterion_id": string; readonly "reason"?: (TaskDeliveryEvidenceReason | null); readonly "receipt_event_id"?: (string | null); readonly "state": TaskDeliveryCriterionState; };
 
-export type TaskDeliveryCriterionState = ("host_passed" | "waived" | "blocked");
+export type TaskDeliveryCriterionState = ("host_passed" | "human_passed" | "waived" | "blocked");
 
 export type TaskDeliveryEvidenceObservation = { readonly "criteria": Array<TaskDeliveryCriterionObservation>; readonly "evidence_revision": number; readonly "mode": TaskEvidenceDeliveryMode; readonly "observed_at": string; readonly "reasons": Array<TaskDeliveryEvidenceReason>; readonly "scope"?: (TaskEvidenceScope | null); readonly "source"?: (TaskEvidenceDeliverySource | null); readonly "stage": TaskEvidenceDeliveryStage; };
 
