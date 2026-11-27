@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "capturedAt": "2026-11-27T07:22:30.955Z",
+  "capturedAt": "2026-11-27T07:41:38.420Z",
   "platform": "win32",
   "result": {
     "preparedTargets": 3,
@@ -12,11 +12,21 @@
     "executedGroups": 1,
     "executedTests": 1
   },
+  "member": {
+    "preparedTargets": 2,
+    "executedGroups": 2,
+    "executedTests": 4
+  },
+  "singleTarget": {
+    "preparedTargets": 1,
+    "executedGroups": 2,
+    "executedTests": 3
+  },
   "resultRecords": [
     {
       "contractId": "root_contract",
       "filter": "root_contract",
-      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-WMeI9V#akra-ade@0.0.0",
+      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-jzm5zD#akra-ade@0.0.0",
       "package": "akra-ade",
       "target": {
         "name": "shared",
@@ -35,7 +45,7 @@
     {
       "contractId": "root_contract",
       "filter": "root_contract",
-      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-WMeI9V#akra-ade@0.0.0",
+      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-jzm5zD#akra-ade@0.0.0",
       "package": "akra-ade",
       "target": {
         "name": "shared",
@@ -54,7 +64,7 @@
     {
       "contractId": "old::native::contract",
       "filter": "old::native::contract",
-      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-WMeI9V/feature#0.0.0",
+      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-jzm5zD/feature#0.0.0",
       "package": "feature",
       "target": {
         "name": "shared",
@@ -73,7 +83,7 @@
     {
       "contractId": "old::native::contract",
       "filter": "old::native::contract",
-      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-WMeI9V/feature#0.0.0",
+      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-jzm5zD/feature#0.0.0",
       "package": "feature",
       "target": {
         "name": "shared",
@@ -87,12 +97,12 @@
       "phase": "finished",
       "status": "passed",
       "passed": 1,
-      "durationMs": 22
+      "durationMs": 23
     },
     {
       "contractId": "member remainder",
       "filter": "member remainder",
-      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-WMeI9V/feature#0.0.0",
+      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-jzm5zD/feature#0.0.0",
       "package": "feature",
       "target": {
         "name": "shared",
@@ -111,7 +121,7 @@
     {
       "contractId": "member remainder",
       "filter": "member remainder",
-      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-WMeI9V/feature#0.0.0",
+      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-jzm5zD/feature#0.0.0",
       "package": "feature",
       "target": {
         "name": "shared",
@@ -130,7 +140,7 @@
     {
       "contractId": "member remainder",
       "filter": "member remainder",
-      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-WMeI9V/feature#0.0.0",
+      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-jzm5zD/feature#0.0.0",
       "package": "feature",
       "target": {
         "name": "fence",
@@ -149,7 +159,7 @@
     {
       "contractId": "member remainder",
       "filter": "member remainder",
-      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-WMeI9V/feature#0.0.0",
+      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-jzm5zD/feature#0.0.0",
       "package": "feature",
       "target": {
         "name": "fence",
@@ -163,15 +173,15 @@
       "phase": "finished",
       "status": "passed",
       "passed": 1,
-      "durationMs": 23
+      "durationMs": 22
     },
     {
       "contractId": "member-doctest",
-      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-WMeI9V/feature#0.0.0",
+      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-jzm5zD/feature#0.0.0",
       "package": "feature",
       "target": {
         "kind": "doc",
-        "name": "feature"
+        "name": "shared"
       },
       "os": "win32",
       "features": "default",
@@ -182,11 +192,11 @@
     },
     {
       "contractId": "member-doctest",
-      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-WMeI9V/feature#0.0.0",
+      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-jzm5zD/feature#0.0.0",
       "package": "feature",
       "target": {
         "kind": "doc",
-        "name": "feature"
+        "name": "shared"
       },
       "os": "win32",
       "features": "default",
@@ -195,7 +205,7 @@
       "targetTriple": "host",
       "phase": "finished",
       "status": "passed",
-      "durationMs": 496
+      "durationMs": 349
     }
   ],
   "checks": [

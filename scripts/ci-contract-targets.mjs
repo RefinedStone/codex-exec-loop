@@ -24,7 +24,7 @@ export function resolveContractTargets(metadata, selection, ownership, includeMe
   if (!["lib", "test", "bin"].includes(kind)) throw new Error("Unsupported test target kind: " + kind);
   return candidates.flatMap((pkg) => {
     const activeFeatures = new Set(metadata.resolve?.nodes?.find((node) => node.id === pkg.id)?.features ?? []);
-    const includeAll = includeMembers && !selection?.package && pkg.name !== "akra-ade";
+    const includeAll = includeMembers && pkg.name !== "akra-ade";
     const targets = pkg.targets.filter((target) =>
       (includeAll ? target.kind.some((value) => ["lib", "bin", "test"].includes(value)) : target.kind.includes(kind))
       && target.test !== false
@@ -123,16 +123,16 @@ export function planContractFilters(prepared, filters, transfers = [], explicit 
 }
 
 /** Complete each new member exactly once, including bin/integration harnesses. */
-export function remainingMemberTests(prepared, assignments) {
+export function remainingMemberTests(prepared, assignments, {includeRoot = false, allowEmpty = false} = {}) {
   const remaining = [];
   for (const target of prepared) {
-    if (target.package === "akra-ade") continue;
+    if (!includeRoot && target.package === "akra-ade") continue;
     const consumed = assignments.filter((item) => item.packageId === target.packageId
       && item.target.kind === target.target.kind && item.target.name === target.target.name)
       .flatMap((item) => item.names);
     const ignored = new Set(target.ignored);
     const names = target.inventory.filter((name) => !ignored.has(name) && !consumed.includes(name));
-    if (!names.length) continue;
+    if (!names.length && (!allowEmpty || consumed.length)) continue;
     remaining.push({...target, filter:"member remainder", names,
       args:["--exact", "--nocapture", ...consumed.flatMap((name) => ["--skip", name])]});
   }
