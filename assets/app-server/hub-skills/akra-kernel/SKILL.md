@@ -9,6 +9,7 @@ Generated from schema/akra-kernel-spec.json. Do not edit by hand.
 
 Run `akra describe --json` to inspect input schemas, reasons, and next actions.
 Run commands from the target repository.
+Use `akra context list --task-id <id> --path <repo-relative-path> --json` (omit unused filters), `show --kind <kind> --key <key>` with the same filters, or `changes` to choose document metadata before using an approved provider read only for a selected:true URI.
 Each invocation prints one JSON line. Exit codes: 0 accepted, 2 rejected, 1 invalid input, unavailable, or failed.
 A stored command (`state: store` in `describe`) answers after it ran: `result` (done), `rejection`, or `failure` (the cause).
 Pass an object field as JSON text, for example `--task '{"title":"..."}'`.

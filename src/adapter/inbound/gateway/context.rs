@@ -12,7 +12,8 @@ use tokio_tungstenite::tungstenite::Message;
 
 use super::recorder::{RecordDirection, SessionRecording};
 use crate::application::port::inbound::work_context_port::{
-    AttachContextRequest, ContextScope, ContextScopeRequest, WorkContextPort,
+    AttachContextRequest, ContextScope, ContextScopeRequest, ContextSelectionRequest,
+    WorkContextPort,
 };
 
 pub(super) const CONTEXT_METHOD_PREFIX: &str = "akra/context/";
@@ -29,6 +30,9 @@ const CONTEXT_ATTACH_METHOD: &str = "akra/context/attach";
 const CONTEXT_LIST_METHOD: &str = "akra/context/list";
 const CONTEXT_REFRESH_SCOPE_METHOD: &str = "akra/context/refreshScope";
 const CONTEXT_MARK_SCOPE_READ_METHOD: &str = "akra/context/markScopeRead";
+const CONTEXT_SELECT_METHOD: &str = "akra/context/select";
+const CONTEXT_PREFERENCE_METHOD: &str = "akra/context/setPreference";
+
 /// `attach` 에 `source` 가 없으면 사람이 이은 것으로 본다.
 const DEFAULT_ATTACH_SOURCE: &str = "user";
 const JSON_RPC_METHOD_NOT_FOUND: i64 = -32601;
@@ -79,6 +83,23 @@ struct AttachParams {
     source: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SelectionParams {
+    cwd: String,
+    task_id: Option<String>,
+    #[serde(default)]
+    paths: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PreferenceParams {
+    cwd: String,
+    url: String,
+    preference: crate::domain::work_context::ContextPreference,
+}
+
 fn params<T: serde::de::DeserializeOwned>(text: &str) -> Option<T> {
     let envelope = serde_json::from_str::<RequestEnvelope>(text).ok()?;
     serde_json::from_value(envelope.params).ok()
@@ -113,6 +134,40 @@ pub(super) fn spawn_request(
 }
 
 fn respond(context: &dyn WorkContextPort, id: Value, method: &str, text: &str) -> String {
+    // Selection is a cached metadata projection; preferences never execute a model.
+    if method == CONTEXT_SELECT_METHOD {
+        let Some(params) = params::<SelectionParams>(text) else {
+            return error_response(
+                id,
+                JSON_RPC_INVALID_PARAMS,
+                "cwd, optional taskId and paths are required",
+            );
+        };
+        return match context.select_resources(&ContextSelectionRequest {
+            cwd: params.cwd,
+            task_id: params.task_id,
+            paths: params.paths,
+        }) {
+            Ok(resources) => {
+                json!({"jsonrpc":"2.0", "id":id, "result":{"resources":resources}}).to_string()
+            }
+            Err(error) => error_response(id, WORK_CONTEXT_ERROR, &format!("{error:#}")),
+        };
+    }
+    if method == CONTEXT_PREFERENCE_METHOD {
+        let Some(params) = params::<PreferenceParams>(text) else {
+            return error_response(
+                id,
+                JSON_RPC_INVALID_PARAMS,
+                "cwd, url and preference are required",
+            );
+        };
+        return match context.set_repository_preference(&params.cwd, &params.url, params.preference)
+        {
+            Ok(()) => json!({"jsonrpc":"2.0", "id":id, "result":{"saved":true}}).to_string(),
+            Err(error) => error_response(id, WORK_CONTEXT_ERROR, &format!("{error:#}")),
+        };
+    }
     let resources = match method {
         CONTEXT_THREAD_METHOD | CONTEXT_REFRESH_METHOD => {
             let Some(params) = params::<ThreadParams>(text) else {
@@ -240,6 +295,30 @@ mod tests {
     }
 
     impl WorkContextPort for FakeContext {
+        fn select_resources(
+            &self,
+            request: &ContextSelectionRequest,
+        ) -> Result<Vec<crate::application::port::inbound::work_context_port::ContextSelectionEntry>>
+        {
+            use crate::application::port::inbound::work_context_port::ContextSelectionEntry;
+            Ok(vec![ContextSelectionEntry {
+                resource: resource(true),
+                selected: true,
+                reason: "task_link",
+                matched_scope: request.task_id.as_ref().map(|task_id| ContextScope::Task {
+                    task_id: task_id.clone(),
+                }),
+            }])
+        }
+        fn set_repository_preference(
+            &self,
+            _cwd: &str,
+            _url: &str,
+            _preference: crate::domain::work_context::ContextPreference,
+        ) -> Result<()> {
+            Ok(())
+        }
+
         fn thread_resources(&self, thread_id: &str) -> Result<Vec<ContextResource>> {
             if thread_id == "broken" {
                 anyhow::bail!("upstream is not ready");
@@ -308,6 +387,37 @@ mod tests {
         let text =
             json!({ "jsonrpc": "2.0", "id": 3, "method": method, "params": params }).to_string();
         serde_json::from_str(&respond(&FakeContext, json!(3), method, &text)).unwrap()
+    }
+
+    #[test]
+    fn context_selection_and_preference_contracts_are_explicit() {
+        let result = answer(
+            CONTEXT_SELECT_METHOD,
+            json!({"cwd":"/repo","taskId":"T-1","paths":["src/a.rs"]}),
+        );
+        let resource = &result["result"]["resources"][0];
+        assert_eq!(resource["key"], "acme.atlassian.net/ABC-1");
+        assert_eq!(resource["selected"], true);
+        assert_eq!(resource["reason"], "task_link");
+        assert_eq!(resource["matchedScope"]["taskId"], "T-1");
+        assert_eq!(
+            answer(
+                CONTEXT_PREFERENCE_METHOD,
+                json!({"cwd":"/repo","url":"https://github.com/a/b/pull/1","preference":"exclude"})
+            )["result"]["saved"],
+            true
+        );
+        assert_eq!(
+            answer(
+                CONTEXT_PREFERENCE_METHOD,
+                json!({"cwd":"/repo","url":"https://github.com/a/b/pull/1","preference":"invalid"})
+            )["error"]["code"],
+            JSON_RPC_INVALID_PARAMS
+        );
+        assert_eq!(
+            answer(CONTEXT_SELECT_METHOD, json!({"cwd":"/repo","paths":[123]}))["error"]["code"],
+            JSON_RPC_INVALID_PARAMS
+        );
     }
 
     #[test]
