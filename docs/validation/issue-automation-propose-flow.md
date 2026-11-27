@@ -457,3 +457,9 @@ cargo test --locked --all-features --lib --target x86_64-pc-windows-msvc applica
 
 338.18초와 294.92초는 이 호스트의 서로 다른 실행 결과이며 성능 개선 비율이 아니다. Windows의
 이 결합 suite에 수분이 소요되는 관측은 #2864의 시험별 시간 분석 대상으로 남긴다.
+
+첫 PR CI Scope 실행에서는 기존 native inventory 시험이 selector 수를 124개로 고정하고 있어
+새 2개 selector를 포함한 126개 목록을 거절했다. 기대 수를 126개로 갱신하고 새 두 selector의
+존재도 검사하도록 수정했다. 실제 CI Scope와 동일한 Node 시험 파일 7개는 **57 passed /
+0 failed / 0 skipped**로 통과했다. 이 후속 수정은 정책 시험의 inventory 확인만 바꾸며
+위에서 검증한 Rust 코드와 native 실행 목록은 그대로 유지한다.
