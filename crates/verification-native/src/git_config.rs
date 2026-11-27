@@ -65,7 +65,8 @@ fn unsafe_execution_config_keys_with_policy(
     Ok(unsafe_keys.into_iter().collect())
 }
 
-fn escaped_config_key_label(key: &str) -> String {
+/// Render the existing bounded, escaped key diagnostic without inspecting config values.
+pub fn escaped_config_key_label(key: &str) -> String {
     let retained_bytes = MAX_REPORTED_CONFIG_KEY_BYTES.saturating_sub(3);
     let mut label = String::new();
     let mut truncated = false;
