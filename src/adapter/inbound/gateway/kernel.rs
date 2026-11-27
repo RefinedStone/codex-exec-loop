@@ -790,6 +790,12 @@ impl KernelSession {
                     .iter()
                     .filter_map(crate::adapter::inbound::kernel_protocol::issue_decision_attention),
             );
+            let workspace = attached.issue_workspace.clone();
+            items.extend(
+                blocking(move || crate::composition::attention::stored_items(&workspace))
+                    .await?
+                    .map_err(|error| unavailable(error.to_string()))?,
+            );
             KernelQueryAnswer::Attention { items }
         } else if let KernelQueryAnswer::Planning(planning) = answer {
             let workspace = attached.issue_workspace.clone();

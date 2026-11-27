@@ -3424,7 +3424,7 @@
     },
     {
       "name": "attention",
-      "summary": "What a person must answer now, derived on each read from pending approvals, proposed tasks awaiting acceptance, and blocked or failed pull request validation. Each item has a cause, a subject, the source revision, and next steps. An item leaves the list when its source changes; reading it does not remove it. Read and snooze state are not stored.",
+      "summary": "Current unresolved demands from kernel activity, planning, PR validation, open decisions, terminal kernel turns and typed delivery evidence waits. Each item identifies a subject and source revision and gives a summary and next steps. Only a change to the underlying authority resolves a demand; reading, pinning or snoozing it does not change this list. Personal display preferences are not kernel execution controls.",
       "input": {
         "additionalProperties": false,
         "properties": {
@@ -6583,6 +6583,14 @@
     "AttentionCause": {
       "oneOf": [
         {
+          "enum": [
+            "turn_interrupted",
+            "turn_lost",
+            "evidence_stale"
+          ],
+          "type": "string"
+        },
+        {
           "const": "approval_pending",
           "type": "string"
         },
@@ -6612,6 +6620,14 @@
         },
         {
           "const": "task_awaiting_user",
+          "type": "string"
+        },
+        {
+          "const": "turn_failed",
+          "type": "string"
+        },
+        {
+          "const": "criteria_not_met",
           "type": "string"
         }
       ]
@@ -6660,6 +6676,16 @@
       "properties": {
         "id": {
           "type": "string"
+        },
+        "issue": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "kind": {
           "$ref": "#/$defs/AttentionSubjectKind"

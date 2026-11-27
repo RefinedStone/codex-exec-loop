@@ -57,8 +57,8 @@ mod spec;
 pub use spec::{KernelSpec, describe};
 
 mod attention;
-pub(crate) use attention::issue_decision_attention;
 pub use attention::{AttentionCause, AttentionItem, AttentionSubject, AttentionSubjectKind};
+pub(crate) use attention::{delivery_wait_items, issue_decision_attention, terminal_turn_item};
 
 mod task_acceptance;
 pub use task_acceptance::{TaskAcceptanceChannel, TaskAcceptanceCriterion};
@@ -2341,7 +2341,7 @@ spec_names! {
         Parallel => "parallel",
             "The parallel mode state: pool, agents, merge queue, and pull request validation.";
         Attention => "attention",
-            "What a person must answer now, derived on each read from pending approvals, proposed tasks awaiting acceptance, and blocked or failed pull request validation. Each item has a cause, a subject, the source revision, and next steps. An item leaves the list when its source changes; reading it does not remove it. Read and snooze state are not stored.";
+            "Current unresolved demands from kernel activity, planning, PR validation, open decisions, terminal kernel turns and typed delivery evidence waits. Each item identifies a subject and source revision and gives a summary and next steps. Only a change to the underlying authority resolves a demand; reading, pinning or snoozing it does not change this list. Personal display preferences are not kernel execution controls.";
         History => "history",
             "A page of the decision log after a cursor. Send the answer's `next_after` as the next `after`. `recorder.degraded` means the kernel lost records and recovery is incomplete.";
         Operation => "operation",

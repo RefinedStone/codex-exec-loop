@@ -42,6 +42,7 @@ fn ensure_kernel_event_table(connection: &Connection) -> Result<()> {
         .context("failed to ensure the kernel event table")
 }
 
+mod attention;
 mod issue_timeline;
 mod task_usage;
 #[cfg(test)]

@@ -30,6 +30,56 @@ fn record(sequence: i64, event: KernelEvent) -> RecordedKernelEvent {
 }
 
 #[test]
+fn attention_reopens_terminal_receipts_and_clears_only_the_retried_thread() {
+    use crate::adapter::inbound::kernel_protocol::AttentionCause;
+    use crate::composition::attention::stored_items;
+    use crate::domain::kernel_event::TurnEndOutcome;
+    let directory = Workspace::new("attention-retry");
+    let workspace = directory.name();
+    let store = SqlitePlanningAuthorityAdapter::new();
+    let ended = |id: &str, outcome| KernelEvent::TurnEnded {
+        thread_id: id.to_owned(),
+        turn_id: format!("{id}-turn"),
+        op_id: None,
+        outcome: Some(outcome),
+    };
+    store
+        .append_kernel_events(
+            &workspace,
+            &[
+                record(1, ended("a", TurnEndOutcome::Failed)),
+                record(2, ended("b", TurnEndOutcome::Interrupted)),
+                record(3, ended("c", TurnEndOutcome::Completed)),
+                record(4, ended("d", TurnEndOutcome::Lost)),
+            ],
+        )
+        .unwrap();
+    let before = stored_items(&workspace).unwrap();
+    assert_eq!(
+        before.iter().map(|item| item.cause).collect::<Vec<_>>(),
+        [
+            AttentionCause::TurnFailed,
+            AttentionCause::TurnInterrupted,
+            AttentionCause::TurnLost
+        ]
+    );
+    store
+        .append_kernel_events(
+            &workspace,
+            &[record(
+                5,
+                KernelEvent::TurnStarted {
+                    thread_id: "a".into(),
+                    turn_id: "retry".into(),
+                    op_id: None,
+                },
+            )],
+        )
+        .unwrap();
+    assert_eq!(stored_items(&workspace).unwrap(), before[1..]);
+}
+
+#[test]
 fn task_evidence_receipts_survive_ack_loss_retention_and_reject_changed_payload() {
     let directory = Workspace::new("retention");
     let workspace = directory.name();

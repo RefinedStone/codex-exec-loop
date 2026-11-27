@@ -1020,14 +1020,15 @@ Akra Desktop (`desktop/`) runs from source as a development build; it has no pac
   `rejected_again` (the one resend was refused again; the task stays queued). The `planning` and
   `parallel` queries and events carry the planning
   queue and the parallel state (pool, agents, merge queue, PR validation); `refresh_planning` reads the
-  queue again. The `attention` query (plan 23 step 1, first slice) lists what a person must answer
-  now. The kernel derives it on each read from the same snapshot and stores no copy. The causes are
-  `approval_pending` (thread), `task_proposed` (task), and `pr_validation_blocked` or
-  `pr_validation_failed` (pull request). Each item has `id` (`<subject kind>:<subject id>:<revision>`),
-  `cause`, `subject`, `revision` (the approval id, the task `updated_at`, or the PR validation
-  observation revision), `summary` (the source text), `updated_at` (only tasks have a time), and
-  `next`. An item leaves the list when its source changes. There is no attention event, read state,
-  or snooze yet; a client reads the query again after `thread_activity`, `planning`, or `parallel`.
+  queue again. The `attention` query lists demands from kernel activity, planning, PR validation,
+  open issue decisions, retained turn receipts and current delivery waits. Each item has `id`,
+  `cause`, `subject`, `revision`, `summary`, `next`, and an optional source timestamp `updated_at`.
+  A decision uses its existing ID and revision, and includes the issue coordinate for navigation.
+  The latest failed, interrupted or lost kernel turn remains visible until a later turn starts
+  on that thread. An unknown terminal outcome is not evidence of failure. A blocked delivery
+  contributes `criteria_not_met` or `evidence_stale` only for the stage it is currently waiting
+  on. Passing rechecks and operator blocks do not inherit old observations.
+  The kernel stores no second copy of a demand. Reading an item does not resolve its source.
   The `history` query (`{"type": "history", "after": <cursor>, "limit": <n>}`) pages
   through the kernel decision log in record order and answers with `records`, `next_after`, and
   `recorder` (the recorder state; `degraded: true` means this kernel lost records, so a restart

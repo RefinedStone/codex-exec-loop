@@ -163,6 +163,12 @@ pub(super) fn attention_next(cause: super::attention::AttentionCause) -> Vec<Nex
     use super::attention::AttentionCause;
     use NextStep as Step;
     match cause {
+        AttentionCause::TurnFailed | AttentionCause::TurnInterrupted | AttentionCause::TurnLost => {
+            vec![Step::query(KernelQueryKind::History), Step::AskUser]
+        }
+        AttentionCause::CriteriaNotMet | AttentionCause::EvidenceStale => {
+            vec![Step::query(KernelQueryKind::TaskResult), Step::AskUser]
+        }
         // 결정 명령에는 `server_request_id` 와 상세가 필요하다. 이 항목에는 없으므로 먼저 읽는다.
         AttentionCause::ApprovalPending => {
             vec![
