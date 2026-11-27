@@ -1,3 +1,4 @@
+import { nextAttentionThread } from "../kernel/attentionNavigation";
 // 대화 밖의 화면이다 (R10): 새 스레드(홈), 현황판, 검색과 명령, 단축키 목록, 알림.
 import { useEffect, useMemo, useState } from "react";
 import { isAttentionPreferenceEvent, readAttentionPreference, writeAttentionPreference, type AttentionPreference, type AttentionPreferenceField } from "../kernel/attentionPreferences";
@@ -9,7 +10,7 @@ import { Composer, type ComposerActions } from "../conversation/Composer";
 import { Icon, type IconName } from "../design/icons";
 import { Picker } from "../design/Picker";
 import { useDesktopStore } from "../session/desktopStore";
-import { MOD_KEY, openPanel, showHome, showView, togglePanel, toggleDotsCloud, toggleTerminal, toggleTheme, useUiStore } from "../session/uiStore";
+import { MOD_KEY, openPanel, showHome, showView, togglePanel, toggleDotsCloud, toggleTerminal, toggleTheme, useUiStore, toast } from "../session/uiStore";
 import { StatusMark, useThreadMarks } from "../sidebar/Sidebar";
 import { allThreads, folderName, type ListedThread, relativeAge, threadMark, type ThreadMark } from "../sidebar/threadStatus";
 
@@ -182,8 +183,16 @@ const PALETTE_LIMIT = 50;
  * 명령 표의 id 마다 renderer 가 하는 일이다 (#2840). 표에 없는 동작은 여기에 없다. 메뉴가 맡는 명령(확대, 새 창)은 main 이
  * 처리한다. `onNavigate` 는 단축키에서만 준다.
  */
-export function commandHandlers(onNavigate?: (delta: -1 | 1) => void): Partial<Record<CommandId, () => void>> {
+export function commandHandlers(onNavigate?: (delta: -1 | 1) => void, onOpenThread?: (id: string) => void): Partial<Record<CommandId, () => void>> {
   return {
+    "next-attention": () => {
+      const { kernel, openThreadId } = useDesktopStore.getState();
+      if (kernel.phase !== "attached" || kernel.attentionItems === null) { toast("현재 저장소의 응답 필요 항목을 읽지 못했습니다."); return; }
+      const target = nextAttentionThread(kernel.attentionItems, openThreadId);
+      if (!target) { toast("응답이 필요한 스레드가 없습니다."); return; }
+      if (onOpenThread) onOpenThread(target);
+      else toast("현황판에서 스레드를 열어 주세요.");
+    },
     palette: () => useUiStore.setState((state) => ({ overlay: state.overlay === "palette" ? null : "palette" })),
     "new-thread": () => showHome(),
     sidebar: () => useUiStore.setState((state) => ({ sidebarOpen: !state.sidebarOpen })),
@@ -211,8 +220,8 @@ export function commandHandlers(onNavigate?: (delta: -1 | 1) => void): Partial<R
   };
 }
 
-function paletteCommands(): PaletteEntry[] {
-  const handlers = commandHandlers();
+function paletteCommands(onOpenThread: (id: string) => void): PaletteEntry[] {
+  const handlers = commandHandlers(undefined, onOpenThread);
   return PALETTE_ORDER.map((id) => {
     const spec = command(id);
     return {
@@ -233,7 +242,7 @@ export function CommandPalette({ onOpenThread }: { onOpenThread(threadId: string
     const dots: PaletteEntry[] = [{ id: "dots-cloud", icon: "sparkle", label: "Dots 켜기 / 끄기", hint: "", run: () => void toggleDotsCloud() }];
     const threads = allThreads(folders).map<PaletteEntry>((thread) => ({ id: thread.id, icon: "message", label: thread.title, hint: folderName(thread.cwd), run: () => onOpenThread(thread.id) }));
     const needle = query.trim().toLowerCase();
-    return [...paletteCommands(), ...dots, ...threads].filter((entry) => entry.label.toLowerCase().includes(needle)).slice(0, PALETTE_LIMIT);
+    return [...paletteCommands(onOpenThread), ...dots, ...threads].filter((entry) => entry.label.toLowerCase().includes(needle)).slice(0, PALETTE_LIMIT);
   }, [folders, query, onOpenThread]);
   const close = () => useUiStore.setState({ overlay: null });
   const run = (entry: PaletteEntry | undefined) => {
@@ -350,7 +359,7 @@ export function Toasts() {
 }
 
 /** 전역 단축키이다. 입력창에 글을 쓰는 중에도 동작한다. `onNavigate` 는 이동 기록에서 뒤(-1)나 앞(1)으로 간다. */
-export function useShortcuts(onNavigate: (delta: -1 | 1) => void): void {
+export function useShortcuts(onNavigate: (delta: -1 | 1) => void, onOpenThread?: (id: string) => void): void {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -363,7 +372,7 @@ export function useShortcuts(onNavigate: (delta: -1 | 1) => void): void {
       if (inTerminal && !event.metaKey && event.code !== "Backquote") return;
       // 글자가 아니라 글쇠 자리로 찾는다. 한글 입력 상태에서는 `event.key` 가 한글 자모이다.
       const id = commandForKey(event.code);
-      const actions = commandHandlers(onNavigate);
+      const actions = commandHandlers(onNavigate, onOpenThread);
       const action = id ? actions[id] : undefined;
       if (action) {
         event.preventDefault();
@@ -382,5 +391,5 @@ export function useShortcuts(onNavigate: (delta: -1 | 1) => void): void {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("mouseup", onMouse);
     };
-  }, [onNavigate]);
+  }, [onNavigate, onOpenThread]);
 }
