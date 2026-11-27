@@ -319,7 +319,7 @@ test("portable native selectors cover binding pause without rerunning inherited 
   }
   const linuxTests = workflow.match(/\n  rust_tests:[\s\S]*?(?=\n  rust_lint:)/)?.[0] || "";
   assert.match(linuxTests, /runs-on: ubuntu-latest/);
-  assert.match(linuxTests, /run: (?:node scripts\/ci-performance\.mjs run rust-tests -- )?cargo test --locked(?: --timings)?\s*\n/);
+  assert.match(linuxTests, /run: (?:node scripts\/ci-performance\.mjs run rust-tests -- )?cargo test --workspace --locked(?: --timings)?\s*\n/);
 });
 
 test("portable native selectors cover Jira and inherited credential fences exactly once", () => {
@@ -370,8 +370,8 @@ test("portable native selectors cover Jira and inherited credential fences exact
   }
   const linuxTests = workflow.match(/\n  rust_tests:[\s\S]*?(?=\n  rust_lint:)/)?.[0] || "";
   assert.match(linuxTests, /runs-on: ubuntu-latest/);
-  assert.match(linuxTests, /run: (?:node scripts\/ci-performance\.mjs run rust-tests -- )?cargo test --locked(?: --timings)?\s*\n/);
-  assert.match(posix, /run_step "Rust tests" cargo test --locked\s*\n/);
+  assert.match(linuxTests, /run: (?:node scripts\/ci-performance\.mjs run rust-tests -- )?cargo test --workspace --locked(?: --timings)?\s*\n/);
+  assert.match(posix, /run_step "Rust tests" cargo test --workspace --locked\s*\n/);
 });
 
 test("the workflow publishes a stable Fast Gate without weakening CI Gate", () => {
@@ -515,4 +515,11 @@ test("Windows gates retain Propose and native validator contracts", () => {
       assert.equal(source.split(filter).length - 1, 1, script + " must include " + filter + " once");
     }
   }
+});
+
+test("workspace member source changes retain Rust and portable validation", () => {
+  const plan = classifyChangedPaths(["crates/issue-core/src/issue_validation.rs"]);
+  assert.equal(plan.rust, true);
+  assert.equal(plan.portable, true);
+  assert.equal(plan.docs_only, false);
 });

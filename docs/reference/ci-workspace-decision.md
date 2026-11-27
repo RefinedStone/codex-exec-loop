@@ -1,5 +1,10 @@
 # Cargo Workspace 분리 결정 기록
 
+> 2026-11-27 갱신: 아래 보류 판단은 기존 조사 시점의 기록이다. #2902의 소유권 경계와
+> #2867 로컬 기준선을 바탕으로 #2903에서 issue-core 첫 추출을 구현했다.
+> [현재 구조·시험 보존·실측 결과](../validation/ci-issue-core-extraction-20261127.md)를 우선 적용한다.
+> Issue Automation 전체 추출의 #2569/#2555 조건은 계속 유지한다.
+
 - 관련: [CI 성능 Epic #2690](https://github.com/RefinedStone/codex-exec-loop/issues/2690),
   [조건부 Issue Automation 추출 #2569](https://github.com/RefinedStone/codex-exec-loop/issues/2569)
 - 최초 조사 기준: prerelease@70966a27f27429f9134e467c98b7b09a9894e39d

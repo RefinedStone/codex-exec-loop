@@ -46,15 +46,15 @@ export function commandsForPlan(plan, platform = process.platform) {
   if (plan.rust) {
     commands.push(
       "cargo fmt --all -- --check",
-      "cargo test --locked",
-      "cargo clippy --locked --all-targets --all-features -- -D warnings",
+      "cargo test --workspace --locked",
+      "cargo clippy --workspace --locked --all-targets --all-features -- -D warnings",
     );
   }
   if (plan.node) {
     commands.push("bash scripts/check_node_surfaces.sh");
   }
   if (plan.smoke) {
-    commands.push("cargo check --locked --all-features --lib --bins");
+    commands.push("cargo check --workspace --locked --all-features --lib --bins");
   }
   return commands;
 }

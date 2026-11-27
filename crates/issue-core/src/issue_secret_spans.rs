@@ -3,8 +3,8 @@
 
 use std::ops::Range;
 
-use crate::domain::issue_masking::{IssueSensitiveSpan, IssueTextField};
-use crate::domain::issue_policy::IssueSensitiveSpanClass;
+use crate::issue_masking::{IssueSensitiveSpan, IssueTextField};
+use crate::issue_policy::IssueSensitiveSpanClass;
 
 /// 접두사 뒤에 이 수 이상의 토큰 글자가 있어야 토큰으로 본다.
 const MIN_TOKEN_TAIL_CHARS: usize = 16;

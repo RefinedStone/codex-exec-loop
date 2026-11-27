@@ -14,7 +14,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::domain::issue_work::{IssueFieldHash, IssueReference};
+use crate::issue_work::{IssueFieldHash, IssueReference};
 
 /// 게시 의도의 상태이다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,7 +152,7 @@ pub fn confirmed_version_matches_hash(version: &str, hash: &IssueFieldHash) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::issue_work::{IssueProjectScope, IssueProvider};
+    use crate::issue_work::{IssueProjectScope, IssueProvider};
 
     fn record(state: IssuePublishIntentState) -> IssuePublishIntentRecord {
         IssuePublishIntentRecord {
