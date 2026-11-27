@@ -221,7 +221,7 @@ spec_names! {
         PreparationActive => "preparation_active",
             "Another prompt is being prepared. Send again with a new idempotency key after that preparation ends.";
         UnknownThread => "unknown_thread",
-            "The kernel does not know the thread. Send `load_sessions` first.";
+            "The thread is not in the session list. The kernel read the list from the app-server before it decided, so the prompt ends its operation as `failed`. Check the thread id.";
         ForeignWorkspace => "foreign_workspace",
             "The thread runs in a directory outside the workspace of this kernel client. The kernel makes no planning task for it. Send the prompt through the kernel of the thread's repository.";
         ParallelMode => "parallel_mode",
@@ -353,7 +353,7 @@ spec_names! {
         Rejected => "rejected",
             "The kernel rejected the command at once. The reason is in the `command_rejected` record.";
         Failed => "failed",
-            "The preparation or the turn of the command failed.";
+            "The preparation or the turn of the command failed, or the kernel did not find the thread. `reason` of the `command_completed` record names the cause.";
         Lost => "lost",
             "The kernel was built again while the command was open. Its work did not continue.";
         Unknown => "unknown",

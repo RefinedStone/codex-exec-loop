@@ -28,6 +28,7 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(10);
 mod admin_planning;
 mod chat_routes;
 mod conversation_workspace;
+mod describe_only_client;
 // 이슈 게시, 복원, 외부 변경 흐름의 검증이다 (#2429). Vault 파일 저장소는 unix 에서만 동작한다.
 mod human_confirmation;
 mod issue_decision;
@@ -777,22 +778,28 @@ async fn a_client_attaches_commands_and_receives_kernel_events() {
     assert_eq!(reused["error"]["code"], json!(-32014), "{reused}");
 
     // A command that the kernel refuses at once answers `rejected`, and a resend gets the same refusal.
-    let unknown_thread = |id: &'static str| {
+    // (#2804: an unknown thread is no longer refused at once. The kernel first reads the session list.)
+    let no_turn = |id: &'static str| {
         (
             id,
             json!({
-                "command": {"type": "submit_prompt", "thread_id": "no-such-thread", "prompt": "hello"},
+                "command": {
+                    "type": "steer_turn",
+                    "thread_id": "no-such-thread",
+                    "expected_turn_id": "no-such-turn",
+                    "prompt": "hello",
+                },
                 "idempotency_key": "key-2",
             }),
         )
     };
     for (id, replayed) in [("refused", Value::Null), ("refused-again", json!(true))] {
-        let (id, params) = unknown_thread(id);
+        let (id, params) = no_turn(id);
         let refused = kernel_request(&mut client, id, "akra/kernel/command", params).await;
         let result = &refused["result"];
         assert_eq!(
             result["rejection"]["reason"],
-            json!("unknown_thread"),
+            json!("no_matching_turn"),
             "{refused}"
         );
         assert_eq!(result["operation"]["state"], json!("rejected"), "{refused}");

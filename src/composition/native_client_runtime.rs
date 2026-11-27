@@ -3212,6 +3212,31 @@ pub(crate) mod tests {
     #[derive(Clone, Default)]
     struct RecordingTurnRuntimePort {
         turns: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+        gate: TurnGate,
+    }
+
+    /// 닫혀 있으면 기록한 턴이 끝나지 않는다. 시험이 커널을 바쁘게 둔다 (G2, #2804).
+    #[derive(Clone, Default)]
+    pub(crate) struct TurnGate(Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>);
+
+    impl TurnGate {
+        pub(crate) fn closed() -> Self {
+            let gate = Self::default();
+            *gate.0.0.lock().expect("turn gate should lock") = true;
+            gate
+        }
+
+        pub(crate) fn open(&self) {
+            *self.0.0.lock().expect("turn gate should lock") = false;
+            self.0.1.notify_all();
+        }
+
+        fn wait(&self) {
+            let mut closed = self.0.0.lock().expect("turn gate should lock");
+            while *closed {
+                closed = self.0.1.wait(closed).expect("turn gate should lock");
+            }
+        }
     }
 
     impl crate::application::port::outbound::startup_probe_port::StartupProbePort
@@ -3298,6 +3323,7 @@ pub(crate) mod tests {
                 .lock()
                 .expect("recorded turns should lock")
                 .push((thread_id.to_string(), prompt.to_string()));
+            self.gate.wait();
             Err(anyhow::anyhow!("headless test stops after the follow-up turn starts"))
         }
     }
@@ -3327,15 +3353,14 @@ pub(crate) mod tests {
         ) else {
             panic!("a thread prompt is a core command");
         };
+        // #2804: core does not know the thread yet, so it reads the session list before it decides.
         assert!(
             outcome
-                .events
-                .contains(&AppEvent::ThreadPromptAdmissionResolved {
-                    thread_id: "thread-9".to_string(),
-                    admission: crate::core::app::ThreadPromptAdmission::RejectedUnknownThread,
-                }),
+                .effects
+                .iter()
+                .any(|effect| matches!(effect, CoreEffect::LoadSessionCatalog { .. })),
             "parallel mode is off in the host, so core checks the thread: {:?}",
-            outcome.events
+            outcome.effects
         );
     }
 
@@ -4172,10 +4197,19 @@ pub(crate) mod tests {
     pub(crate) type RecordedTurns = Arc<std::sync::Mutex<Vec<(String, String)>>>;
 
     pub(crate) fn recording_runtime_for_test() -> (NativeClientRuntime, RecordedTurns) {
+        recording_runtime_with_turn_gate_for_test(TurnGate::default())
+    }
+
+    pub(crate) fn recording_runtime_with_turn_gate_for_test(
+        gate: TurnGate,
+    ) -> (NativeClientRuntime, RecordedTurns) {
         let planning = test_planning_services(Arc::new(FilesystemPlanningWorkspaceAdapter::new()));
         let parallel = test_parallel_mode_control_plane_composition(planning.clone());
         let parallel_turns = parallel.parallel_mode_turn_service();
-        let port = Arc::new(RecordingTurnRuntimePort::default());
+        let port = Arc::new(RecordingTurnRuntimePort {
+            gate,
+            ..RecordingTurnRuntimePort::default()
+        });
         let turns = port.turns.clone();
         let runtime = NativeClientRuntime::new_for_test(
             StartupService::new(port.clone()),
