@@ -1,0 +1,51 @@
+# 최종 Windows lib inventory 비교
+
+- 판정: **PASS**
+- 기존 source: `caf1da09aa561d1510b3271cc663b8e5bf3a0690`
+- 최종 source: `10df53cedda2139998f7ee6e5842926537adb472`
+- 조건: Windows x64 / Rust 1.95 / default features / native host / workspace lib test harness
+- 실행: 기존 바이너리의 `--list` 및 `--list --ignored`만 사용. 테스트 본문 실행 0개.
+
+| 범위 | 전체 | ignored |
+|---|---:|---:|
+| 기존 root | 6418 | 24 |
+| akra-ade / akra_ade | 6291 | 23 |
+| akra-issue-core / akra_issue_core | 53 | 0 |
+| akra-native / akra_native | 43 | 1 |
+| akra-verification / akra_verification | 24 | 0 |
+| akra-verification-native / akra_verification_native | 23 | 0 |
+| 최종 합계 | 6434 | 24 |
+
+기존 테스트 6418개를 일대일 대조했습니다. 이동·이름 변경 134개, 명시적 root 유지 20개입니다.
+누락 0개, ignored 변경 0개, 매핑 오류 0개, 충돌 0개입니다.
+
+## 신규 테스트
+
+검토 완료 16개 / 미검토 0개.
+
+- `akra-ade / application::service::issue_timeline::tests::issue_timeline_replays_frozen_journal_with_the_same_event_tags_revisions_and_states` — 동결 journal fixture로 저장 event tag/revision/state 및 persisted+recent 병합의 호환성을 고정하는 시험. ([PR](https://github.com/RefinedStone/codex-exec-loop/pull/2941), [최종 소스](https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/src/application/service/issue_timeline/tests.rs#L217), [게시 당시 소스](https://github.com/RefinedStone/codex-exec-loop/blob/dc2273cde318973eff25563798aedf1734a63f50/src/application/service/issue_timeline/tests.rs#L217)).
+- `akra-native / private_temp::tests::public_temp_prefix_cannot_select_a_path_or_stream` — 공개 임시 디렉터리 prefix로 경로나 Windows ADS를 선택하지 못하게 하는 경계 시험. ([PR](https://github.com/RefinedStone/codex-exec-loop/pull/2945), [최종 소스](https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/native/src/private_temp.rs#L200), [게시 당시 소스](https://github.com/RefinedStone/codex-exec-loop/blob/01e8c2b285541c8a2ba1ab8c3be899ab979b06f7/crates/native/src/private_temp.rs#L200)).
+- `akra-native / stable_file::tests::native_bounded_read_rechecks_the_pinned_file_identity` — 제한된 파일 읽기 후 고정한 파일 identity를 다시 확인하는 회귀 시험. ([PR](https://github.com/RefinedStone/codex-exec-loop/pull/2945), [최종 소스](https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/native/src/stable_file/tests.rs#L42), [게시 당시 소스](https://github.com/RefinedStone/codex-exec-loop/blob/01e8c2b285541c8a2ba1ab8c3be899ab979b06f7/crates/native/src/stable_file/tests.rs#L42)).
+- `akra-native / stable_file::tests::native_existing_directory_probe_and_abandoned_capture_do_not_create_or_publish_state` — 기존 디렉터리 조회와 중단된 capture가 파일을 생성하거나 상태를 게시하지 않는 계약 시험. ([PR](https://github.com/RefinedStone/codex-exec-loop/pull/2945), [최종 소스](https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/native/src/stable_file/tests.rs#L58), [게시 당시 소스](https://github.com/RefinedStone/codex-exec-loop/blob/01e8c2b285541c8a2ba1ab8c3be899ab979b06f7/crates/native/src/stable_file/tests.rs#L58)).
+- `akra-native / stable_file::tests::native_publication_never_replaces_an_existing_private_destination` — private destination 게시가 기존 파일을 덮어쓰지 않는 계약 시험. ([PR](https://github.com/RefinedStone/codex-exec-loop/pull/2945), [최종 소스](https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/native/src/stable_file/tests.rs#L23), [게시 당시 소스](https://github.com/RefinedStone/codex-exec-loop/blob/01e8c2b285541c8a2ba1ab8c3be899ab979b06f7/crates/native/src/stable_file/tests.rs#L23)).
+- `akra-native / subprocess::controlled::tests::cancellation_after_exit_signal_keeps_the_cancelled_fact` — Windows 프로세스 종료 wakeup 이후에도 이미 발생한 취소 사실을 보존하는 회귀 시험. ([PR](https://github.com/RefinedStone/codex-exec-loop/pull/2934), [최종 소스](https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/native/src/subprocess/controlled/tests.rs#L161), [게시 당시 소스](https://github.com/RefinedStone/codex-exec-loop/blob/6e7b44a50bbb6b829d79634efaddae3b8ad0ae07/src/subprocess/controlled/tests.rs#L161)).
+- `akra-native / trusted_executable::tests::workspace_source_root_remains_untrusted_after_crate_extraction` — crate 분리 후에도 전체 workspace source root가 실행 파일 신뢰 예외가 되지 않는 회귀 시험. ([PR](https://github.com/RefinedStone/codex-exec-loop/pull/2945), [최종 소스](https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/native/src/trusted_executable/tests.rs#L513), [게시 당시 소스](https://github.com/RefinedStone/codex-exec-loop/blob/01e8c2b285541c8a2ba1ab8c3be899ab979b06f7/crates/native/src/trusted_executable/tests.rs#L513)).
+- `akra-verification / acceptance::tests::criteria_require_a_revision_and_preserve_empty_history` — root Task 결합 없이 criteria revision 요구와 빈 criteria의 이력 보존을 검증하는 독립 도메인 시험. ([PR](https://github.com/RefinedStone/codex-exec-loop/pull/2938), [최종 소스](https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/verification/src/acceptance/tests.rs#L69), [게시 당시 소스](https://github.com/RefinedStone/codex-exec-loop/blob/a3dcfcad0a7922baad794f74bc6ab99487133b0d/crates/verification/src/acceptance/tests.rs#L69)).
+- `akra-verification / service::capture::tests::a_failed_or_mismatched_artifact_cannot_remove_execution_or_prove_a_pass` — artifact 실패나 불일치가 실행 사실을 제거하거나 통과 근거를 만들지 못하게 하는 fake Port 시험. ([PR](https://github.com/RefinedStone/codex-exec-loop/pull/2938), [최종 소스](https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/verification/src/service/capture/tests.rs#L227), [게시 당시 소스](https://github.com/RefinedStone/codex-exec-loop/blob/a3dcfcad0a7922baad794f74bc6ab99487133b0d/crates/verification/src/service/capture/tests.rs#L227)).
+- `akra-verification / service::capture::tests::capture_accepts_the_stream_limit_and_rejects_an_oversized_envelope` — stream 제한 경계는 허용하고 초과 envelope는 거절하는 capture 한도 시험. ([PR](https://github.com/RefinedStone/codex-exec-loop/pull/2938), [최종 소스](https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/verification/src/service/capture/tests.rs#L272), [게시 당시 소스](https://github.com/RefinedStone/codex-exec-loop/blob/a3dcfcad0a7922baad794f74bc6ab99487133b0d/crates/verification/src/service/capture/tests.rs#L272)).
+- `akra-verification / service::capture::tests::capture_preserves_failed_outcomes_and_incomplete_streams` — 실패 결과와 불완전 stream을 capture가 그대로 보존하는 시험. ([PR](https://github.com/RefinedStone/codex-exec-loop/pull/2938), [최종 소스](https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/verification/src/service/capture/tests.rs#L248), [게시 당시 소스](https://github.com/RefinedStone/codex-exec-loop/blob/a3dcfcad0a7922baad794f74bc6ab99487133b0d/crates/verification/src/service/capture/tests.rs#L248)).
+- `akra-verification / service::capture::tests::capture_seals_exact_binary_streams_and_preserves_the_existing_wire_shape` — 정확한 binary stream을 seal하며 기존 wire shape를 유지하는 시험. ([PR](https://github.com/RefinedStone/codex-exec-loop/pull/2938), [최종 소스](https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/verification/src/service/capture/tests.rs#L124), [게시 당시 소스](https://github.com/RefinedStone/codex-exec-loop/blob/a3dcfcad0a7922baad794f74bc6ab99487133b0d/crates/verification/src/service/capture/tests.rs#L124)).
+- `akra-verification / service::capture::tests::malformed_observations_are_interrupted_without_sealing_or_claiming_not_run` — 잘못된 관측을 seal하거나 미실행으로 표시하지 않고 interrupted로 보존하는 시험. ([PR](https://github.com/RefinedStone/codex-exec-loop/pull/2938), [최종 소스](https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/verification/src/service/capture/tests.rs#L187), [게시 당시 소스](https://github.com/RefinedStone/codex-exec-loop/blob/a3dcfcad0a7922baad794f74bc6ab99487133b0d/crates/verification/src/service/capture/tests.rs#L187)).
+- `akra-verification / service::capture::tests::stream_size_or_hash_mismatch_retains_execution_without_a_seal` — stream 크기나 hash 불일치에서 실행 사실은 보존하고 seal은 발행하지 않는 시험. ([PR](https://github.com/RefinedStone/codex-exec-loop/pull/2938), [최종 소스](https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/verification/src/service/capture/tests.rs#L205), [게시 당시 소스](https://github.com/RefinedStone/codex-exec-loop/blob/a3dcfcad0a7922baad794f74bc6ab99487133b0d/crates/verification/src/service/capture/tests.rs#L205)).
+- `akra-verification-native / git_config::tests::verified_submodule_exception_only_excludes_core_worktree_from_the_same_limits` — 검증된 submodule 예외가 기존 설정 제한을 유지하며 core.worktree만 제외하는 계약 시험. ([PR](https://github.com/RefinedStone/codex-exec-loop/pull/2946), [최종 소스](https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/verification-native/src/git_config.rs#L183), [게시 당시 소스](https://github.com/RefinedStone/codex-exec-loop/blob/a58d3160d4d1ce58a2e3f57ecd77bfec672bdbd8/crates/verification-native/src/git_config.rs#L182)).
+- `akra-verification-native / task_verification::tests::fixture_configuration_is_local_and_preserves_the_fixed_policy` — fixture Git 설정이 로컬에 한정되고 고정된 검증 정책을 유지하는 회귀 시험. ([PR](https://github.com/RefinedStone/codex-exec-loop/pull/2946), [최종 소스](https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/verification-native/src/task_verification/tests.rs#L457), [게시 당시 소스](https://github.com/RefinedStone/codex-exec-loop/blob/a58d3160d4d1ce58a2e3f57ecd77bfec672bdbd8/crates/verification-native/src/task_verification/tests.rs#L457)).
+
+## 판정 범위와 근거
+
+- 기존 raw 목록 SHA256과 6,418개 / ignored 24개를 게시된 baseline JSON에 대조했습니다.
+- `testOwnership.moved/retained`, `movedTests/retainedTests`를 우선하고, 그 다음 `testMappings`, 마지막으로 가장 긴 일반 prefix를 적용했습니다.
+- split 소유권 경계에서 명시되지 않은 테스트는 자동으로 이동하지 않습니다. 목적지 충돌이나 누락을 신규 테스트로 상쇄하지 않습니다.
+- 기존 ignored 테스트는 개별 이름의 이동 후에도 같은 flag를 유지해야 합니다.
+- package와 lib target 이름은 실제 Cargo metadata, 바이너리는 성공한 Cargo JSON compiler-artifact에서 확인했습니다.
+- all-features, Linux/macOS, bin/integration/doctest, 실제 테스트 통과 및 CI 소요 시간은 이 결과의 판정 범위에 포함되지 않습니다.
+- 정규화 목록: `inventory-baseline.json`, `inventory-capture.json`; 일대일 매핑: `inventory-mapping.json`; 상세 판정: `inventory-comparison.json`.

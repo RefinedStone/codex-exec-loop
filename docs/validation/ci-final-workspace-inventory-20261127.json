@@ -1,0 +1,556 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-27T10:04:12.086Z",
+  "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+  "status": "PASS",
+  "captureScriptSha256": "6b88815f81c613c915d6d50474025bd09a2412ed9aa002408b502f1665240e56",
+  "comparisonScriptSha256": "6b88815f81c613c915d6d50474025bd09a2412ed9aa002408b502f1665240e56",
+  "baseline": {
+    "sourceSha": "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
+    "evidence": {
+      "reportPath": "C:\\dev\\worktrees\\akra-ci2867-20261127\\docs\\validation\\ci-local-build-baseline-2026-11-27.json",
+      "reportSha256": "8a62d61c820c53e1cdf272b52a43cc5d6da5c492849bccc3fa02f2873c739db6",
+      "allPath": "C:\\dev\\worktrees\\akra-ci2867-20261127\\artifacts\\ci-local-baseline\\tests-all.txt",
+      "allSha256": "d91e86ee8715653f31d680e5b72a1cd6b50461570954bc8cf32ab87eca14e561",
+      "ignoredPath": "C:\\dev\\worktrees\\akra-ci2867-20261127\\artifacts\\ci-local-baseline\\tests-ignored.txt",
+      "ignoredSha256": "c69c918b4257620f58fb681b4840a9af63684aa1552a6b8c0293eaa53e6f3bfa",
+      "environment": {
+        "schemaVersion": 1,
+        "recordedAt": "2026-11-27T06:34:52.212Z",
+        "sourceRevision": "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
+        "worktree": "C:\\dev\\worktrees\\akra-ci2867-20261127",
+        "targetDirectory": "C:/dev/tmp/akra-ci2867-baseline-20261127",
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run",
+          "--timings",
+          "-v",
+          "--message-format=json-render-diagnostics"
+        ],
+        "features": "default",
+        "profile": "test (inherits dev)",
+        "cargoIncremental": 1,
+        "jobs": 8,
+        "rustc": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.95.0\nLLVM version: 22.1.2",
+        "cargo": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)",
+        "node": "v24.13.0",
+        "os": "win32",
+        "release": "10.0.26200",
+        "architecture": "x64",
+        "cpu": "AMD Ryzen 9 7900X3D 12-Core Processor          ",
+        "logicalCpus": 24,
+        "totalMemoryBytes": 67767197696,
+        "freeMemoryBytes": 35702169600,
+        "registryState": "existing download cache; dedicated target starts empty",
+        "lockSha256": "464b779fd83435ad56d2e54d8ac3a29a39941b87d9f3fea87da9b2f25cfb7160",
+        "manifestSha256": "f92034ced102fe3b01b4888e9da6a18b61ff1342b1071e68f1ed6a1a9b929145",
+        "sourceInventorySha256": "2fbbc89412c620ed1a7de580729c613e44292eeb833d2c87f67ea5458c2e15c7",
+        "representativeEdits": {
+          "domain": "src/domain/issue_validation.rs",
+          "adapter": "src/adapter/outbound/git/task_verification.rs"
+        }
+      }
+    }
+  },
+  "build": {
+    "contextPath": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\build-context.json",
+    "contextSha256": "09a5b601634b70f63da4d1416117c83b8caf4615dab2f1566fd349363ba72739",
+    "context": {
+      "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+      "baseSha": "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
+      "cwd": "C:\\dev\\worktrees\\akra-ci-final-20261127",
+      "targetDirectory": "C:/dev/tmp/akra-ci-final-target-20261127",
+      "toolchain": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.95.0\nLLVM version: 22.1.2",
+      "features": "default",
+      "target": "native-host",
+      "profile": "test",
+      "incremental": "1",
+      "buildJobs": "4",
+      "command": [
+        "C:/Users/dorani/.rustup/toolchains/1.95.0-x86_64-pc-windows-msvc/bin/cargo.exe",
+        "test",
+        "--workspace",
+        "--lib",
+        "--locked",
+        "--offline",
+        "--no-run",
+        "--message-format=json",
+        "--timings"
+      ],
+      "startedAt": "2026-11-27T10:00:59.387Z",
+      "attempt": 3
+    },
+    "logPath": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\cargo-test-build.jsonl",
+    "logSha256": "2e02a8fbd9f7cddf50279a7eae25167e1c02ab084921901619040eaf1f232c60",
+    "metadataPath": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\metadata.json",
+    "metadataSha256": "8887682c7b5cee412e65059129ca436092887a59968c110544d38337e902be85",
+    "sourceContextPath": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\source.json",
+    "sourceContextSha256": "93d09198d3ff0ea2ff994ceae02c325572696137a83b602b8037035aa59b6130",
+    "sourceContext": {
+      "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+      "baseSha": "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
+      "restackHeads": {
+        "2864": "87b5886656d5e1f98c4bd6e82529d27efbe2086c",
+        "2865": "0347fe71ad69d82b82abd3d54f901fdd0fdf1950",
+        "2866": "35f48e915a15dc9c4d7091a91ee66d6402e3c05c",
+        "2903": "f9e39762eead950b145a78236ff6f2ae7fdaca7b",
+        "2904": "044dc3c798e60829f4af473f4b3fc96dfdb29988",
+        "2905": "ed03f99a6b122cfd2e56b5e48c1b922a0b953d3d",
+        "2906": "7b0eb17ccd07b63f6fe6b122fd5233c2ade2fe52",
+        "2907": "a3243d5430dcd57ef1dbe5c6e95442e1256e1c70",
+        "2908": "af3a749470b0e6997e28a260fa3cf895666ab972",
+        "2909": "0043cae72cd024a3bd4b0ee8822ea094fc9baedb",
+        "2910": "a4674e012f45a49beea77c4b7925666439e64cf4",
+        "2912": "533befe5677ed85754d5aa8b7b737cc6ecfd2684",
+        "2930": "501fafb59575563c022db8f05d98ccf7b8d87de8"
+      }
+    },
+    "targetDirectory": "C:/dev/tmp/akra-ci-final-target-20261127"
+  },
+  "packages": [
+    {
+      "package": "akra-ade",
+      "target": {
+        "name": "akra_ade",
+        "kind": "lib"
+      },
+      "count": 6291,
+      "ignored": 23
+    },
+    {
+      "package": "akra-issue-core",
+      "target": {
+        "name": "akra_issue_core",
+        "kind": "lib"
+      },
+      "count": 53,
+      "ignored": 0
+    },
+    {
+      "package": "akra-native",
+      "target": {
+        "name": "akra_native",
+        "kind": "lib"
+      },
+      "count": 43,
+      "ignored": 1
+    },
+    {
+      "package": "akra-verification",
+      "target": {
+        "name": "akra_verification",
+        "kind": "lib"
+      },
+      "count": 24,
+      "ignored": 0
+    },
+    {
+      "package": "akra-verification-native",
+      "target": {
+        "name": "akra_verification_native",
+        "kind": "lib"
+      },
+      "count": 23,
+      "ignored": 0
+    }
+  ],
+  "counts": {
+    "before": 6418,
+    "beforeIgnored": 24,
+    "after": 6434,
+    "afterIgnored": 24,
+    "mapped": 6418,
+    "renamed": 134,
+    "explicitlyRetained": 20,
+    "reviewedAdditions": 16,
+    "pendingAdditions": 0
+  },
+  "comparison": {
+    "before": 6418,
+    "after": 6434,
+    "renamed": 134,
+    "added": 16
+  },
+  "missing": [],
+  "ignoredChanges": [],
+  "collisions": [],
+  "mappingErrors": [],
+  "additions": [
+    {
+      "package": "akra-ade",
+      "target": {
+        "name": "akra_ade",
+        "kind": "lib"
+      },
+      "name": "application::service::issue_timeline::tests::issue_timeline_replays_frozen_journal_with_the_same_event_tags_revisions_and_states",
+      "ignored": false,
+      "reason": "동결 journal fixture로 저장 event tag/revision/state 및 persisted+recent 병합의 호환성을 고정하는 시험.",
+      "evidence": {
+        "pr": "https://github.com/RefinedStone/codex-exec-loop/pull/2941",
+        "sourcePath": "src/application/service/issue_timeline/tests.rs",
+        "prHeadSha": "dc2273cde318973eff25563798aedf1734a63f50",
+        "prSourcePath": "src/application/service/issue_timeline/tests.rs",
+        "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+        "sourceFileSha256": "03107c86802d61a4c64676ae419d24c2dd25e1f1996389918060c28415427bd8",
+        "sourceLine": 217,
+        "prSourceFileSha256": "644d5024a44985f0b78d0dacfbd6918a0722eae53b09548690500788c46f7447",
+        "prSourceLine": 217,
+        "sourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/src/application/service/issue_timeline/tests.rs#L217",
+        "prSourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/dc2273cde318973eff25563798aedf1734a63f50/src/application/service/issue_timeline/tests.rs#L217"
+      }
+    },
+    {
+      "package": "akra-native",
+      "target": {
+        "name": "akra_native",
+        "kind": "lib"
+      },
+      "name": "private_temp::tests::public_temp_prefix_cannot_select_a_path_or_stream",
+      "ignored": false,
+      "reason": "공개 임시 디렉터리 prefix로 경로나 Windows ADS를 선택하지 못하게 하는 경계 시험.",
+      "evidence": {
+        "pr": "https://github.com/RefinedStone/codex-exec-loop/pull/2945",
+        "sourcePath": "crates/native/src/private_temp.rs",
+        "prHeadSha": "01e8c2b285541c8a2ba1ab8c3be899ab979b06f7",
+        "prSourcePath": "crates/native/src/private_temp.rs",
+        "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+        "sourceFileSha256": "dd7369195bbc8135bfb6c32b8905bf7e8d6d47a62423ea3ccb2afe916ddee582",
+        "sourceLine": 200,
+        "prSourceFileSha256": "d69f634ab42cad279d782e9c306b7c63bfa5f08cae33fa8402d53ce9e28023ad",
+        "prSourceLine": 200,
+        "sourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/native/src/private_temp.rs#L200",
+        "prSourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/01e8c2b285541c8a2ba1ab8c3be899ab979b06f7/crates/native/src/private_temp.rs#L200"
+      }
+    },
+    {
+      "package": "akra-native",
+      "target": {
+        "name": "akra_native",
+        "kind": "lib"
+      },
+      "name": "stable_file::tests::native_bounded_read_rechecks_the_pinned_file_identity",
+      "ignored": false,
+      "reason": "제한된 파일 읽기 후 고정한 파일 identity를 다시 확인하는 회귀 시험.",
+      "evidence": {
+        "pr": "https://github.com/RefinedStone/codex-exec-loop/pull/2945",
+        "sourcePath": "crates/native/src/stable_file/tests.rs",
+        "prHeadSha": "01e8c2b285541c8a2ba1ab8c3be899ab979b06f7",
+        "prSourcePath": "crates/native/src/stable_file/tests.rs",
+        "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+        "sourceFileSha256": "fcf0afc721eb3e51be15bbacd17d15a6293355c67ecc2d7c41ca58515d8a7769",
+        "sourceLine": 42,
+        "prSourceFileSha256": "b11b7e90027b52a2230aa6f68ce57f87a143ac5d29ad212449d935421a31e560",
+        "prSourceLine": 42,
+        "sourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/native/src/stable_file/tests.rs#L42",
+        "prSourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/01e8c2b285541c8a2ba1ab8c3be899ab979b06f7/crates/native/src/stable_file/tests.rs#L42"
+      }
+    },
+    {
+      "package": "akra-native",
+      "target": {
+        "name": "akra_native",
+        "kind": "lib"
+      },
+      "name": "stable_file::tests::native_existing_directory_probe_and_abandoned_capture_do_not_create_or_publish_state",
+      "ignored": false,
+      "reason": "기존 디렉터리 조회와 중단된 capture가 파일을 생성하거나 상태를 게시하지 않는 계약 시험.",
+      "evidence": {
+        "pr": "https://github.com/RefinedStone/codex-exec-loop/pull/2945",
+        "sourcePath": "crates/native/src/stable_file/tests.rs",
+        "prHeadSha": "01e8c2b285541c8a2ba1ab8c3be899ab979b06f7",
+        "prSourcePath": "crates/native/src/stable_file/tests.rs",
+        "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+        "sourceFileSha256": "fcf0afc721eb3e51be15bbacd17d15a6293355c67ecc2d7c41ca58515d8a7769",
+        "sourceLine": 58,
+        "prSourceFileSha256": "b11b7e90027b52a2230aa6f68ce57f87a143ac5d29ad212449d935421a31e560",
+        "prSourceLine": 58,
+        "sourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/native/src/stable_file/tests.rs#L58",
+        "prSourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/01e8c2b285541c8a2ba1ab8c3be899ab979b06f7/crates/native/src/stable_file/tests.rs#L58"
+      }
+    },
+    {
+      "package": "akra-native",
+      "target": {
+        "name": "akra_native",
+        "kind": "lib"
+      },
+      "name": "stable_file::tests::native_publication_never_replaces_an_existing_private_destination",
+      "ignored": false,
+      "reason": "private destination 게시가 기존 파일을 덮어쓰지 않는 계약 시험.",
+      "evidence": {
+        "pr": "https://github.com/RefinedStone/codex-exec-loop/pull/2945",
+        "sourcePath": "crates/native/src/stable_file/tests.rs",
+        "prHeadSha": "01e8c2b285541c8a2ba1ab8c3be899ab979b06f7",
+        "prSourcePath": "crates/native/src/stable_file/tests.rs",
+        "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+        "sourceFileSha256": "fcf0afc721eb3e51be15bbacd17d15a6293355c67ecc2d7c41ca58515d8a7769",
+        "sourceLine": 23,
+        "prSourceFileSha256": "b11b7e90027b52a2230aa6f68ce57f87a143ac5d29ad212449d935421a31e560",
+        "prSourceLine": 23,
+        "sourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/native/src/stable_file/tests.rs#L23",
+        "prSourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/01e8c2b285541c8a2ba1ab8c3be899ab979b06f7/crates/native/src/stable_file/tests.rs#L23"
+      }
+    },
+    {
+      "package": "akra-native",
+      "target": {
+        "name": "akra_native",
+        "kind": "lib"
+      },
+      "name": "subprocess::controlled::tests::cancellation_after_exit_signal_keeps_the_cancelled_fact",
+      "ignored": false,
+      "reason": "Windows 프로세스 종료 wakeup 이후에도 이미 발생한 취소 사실을 보존하는 회귀 시험.",
+      "evidence": {
+        "pr": "https://github.com/RefinedStone/codex-exec-loop/pull/2934",
+        "sourcePath": "crates/native/src/subprocess/controlled/tests.rs",
+        "prHeadSha": "6e7b44a50bbb6b829d79634efaddae3b8ad0ae07",
+        "prSourcePath": "src/subprocess/controlled/tests.rs",
+        "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+        "sourceFileSha256": "9c6fc68c0d715f9d3aded2f39e5df078518b572c4e7394be54962b87c4a3f7ff",
+        "sourceLine": 161,
+        "prSourceFileSha256": "ad3978b4ad40ceaed3bd4d85f9c7b4de43b7c02de6947a77459805d19d3b6a41",
+        "prSourceLine": 161,
+        "sourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/native/src/subprocess/controlled/tests.rs#L161",
+        "prSourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/6e7b44a50bbb6b829d79634efaddae3b8ad0ae07/src/subprocess/controlled/tests.rs#L161"
+      }
+    },
+    {
+      "package": "akra-native",
+      "target": {
+        "name": "akra_native",
+        "kind": "lib"
+      },
+      "name": "trusted_executable::tests::workspace_source_root_remains_untrusted_after_crate_extraction",
+      "ignored": false,
+      "reason": "crate 분리 후에도 전체 workspace source root가 실행 파일 신뢰 예외가 되지 않는 회귀 시험.",
+      "evidence": {
+        "pr": "https://github.com/RefinedStone/codex-exec-loop/pull/2945",
+        "sourcePath": "crates/native/src/trusted_executable/tests.rs",
+        "prHeadSha": "01e8c2b285541c8a2ba1ab8c3be899ab979b06f7",
+        "prSourcePath": "crates/native/src/trusted_executable/tests.rs",
+        "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+        "sourceFileSha256": "dc735e578ae55271f5e64f010ae5ad13eb03d974ad110ba36be170ac1825a340",
+        "sourceLine": 513,
+        "prSourceFileSha256": "9853f2766c00a80fae804c8b6a428b6052206edc8a3167c6c49a10a73d90f3c7",
+        "prSourceLine": 513,
+        "sourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/native/src/trusted_executable/tests.rs#L513",
+        "prSourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/01e8c2b285541c8a2ba1ab8c3be899ab979b06f7/crates/native/src/trusted_executable/tests.rs#L513"
+      }
+    },
+    {
+      "package": "akra-verification",
+      "target": {
+        "name": "akra_verification",
+        "kind": "lib"
+      },
+      "name": "acceptance::tests::criteria_require_a_revision_and_preserve_empty_history",
+      "ignored": false,
+      "reason": "root Task 결합 없이 criteria revision 요구와 빈 criteria의 이력 보존을 검증하는 독립 도메인 시험.",
+      "evidence": {
+        "pr": "https://github.com/RefinedStone/codex-exec-loop/pull/2938",
+        "sourcePath": "crates/verification/src/acceptance/tests.rs",
+        "prHeadSha": "a3dcfcad0a7922baad794f74bc6ab99487133b0d",
+        "prSourcePath": "crates/verification/src/acceptance/tests.rs",
+        "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+        "sourceFileSha256": "418467f75a4b43addee558c61151c40768252571c8cef00bd528e43dce070199",
+        "sourceLine": 69,
+        "prSourceFileSha256": "250a6fa91aca711b9c643ce2d88666f72b610e1568194ac9b4d63ee408f77442",
+        "prSourceLine": 69,
+        "sourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/verification/src/acceptance/tests.rs#L69",
+        "prSourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/a3dcfcad0a7922baad794f74bc6ab99487133b0d/crates/verification/src/acceptance/tests.rs#L69"
+      }
+    },
+    {
+      "package": "akra-verification",
+      "target": {
+        "name": "akra_verification",
+        "kind": "lib"
+      },
+      "name": "service::capture::tests::a_failed_or_mismatched_artifact_cannot_remove_execution_or_prove_a_pass",
+      "ignored": false,
+      "reason": "artifact 실패나 불일치가 실행 사실을 제거하거나 통과 근거를 만들지 못하게 하는 fake Port 시험.",
+      "evidence": {
+        "pr": "https://github.com/RefinedStone/codex-exec-loop/pull/2938",
+        "sourcePath": "crates/verification/src/service/capture/tests.rs",
+        "prHeadSha": "a3dcfcad0a7922baad794f74bc6ab99487133b0d",
+        "prSourcePath": "crates/verification/src/service/capture/tests.rs",
+        "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+        "sourceFileSha256": "be1f751c58a4dee2c16a64f8746c1efac0dab5c0472c8554c171efbba1119605",
+        "sourceLine": 227,
+        "prSourceFileSha256": "3f92818cc01fa7d47f45ed3d307a596395043032656d642c58e87b1f80c26b6f",
+        "prSourceLine": 227,
+        "sourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/verification/src/service/capture/tests.rs#L227",
+        "prSourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/a3dcfcad0a7922baad794f74bc6ab99487133b0d/crates/verification/src/service/capture/tests.rs#L227"
+      }
+    },
+    {
+      "package": "akra-verification",
+      "target": {
+        "name": "akra_verification",
+        "kind": "lib"
+      },
+      "name": "service::capture::tests::capture_accepts_the_stream_limit_and_rejects_an_oversized_envelope",
+      "ignored": false,
+      "reason": "stream 제한 경계는 허용하고 초과 envelope는 거절하는 capture 한도 시험.",
+      "evidence": {
+        "pr": "https://github.com/RefinedStone/codex-exec-loop/pull/2938",
+        "sourcePath": "crates/verification/src/service/capture/tests.rs",
+        "prHeadSha": "a3dcfcad0a7922baad794f74bc6ab99487133b0d",
+        "prSourcePath": "crates/verification/src/service/capture/tests.rs",
+        "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+        "sourceFileSha256": "be1f751c58a4dee2c16a64f8746c1efac0dab5c0472c8554c171efbba1119605",
+        "sourceLine": 272,
+        "prSourceFileSha256": "3f92818cc01fa7d47f45ed3d307a596395043032656d642c58e87b1f80c26b6f",
+        "prSourceLine": 272,
+        "sourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/verification/src/service/capture/tests.rs#L272",
+        "prSourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/a3dcfcad0a7922baad794f74bc6ab99487133b0d/crates/verification/src/service/capture/tests.rs#L272"
+      }
+    },
+    {
+      "package": "akra-verification",
+      "target": {
+        "name": "akra_verification",
+        "kind": "lib"
+      },
+      "name": "service::capture::tests::capture_preserves_failed_outcomes_and_incomplete_streams",
+      "ignored": false,
+      "reason": "실패 결과와 불완전 stream을 capture가 그대로 보존하는 시험.",
+      "evidence": {
+        "pr": "https://github.com/RefinedStone/codex-exec-loop/pull/2938",
+        "sourcePath": "crates/verification/src/service/capture/tests.rs",
+        "prHeadSha": "a3dcfcad0a7922baad794f74bc6ab99487133b0d",
+        "prSourcePath": "crates/verification/src/service/capture/tests.rs",
+        "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+        "sourceFileSha256": "be1f751c58a4dee2c16a64f8746c1efac0dab5c0472c8554c171efbba1119605",
+        "sourceLine": 248,
+        "prSourceFileSha256": "3f92818cc01fa7d47f45ed3d307a596395043032656d642c58e87b1f80c26b6f",
+        "prSourceLine": 248,
+        "sourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/verification/src/service/capture/tests.rs#L248",
+        "prSourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/a3dcfcad0a7922baad794f74bc6ab99487133b0d/crates/verification/src/service/capture/tests.rs#L248"
+      }
+    },
+    {
+      "package": "akra-verification",
+      "target": {
+        "name": "akra_verification",
+        "kind": "lib"
+      },
+      "name": "service::capture::tests::capture_seals_exact_binary_streams_and_preserves_the_existing_wire_shape",
+      "ignored": false,
+      "reason": "정확한 binary stream을 seal하며 기존 wire shape를 유지하는 시험.",
+      "evidence": {
+        "pr": "https://github.com/RefinedStone/codex-exec-loop/pull/2938",
+        "sourcePath": "crates/verification/src/service/capture/tests.rs",
+        "prHeadSha": "a3dcfcad0a7922baad794f74bc6ab99487133b0d",
+        "prSourcePath": "crates/verification/src/service/capture/tests.rs",
+        "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+        "sourceFileSha256": "be1f751c58a4dee2c16a64f8746c1efac0dab5c0472c8554c171efbba1119605",
+        "sourceLine": 124,
+        "prSourceFileSha256": "3f92818cc01fa7d47f45ed3d307a596395043032656d642c58e87b1f80c26b6f",
+        "prSourceLine": 124,
+        "sourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/verification/src/service/capture/tests.rs#L124",
+        "prSourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/a3dcfcad0a7922baad794f74bc6ab99487133b0d/crates/verification/src/service/capture/tests.rs#L124"
+      }
+    },
+    {
+      "package": "akra-verification",
+      "target": {
+        "name": "akra_verification",
+        "kind": "lib"
+      },
+      "name": "service::capture::tests::malformed_observations_are_interrupted_without_sealing_or_claiming_not_run",
+      "ignored": false,
+      "reason": "잘못된 관측을 seal하거나 미실행으로 표시하지 않고 interrupted로 보존하는 시험.",
+      "evidence": {
+        "pr": "https://github.com/RefinedStone/codex-exec-loop/pull/2938",
+        "sourcePath": "crates/verification/src/service/capture/tests.rs",
+        "prHeadSha": "a3dcfcad0a7922baad794f74bc6ab99487133b0d",
+        "prSourcePath": "crates/verification/src/service/capture/tests.rs",
+        "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+        "sourceFileSha256": "be1f751c58a4dee2c16a64f8746c1efac0dab5c0472c8554c171efbba1119605",
+        "sourceLine": 187,
+        "prSourceFileSha256": "3f92818cc01fa7d47f45ed3d307a596395043032656d642c58e87b1f80c26b6f",
+        "prSourceLine": 187,
+        "sourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/verification/src/service/capture/tests.rs#L187",
+        "prSourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/a3dcfcad0a7922baad794f74bc6ab99487133b0d/crates/verification/src/service/capture/tests.rs#L187"
+      }
+    },
+    {
+      "package": "akra-verification",
+      "target": {
+        "name": "akra_verification",
+        "kind": "lib"
+      },
+      "name": "service::capture::tests::stream_size_or_hash_mismatch_retains_execution_without_a_seal",
+      "ignored": false,
+      "reason": "stream 크기나 hash 불일치에서 실행 사실은 보존하고 seal은 발행하지 않는 시험.",
+      "evidence": {
+        "pr": "https://github.com/RefinedStone/codex-exec-loop/pull/2938",
+        "sourcePath": "crates/verification/src/service/capture/tests.rs",
+        "prHeadSha": "a3dcfcad0a7922baad794f74bc6ab99487133b0d",
+        "prSourcePath": "crates/verification/src/service/capture/tests.rs",
+        "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+        "sourceFileSha256": "be1f751c58a4dee2c16a64f8746c1efac0dab5c0472c8554c171efbba1119605",
+        "sourceLine": 205,
+        "prSourceFileSha256": "3f92818cc01fa7d47f45ed3d307a596395043032656d642c58e87b1f80c26b6f",
+        "prSourceLine": 205,
+        "sourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/verification/src/service/capture/tests.rs#L205",
+        "prSourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/a3dcfcad0a7922baad794f74bc6ab99487133b0d/crates/verification/src/service/capture/tests.rs#L205"
+      }
+    },
+    {
+      "package": "akra-verification-native",
+      "target": {
+        "name": "akra_verification_native",
+        "kind": "lib"
+      },
+      "name": "git_config::tests::verified_submodule_exception_only_excludes_core_worktree_from_the_same_limits",
+      "ignored": false,
+      "reason": "검증된 submodule 예외가 기존 설정 제한을 유지하며 core.worktree만 제외하는 계약 시험.",
+      "evidence": {
+        "pr": "https://github.com/RefinedStone/codex-exec-loop/pull/2946",
+        "sourcePath": "crates/verification-native/src/git_config.rs",
+        "prHeadSha": "a58d3160d4d1ce58a2e3f57ecd77bfec672bdbd8",
+        "prSourcePath": "crates/verification-native/src/git_config.rs",
+        "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+        "sourceFileSha256": "fcc664a6485fe4123ead039bee4d45815da0d485e1ad168a521236678645e400",
+        "sourceLine": 183,
+        "prSourceFileSha256": "c51e7a98085edf9d06d7c35d23fdc03a59088096ad1a92932688f873ff6870cc",
+        "prSourceLine": 182,
+        "sourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/verification-native/src/git_config.rs#L183",
+        "prSourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/a58d3160d4d1ce58a2e3f57ecd77bfec672bdbd8/crates/verification-native/src/git_config.rs#L182"
+      }
+    },
+    {
+      "package": "akra-verification-native",
+      "target": {
+        "name": "akra_verification_native",
+        "kind": "lib"
+      },
+      "name": "task_verification::tests::fixture_configuration_is_local_and_preserves_the_fixed_policy",
+      "ignored": false,
+      "reason": "fixture Git 설정이 로컬에 한정되고 고정된 검증 정책을 유지하는 회귀 시험.",
+      "evidence": {
+        "pr": "https://github.com/RefinedStone/codex-exec-loop/pull/2946",
+        "sourcePath": "crates/verification-native/src/task_verification/tests.rs",
+        "prHeadSha": "a58d3160d4d1ce58a2e3f57ecd77bfec672bdbd8",
+        "prSourcePath": "crates/verification-native/src/task_verification/tests.rs",
+        "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+        "sourceFileSha256": "3eb650ff7ee1367da27c753904fe926f17e5f70143803b8f072928e63eea5a38",
+        "sourceLine": 457,
+        "prSourceFileSha256": "74aae8a53791c390bb72ebc98d0828620fdf27b00145f20e250e8ce0f9ab1887",
+        "prSourceLine": 457,
+        "sourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/10df53cedda2139998f7ee6e5842926537adb472/crates/verification-native/src/task_verification/tests.rs#L457",
+        "prSourceUrl": "https://github.com/RefinedStone/codex-exec-loop/blob/a58d3160d4d1ce58a2e3f57ecd77bfec672bdbd8/crates/verification-native/src/task_verification/tests.rs#L457"
+      }
+    }
+  ],
+  "pendingAdditions": [],
+  "errors": [],
+  "testCasesExecuted": 0,
+  "sourceUnchanged": true
+}

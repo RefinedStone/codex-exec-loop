@@ -1,7 +1,7 @@
 {
-  "schemaVersion": 1,
-  "reportStatus": "draft-incomplete",
-  "recordedAt": "2026-11-27T08:47:49Z",
+  "schemaVersion": 2,
+  "reportStatus": "final-local-evidence-published-prs-acceptance-incomplete",
+  "recordedAt": "2026-11-27T10:25:57.405Z",
   "repository": "RefinedStone/codex-exec-loop",
   "issue": 2911,
   "relatedIssues": [
@@ -24,28 +24,28 @@
   ],
   "baseBranch": "prerelease",
   "baseSourceSha": "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
-  "finalCombinedSourceSha": null,
-  "planHash": null,
+  "finalCombinedSourceSha": "9098f0e7aa994cd0a2f2f3ca926b47381c9bdf29",
+  "planHash": "789fc27130494941b97528bafad6a5f48ff4629ab547f2534b7f372d70f1e564",
   "acceptance": {
     "complete": false,
-    "verdict": "blocked",
+    "verdict": "incomplete-current-ci-and-native-failures",
     "overallCIImprovement": null,
     "localIterationVerdict": "bounded-single-package-observations-only",
     "prGateVerdict": "not-accepted-on-final-combined-source",
     "postmergeVerdict": "full-retained-no-speedup-claim",
     "blockingReasons": [
-      "최종 조합 소스 SHA와 그 SHA의 검증 계획 해시가 아직 없다.",
-      "전체 workspace/OS/features별 unit·bin·integration·doctest·ignored helper·architecture·IPC/플러그인 시험 inventory 합집합을 최종 소스에서 대조하지 못했다.",
-      "새 로컬/Actions 선택 실행과 실패 작업 재실행의 최종 제품 조합 인수가 완료되지 않았다.",
-      "원격 Windows 세션 중단으로 native #2908과 verification-native #2910을 게시·통합하지 못했다.",
-      "공통 Port shim architecture 검사 및 기존 재시작 시험의 개별 timeout 등 공개 CI 실패가 최종 조합에서 해결됐다는 근거가 없다.",
-      "실제 원격의 변경 없는 crate 재빌드 Dirty 원인과 trusted sealed cache 복원 효과가 확정되지 않았다.",
-      "전체 PR/CI/postmerge wall·queue·runner 점유·메모리·캐시 전송 비용의 같은 조건 전후 비교가 없다."
+      "macOS E0425 추출 회귀는 시험 fixture 상수 참조 수정 38efaebd를 native 계열 4개 PR과 최종9098에 게시했다. 실제 macOS 컴파일·계약 재검증은 대기 중이며 10df의 Windows 검증으로 대체하지 않는다.",
+      "현재 PR HEAD #2939/#2940 Rust Tests의 assertion 실패 2건이 남아 있다. 실제 merge checkout은 각 PR head와 동일 tree이지만 직전 Windows 검증10df 또는 현재 조합9098의 재현 결과는 아니다.",
+      "Windows native ACL 관련 기존 실패 3개를 실패로 유지한다. 환경/코드 귀속을 면제나 성공으로 바꾸지 않는다.",
+      "Windows/default/lib inventory는 검증했지만 3 OS·default/all·bin/integration·전체 doctest·ignored/native confirmation helper·IPC/플러그인·큰 root runtime 계약 전체 인수는 남아 있다.",
+      "최종 source/planHash와 보수적 full 선택을 확인했으나 전체 --run gate 및 실제 selected matrix/실패 행 재실행을 최종 조합에서 인수하지 않았다.",
+      "원격 Dirty 직접 원인, trusted sealed cache 반복 복원 효과와 producer 없는 target namespace 성능을 확인하지 못했다.",
+      "같은 조건의 로컬/PR/postmerge compile·link·test·cache·queue·wall 전후 반복 표본과 p50/p90이 없다."
     ],
     "criteria": [
       {
         "id": "inventory-preservation",
-        "status": "unverified-final",
+        "status": "windows-default-lib-verified-other-scopes-pending",
         "complete": false
       },
       {
@@ -65,7 +65,7 @@
       },
       {
         "id": "no-skips-or-timeout-relaxation",
-        "status": "component-evidence-only-final-inventory-pending",
+        "status": "windows-lib-bijection-and-ignored-preserved-broader-contracts-pending",
         "complete": false
       },
       {
@@ -80,7 +80,7 @@
       },
       {
         "id": "final-sha-plan-success",
-        "status": "blocked",
+        "status": "source-and-plan-bound-full-gate-not-executed",
         "complete": false
       },
       {
@@ -91,9 +91,9 @@
     ]
   },
   "rollout": {
-    "currentStage": "기준 자료 수집과 선택 계획/실행기 준비; 최종 전환 인수 전",
-    "localSelective": "proposed-draft-not-finally-accepted",
-    "prSelective": "proposed-draft-not-finally-accepted",
+    "currentStage": "공통 계획·로컬/Actions 연결과 5-crate 통합을 게시하고 제한된 최종 Windows 검증을 완료; 전체 성능 인수 전",
+    "localSelective": "implemented-and-wired-full-plan-observed-final-full-gate-not-accepted",
+    "prSelective": "implemented-and-wired-actual-selected-matrix-acceptance-pending",
     "postmerge": "full",
     "finalIntegrationAndRelease": "full",
     "fullFallbackConditions": [
@@ -313,9 +313,72 @@
   },
   "inventory": {
     "finalCombinedVerified": false,
+    "windowsDefaultLibVerified": true,
     "finalWorkspaceByOS": {
       "linux": null,
-      "windows": null,
+      "windows": {
+        "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+        "scope": "default native-host workspace lib",
+        "status": "PASS",
+        "counts": {
+          "before": 6418,
+          "beforeIgnored": 24,
+          "after": 6434,
+          "afterIgnored": 24,
+          "mapped": 6418,
+          "renamed": 134,
+          "explicitlyRetained": 20,
+          "reviewedAdditions": 16,
+          "pendingAdditions": 0
+        },
+        "packages": [
+          {
+            "package": "akra-ade",
+            "target": {
+              "name": "akra_ade",
+              "kind": "lib"
+            },
+            "count": 6291,
+            "ignored": 23
+          },
+          {
+            "package": "akra-issue-core",
+            "target": {
+              "name": "akra_issue_core",
+              "kind": "lib"
+            },
+            "count": 53,
+            "ignored": 0
+          },
+          {
+            "package": "akra-native",
+            "target": {
+              "name": "akra_native",
+              "kind": "lib"
+            },
+            "count": 43,
+            "ignored": 1
+          },
+          {
+            "package": "akra-verification",
+            "target": {
+              "name": "akra_verification",
+              "kind": "lib"
+            },
+            "count": 24,
+            "ignored": 0
+          },
+          {
+            "package": "akra-verification-native",
+            "target": {
+              "name": "akra_verification_native",
+              "kind": "lib"
+            },
+            "count": 23,
+            "ignored": 0
+          }
+        ]
+      },
       "macos": null
     },
     "finalDefaultAndAllFeaturesVerified": false,
@@ -323,7 +386,34 @@
     "finalIgnoredHelpersVerified": false,
     "finalArchitectureVerified": false,
     "finalIpcAndPluginContractsVerified": false,
-    "partialEvidence": [
+    "windowsArchitecture": {
+      "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+      "passed": 150,
+      "failed": 0,
+      "ignored": 0
+    },
+    "memberDoctests": {
+      "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+      "features": "default",
+      "platform": "windows",
+      "passed": 3,
+      "failed": 0,
+      "compileFail": 3,
+      "packages": {
+        "akra-issue-core": 2,
+        "akra-native": 1,
+        "akra-verification": 0,
+        "akra-verification-native": 0
+      },
+      "rootDoctestsIncluded": false
+    },
+    "evidenceFiles": [
+      "docs/validation/ci-final-workspace-inventory-20261127.md",
+      "docs/validation/ci-final-workspace-inventory-20261127.json",
+      "docs/validation/ci-final-workspace-inventory-artifacts-20261127.json"
+    ],
+    "artifactDirectory": "C:/dev/worktrees/akra-ci-final-20261127/artifacts/ci-final-validation/inventory-10df53ce",
+    "historicalPartialEvidence": [
       {
         "issue": 2903,
         "scope": "issue-core",
@@ -356,15 +446,7 @@
         "finalCombinedVerified": false
       }
     ],
-    "preserveWithoutCountingAsFinal": [
-      "doctest와 compile-fail",
-      "ignored child-process/confirmation helper",
-      "architecture",
-      "IPC/플러그인",
-      "재시작·취소·Unknown 결과",
-      "lease/authority/직렬화",
-      "root 큰 suite 잔여"
-    ]
+    "validationSourceSha": "10df53cedda2139998f7ee6e5842926537adb472"
   },
   "ciFindings": [
     {
@@ -486,105 +568,300 @@
   },
   "deliverySnapshot": [
     {
-      "issue": 2864,
-      "pr": 2934,
-      "headSha": "6e7b44a50bbb6b829d79634efaddae3b8ad0ae07",
-      "status": "published-component-evidence"
-    },
-    {
-      "issue": 2865,
-      "pr": 2933,
-      "headSha": "74a33850ee310f20417510e5aa19031749951653",
-      "status": "published-component-evidence"
-    },
-    {
-      "issue": 2866,
-      "pr": 2935,
-      "headSha": "dc67c7dd775a0c3ca5596b69edef33f58fd8beef",
-      "status": "published-fixture-remote-acceptance-pending"
-    },
-    {
-      "issue": 2867,
-      "pr": 2936,
-      "headSha": "fbdfbc1aa89421837e9c3a03b922ca2d6cfe9e9d",
-      "status": "published-baseline-only"
+      "issue": 2902,
+      "pr": 2931,
+      "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2931",
+      "published": true,
+      "draft": false,
+      "basePr": null,
+      "baseRef": "prerelease",
+      "observedHeadSha": "c2031a72eb31d1048e0ac98070de5313d869854a",
+      "observedAt": "2026-11-27T09:50:20Z",
+      "componentSourceSha": "c2031a72eb31d1048e0ac98070de5313d869854a",
+      "ciObservedAt": "2026-11-27T09:50:20Z",
+      "ciRun": 45951772941,
+      "ciRunUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45951772941",
+      "ciStatus": "completed",
+      "ciConclusion": "success",
+      "observationDoesNotCoverLaterHeads": true
     },
     {
       "issue": 2903,
       "pr": 2937,
-      "headSha": "4983131b3a519504562494c86d339ce30f9cacbb",
-      "status": "published-partial-validation"
+      "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2937",
+      "published": true,
+      "draft": false,
+      "basePr": 2931,
+      "baseRef": "codex/ci-2902-crate-boundaries-20261127",
+      "observedHeadSha": "f9e39762eead950b145a78236ff6f2ae7fdaca7b",
+      "observedAt": "2026-11-27T09:50:20Z",
+      "componentSourceSha": "f9e39762eead950b145a78236ff6f2ae7fdaca7b",
+      "ciObservedAt": "2026-11-27T09:50:20Z",
+      "ciRun": 45973397151,
+      "ciRunUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45973397151",
+      "ciStatus": "in_progress",
+      "ciConclusion": null,
+      "observationDoesNotCoverLaterHeads": true
     },
     {
       "issue": 2904,
       "pr": 2939,
-      "headSha": "fe25700c4f2dfd11049838d89c7940d350d1f174",
-      "status": "published-pure-planner"
+      "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2939",
+      "published": true,
+      "draft": false,
+      "basePr": 2937,
+      "baseRef": "codex/ci-2903-issue-core-workspace-20261127",
+      "observedHeadSha": "044dc3c798e60829f4af473f4b3fc96dfdb29988",
+      "observedAt": "2026-11-27T09:50:20Z",
+      "componentSourceSha": "044dc3c798e60829f4af473f4b3fc96dfdb29988",
+      "ciObservedAt": "2026-11-27T09:50:20Z",
+      "ciRun": 45973397203,
+      "ciRunUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45973397203",
+      "ciStatus": "queued",
+      "ciConclusion": null,
+      "observationDoesNotCoverLaterHeads": true
+    },
+    {
+      "issue": 2930,
+      "pr": 2932,
+      "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2932",
+      "published": true,
+      "draft": false,
+      "basePr": 2939,
+      "baseRef": "codex/ci-2904-impact-plan-20261127",
+      "observedHeadSha": "501fafb59575563c022db8f05d98ccf7b8d87de8",
+      "observedAt": "2026-11-27T09:50:20Z",
+      "componentSourceSha": "501fafb59575563c022db8f05d98ccf7b8d87de8",
+      "ciObservedAt": "2026-11-27T09:50:20Z",
+      "ciRun": 45973396527,
+      "ciRunUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45973396527",
+      "ciStatus": "in_progress",
+      "ciConclusion": null,
+      "observationDoesNotCoverLaterHeads": true
     },
     {
       "issue": 2905,
       "pr": 2940,
-      "headSha": "d619440675581b8ea3f9b08dd948e2899ef6309e",
-      "status": "published-runner-fixture-validated"
+      "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2940",
+      "published": true,
+      "draft": false,
+      "basePr": 2932,
+      "baseRef": "codex/ci-2930-contract-progress-20261127",
+      "observedHeadSha": "ed03f99a6b122cfd2e56b5e48c1b922a0b953d3d",
+      "observedAt": "2026-11-27T09:50:20Z",
+      "componentSourceSha": "ed03f99a6b122cfd2e56b5e48c1b922a0b953d3d",
+      "ciObservedAt": "2026-11-27T09:50:20Z",
+      "ciRun": 45973398822,
+      "ciRunUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45973398822",
+      "ciStatus": "queued",
+      "ciConclusion": null,
+      "observationDoesNotCoverLaterHeads": true
     },
     {
-      "issue": 2906,
-      "pr": 2942,
-      "headSha": "a5998beb18293a22bdf4ffc5bd762c5c11d09ad2",
-      "status": "published-local-draft-node-validated-product-integration-pending",
-      "draft": true,
-      "nodeTestsPassed": 66,
-      "cargoAndPowerShellValidated": false,
-      "observedRun": 45967771084
+      "issue": 2864,
+      "pr": 2934,
+      "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2934",
+      "published": true,
+      "draft": false,
+      "basePr": 2940,
+      "baseRef": "codex/ci-2905-target-contracts-20261127",
+      "observedHeadSha": "87b5886656d5e1f98c4bd6e82529d27efbe2086c",
+      "observedAt": "2026-11-27T09:50:20Z",
+      "componentSourceSha": "87b5886656d5e1f98c4bd6e82529d27efbe2086c",
+      "ciObservedAt": "2026-11-27T09:50:20Z",
+      "ciRun": 45973396962,
+      "ciRunUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45973396962",
+      "ciStatus": "in_progress",
+      "ciConclusion": null,
+      "observationDoesNotCoverLaterHeads": true
     },
     {
-      "issue": 2907,
-      "pr": 2943,
-      "headSha": "31f28cbd7dc5c60361f55b6c6eae31038f39904e",
-      "status": "published-actions-draft-node-validated-runtime-integration-pending",
-      "draft": true,
-      "basePR": 2942,
-      "combinedNodeTestsPassed": 110,
-      "matrixTestsIncluded": 16,
-      "actualActionsValidated": false,
-      "observedRun": 45968016900
+      "issue": 2865,
+      "pr": 2933,
+      "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2933",
+      "published": true,
+      "draft": false,
+      "basePr": 2943,
+      "baseRef": "codex/ci-2907-workflow-plan-20261127",
+      "observedHeadSha": "0347fe71ad69d82b82abd3d54f901fdd0fdf1950",
+      "observedAt": "2026-11-27T09:50:20Z",
+      "componentSourceSha": "0347fe71ad69d82b82abd3d54f901fdd0fdf1950",
+      "ciObservedAt": "2026-11-27T09:50:20Z",
+      "ciRun": 45976379363,
+      "ciRunUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45976379363",
+      "ciStatus": "pending",
+      "ciConclusion": null,
+      "observationDoesNotCoverLaterHeads": true
     },
     {
-      "issue": 2908,
-      "pr": null,
-      "published": false,
-      "localCheckpointSha": "01e8c2b285541c8a2ba1ab8c3be899ab979b06f7",
-      "status": "windows-only-not-integrated",
-      "finalValidationAccepted": false
+      "issue": 2866,
+      "pr": 2935,
+      "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2935",
+      "published": true,
+      "draft": false,
+      "basePr": 2940,
+      "baseRef": "codex/ci-2905-target-contracts-20261127",
+      "observedHeadSha": "35f48e915a15dc9c4d7091a91ee66d6402e3c05c",
+      "observedAt": "2026-11-27T09:50:20Z",
+      "componentSourceSha": "35f48e915a15dc9c4d7091a91ee66d6402e3c05c",
+      "ciObservedAt": "2026-11-27T09:50:20Z",
+      "ciRun": 45973395155,
+      "ciRunUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45973395155",
+      "ciStatus": "in_progress",
+      "ciConclusion": null,
+      "observationDoesNotCoverLaterHeads": true
+    },
+    {
+      "issue": 2867,
+      "pr": 2936,
+      "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2936",
+      "published": true,
+      "draft": false,
+      "basePr": null,
+      "baseRef": "prerelease",
+      "observedHeadSha": "fbdfbc1aa89421837e9c3a03b922ca2d6cfe9e9d",
+      "observedAt": "2026-11-27T09:50:20Z",
+      "componentSourceSha": "fbdfbc1aa89421837e9c3a03b922ca2d6cfe9e9d",
+      "ciObservedAt": "2026-11-27T09:50:20Z",
+      "ciRun": 45956398166,
+      "ciRunUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45956398166",
+      "ciStatus": "completed",
+      "ciConclusion": "success",
+      "observationDoesNotCoverLaterHeads": true
     },
     {
       "issue": 2909,
       "pr": 2938,
-      "headSha": "a3dcfcad0a7922baad794f74bc6ab99487133b0d",
-      "localRebasedSha": "2e166a40c85854754526f69bf323a7c091afd768",
-      "localRebasedShaPublished": false,
-      "status": "published-old-head-rebased-locally"
-    },
-    {
-      "issue": 2910,
-      "pr": null,
-      "published": false,
-      "localCheckpointSha": "19359d5c3c0f49e27efa91e2d2d36a21ed8f1cb9",
-      "rebaseCompletionVerified": false,
-      "status": "windows-only-build-and-rebase-state-pending",
-      "finalValidationAccepted": false
+      "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2938",
+      "published": true,
+      "draft": false,
+      "basePr": 2945,
+      "baseRef": "codex/ci-2908-native-crate-20261127",
+      "observedHeadSha": "0043cae72cd024a3bd4b0ee8822ea094fc9baedb",
+      "observedAt": "2026-11-27T09:50:20Z",
+      "componentSourceSha": "a389504bfcc2dc37096a02cb5db1e27840844745",
+      "ciObservedAt": "2026-11-27T09:50:20Z",
+      "ciRun": 45976377597,
+      "ciRunUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45976377597",
+      "ciStatus": "pending",
+      "ciConclusion": null,
+      "observationDoesNotCoverLaterHeads": true,
+      "componentPublishedAt": "2026-11-27T10:24:06.199Z",
+      "ciObservationDoesNotCoverLatestHead": true
     },
     {
       "issue": 2912,
       "pr": 2941,
+      "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2941",
+      "published": true,
       "draft": true,
-      "headSha": "1f00c46ab5f3d7595d2c71f01ac95f43ef87c545",
-      "status": "published-preparation-and-separate-port-guard-rust-validation-pending",
-      "automationCommitSha": "ba642a2f13882d4dd3feab8e2c87d1d3a7cf8fc4",
-      "commonPortGuardCommitSha": "1f00c46ab5f3d7595d2c71f01ac95f43ef87c545",
-      "commonPortGuardToBeRestacked": true,
-      "observedRun": 45967360068,
-      "observedFormatConclusion": "failure"
+      "basePr": 2946,
+      "baseRef": "codex/ci-2910-verification-native-20261127",
+      "observedHeadSha": "1d7100eb685030753b92f5f27c69ce926c4dd294",
+      "observedAt": "2026-11-27T09:50:20Z",
+      "componentSourceSha": "3d23199ac0d304e563f20ece52d853b5f31ea305",
+      "ciObservedAt": "2026-11-27T09:50:20Z",
+      "ciRun": 45976376473,
+      "ciRunUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45976376473",
+      "ciStatus": "queued",
+      "ciConclusion": null,
+      "observationDoesNotCoverLaterHeads": true,
+      "componentPublishedAt": "2026-11-27T10:24:06.199Z",
+      "ciObservationDoesNotCoverLatestHead": true
+    },
+    {
+      "issue": 2906,
+      "pr": 2942,
+      "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2942",
+      "published": true,
+      "draft": true,
+      "basePr": 2935,
+      "baseRef": "codex/ci-2866-cache-fingerprint-20261127",
+      "observedHeadSha": "7b0eb17ccd07b63f6fe6b122fd5233c2ade2fe52",
+      "observedAt": "2026-11-27T09:50:20Z",
+      "componentSourceSha": "7b0eb17ccd07b63f6fe6b122fd5233c2ade2fe52",
+      "ciObservedAt": "2026-11-27T09:50:20Z",
+      "ciRun": 45976378347,
+      "ciRunUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45976378347",
+      "ciStatus": "pending",
+      "ciConclusion": null,
+      "observationDoesNotCoverLaterHeads": true
+    },
+    {
+      "issue": 2907,
+      "pr": 2943,
+      "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2943",
+      "published": true,
+      "draft": true,
+      "basePr": 2942,
+      "baseRef": "codex/ci-2906-local-validation-plan-20261127",
+      "observedHeadSha": "a3243d5430dcd57ef1dbe5c6e95442e1256e1c70",
+      "observedAt": "2026-11-27T09:50:20Z",
+      "componentSourceSha": "a3243d5430dcd57ef1dbe5c6e95442e1256e1c70",
+      "ciObservedAt": "2026-11-27T09:50:20Z",
+      "ciRun": 45976377967,
+      "ciRunUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45976377967",
+      "ciStatus": "pending",
+      "ciConclusion": null,
+      "observationDoesNotCoverLaterHeads": true
+    },
+    {
+      "issue": 2911,
+      "pr": 2944,
+      "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2944",
+      "published": true,
+      "draft": true,
+      "basePr": null,
+      "baseRef": "prerelease",
+      "observedHeadSha": "89a1acb1ab2e5f7b538f2a1ffa20572038933f33",
+      "observedAt": "2026-11-27T09:50:20Z",
+      "componentSourceSha": "89a1acb1ab2e5f7b538f2a1ffa20572038933f33",
+      "ciObservedAt": "2026-11-27T09:50:20Z",
+      "ciRun": 45968848461,
+      "ciRunUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45968848461",
+      "ciStatus": "completed",
+      "ciConclusion": "success",
+      "observationDoesNotCoverLaterHeads": true
+    },
+    {
+      "issue": 2908,
+      "pr": 2945,
+      "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2945",
+      "published": true,
+      "draft": true,
+      "basePr": 2934,
+      "baseRef": "codex/ci-2864-native-performance-20261127",
+      "observedHeadSha": "af3a749470b0e6997e28a260fa3cf895666ab972",
+      "observedAt": "2026-11-27T09:50:20Z",
+      "componentSourceSha": "38efaebd651c4b6c3879975650057fcbe209ccbc",
+      "ciObservedAt": "2026-11-27T09:50:20Z",
+      "ciRun": 45976376097,
+      "ciRunUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45976376097",
+      "ciStatus": "pending",
+      "ciConclusion": null,
+      "observationDoesNotCoverLaterHeads": true,
+      "componentPublishedAt": "2026-11-27T10:24:06.199Z",
+      "ciObservationDoesNotCoverLatestHead": true
+    },
+    {
+      "issue": 2910,
+      "pr": 2946,
+      "url": "https://github.com/RefinedStone/codex-exec-loop/pull/2946",
+      "published": true,
+      "draft": true,
+      "basePr": 2938,
+      "baseRef": "codex/ci-2909-verification-crate-20261127",
+      "observedHeadSha": "2353df6286b163c2ecc2d6302b04fa60aba02148",
+      "observedAt": "2026-11-27T09:50:20Z",
+      "componentSourceSha": "ceb9f629b30480581ce412f0f089550ca1b085c6",
+      "ciObservedAt": "2026-11-27T09:50:20Z",
+      "ciRun": 45976377005,
+      "ciRunUrl": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45976377005",
+      "ciStatus": "pending",
+      "ciConclusion": null,
+      "observationDoesNotCoverLaterHeads": true,
+      "componentPublishedAt": "2026-11-27T10:24:06.199Z",
+      "ciObservationDoesNotCoverLatestHead": true
     }
   ],
   "unknownCosts": {
@@ -602,20 +879,2378 @@
     "finalTargetBytes": null
   },
   "requiredNextEvidence": [
-    "최종 조합 SHA와 immutable planHash를 고정하고 실제 실행 SHA/계획과 일치시킨다.",
-    "동일 OS/runner/toolchain/lock/features/profile/jobs/incremental 조건에서 cold, unchanged, 작은 issue-core, native/adapter, 공통 계약 수정의 범위를 비교한다.",
-    "전체 inventory와 소유권 이동/추가/잔류, doctest/ignored/helper/architecture/IPC·플러그인을 OS별 대조한다.",
-    "이미 존재하는 로그와 artifact를 먼저 사용하고 남은 구체적 불확실성에 필요한 표본만 수집한다.",
-    "컴파일/링크/시험/캐시/queue/job/gate/runner 점유를 가능한 범위에서 분리하며 표본 수·범위를 기록한다.",
-    "원격 Dirty 사유 및 반복 cold namespace 한계를 확인한다. 효과가 없으면 그대로 기록한다.",
-    "같은 SHA/계획의 실패한 작업만 재실행하는 실제 Actions 경로를 확인한다.",
-    "postmerge는 full을 유지하며 선택 전환은 별도 최종 인수 뒤 판단한다."
+    "macOS E0425 추출 회귀는 시험 fixture 상수 참조 수정 38efaebd를 native 계열 4개 PR과 최종9098에 게시했다. 실제 macOS 컴파일·계약 재검증은 대기 중이며 10df의 Windows 검증으로 대체하지 않는다.",
+    "현재 PR HEAD #2939/#2940 Rust Tests의 assertion 실패 2건이 남아 있다. 실제 merge checkout은 각 PR head와 동일 tree이지만 직전 Windows 검증10df 또는 현재 조합9098의 재현 결과는 아니다.",
+    "Windows native ACL 관련 기존 실패 3개를 실패로 유지한다. 환경/코드 귀속을 면제나 성공으로 바꾸지 않는다.",
+    "Windows/default/lib inventory는 검증했지만 3 OS·default/all·bin/integration·전체 doctest·ignored/native confirmation helper·IPC/플러그인·큰 root runtime 계약 전체 인수는 남아 있다.",
+    "최종 source/planHash와 보수적 full 선택을 확인했으나 전체 --run gate 및 실제 selected matrix/실패 행 재실행을 최종 조합에서 인수하지 않았다.",
+    "원격 Dirty 직접 원인, trusted sealed cache 반복 복원 효과와 producer 없는 target namespace 성능을 확인하지 못했다.",
+    "같은 조건의 로컬/PR/postmerge compile·link·test·cache·queue·wall 전후 반복 표본과 p50/p90이 없다."
   ],
   "reportValidation": {
     "jsonParsed": true,
     "consistencyChecked": true,
     "diffWhitespaceChecked": true,
-    "productCodeChanged": false,
-    "remoteWindowsRetried": false
+    "productCodeChangedByReport": false,
+    "reportDoesNotClaimAcceptance": true
+  },
+  "finalSourceBranch": "codex/ci-final-validation-20261127",
+  "historicalEvidenceContext": {
+    "originalReportSha": "89a1acb1ab2e5f7b538f2a1ffa20572038933f33",
+    "recordedAt": "2026-11-27T08:47:49Z",
+    "preservedSections": [
+      "measurements",
+      "localBuildBaseline",
+      "differentScopeComparison",
+      "ciFindings",
+      "cache"
+    ],
+    "note": "These observations retain their original source/publication/run identities. They are not measurements of the final combined source."
+  },
+  "reportPublication": {
+    "pr": 2944,
+    "observedPreviousHeadSha": "89a1acb1ab2e5f7b538f2a1ffa20572038933f33",
+    "observedAt": "2026-11-27T09:50:20Z",
+    "previousCiAppliesOnlyToPreviousReport": true,
+    "containingReportCommitNotSelfReferenced": true
+  },
+  "resolvedDeliveryBlockers": {
+    "windowsTunnelRecovered": true,
+    "nativePrPublished": 2945,
+    "verificationNativePrPublished": 2946,
+    "allRequestedPrsPublished": 16,
+    "outageNoLongerBlocksDelivery": true
+  },
+  "finalPlan": {
+    "schemaVersion": 1,
+    "sourceSha": "9098f0e7aa994cd0a2f2f3ca926b47381c9bdf29",
+    "baseSha": "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
+    "localChangeId": "sha256:547d09e81a7feaed9c2fc2ab906d391634a09add0c55c178af0119ad924dd9f8",
+    "configuration": {
+      "platforms": [
+        "windows"
+      ],
+      "features": [
+        "all",
+        "default"
+      ],
+      "profile": "test",
+      "targetTriples": []
+    },
+    "mode": "full",
+    "fullReasons": [
+      "base:ownership-incomplete",
+      "global-input:.github/workflows/native-pr-checks.yml",
+      "global-input:AGENTS.md",
+      "global-input:Cargo.lock",
+      "global-input:Cargo.toml",
+      "global-input:crates/issue-core/Cargo.toml",
+      "global-input:crates/native/Cargo.toml",
+      "global-input:crates/verification-native/Cargo.toml",
+      "global-input:crates/verification/Cargo.toml",
+      "global-input:scripts/agent-plan.mjs",
+      "global-input:scripts/agent-plan.test.mjs",
+      "global-input:scripts/check_ci_cache_inputs.mjs",
+      "global-input:scripts/check_ci_contract_targets.mjs",
+      "global-input:scripts/check_crate_boundaries.mjs",
+      "global-input:scripts/check_native_pr.ps1",
+      "global-input:scripts/check_native_pr.sh",
+      "global-input:scripts/check_node_surfaces.sh",
+      "global-input:scripts/check_windows_portable.sh",
+      "global-input:scripts/ci-cache-inputs.mjs",
+      "global-input:scripts/ci-cache-inputs.test.mjs",
+      "global-input:scripts/ci-contract-targets.mjs",
+      "global-input:scripts/ci-contract-targets.test.mjs",
+      "global-input:scripts/ci-crate-ownership.json",
+      "global-input:scripts/ci-impact-plan.mjs",
+      "global-input:scripts/ci-impact-plan.test.mjs",
+      "global-input:scripts/ci-performance.mjs",
+      "global-input:scripts/ci-performance.test.mjs",
+      "global-input:scripts/ci-plan-inputs.mjs",
+      "global-input:scripts/ci-plan-inputs.test.mjs",
+      "global-input:scripts/ci-process-progress.mjs",
+      "global-input:scripts/ci-rust-test-profile.mjs",
+      "global-input:scripts/ci-rust-test-profile.test.mjs",
+      "global-input:scripts/ci-scope.mjs",
+      "global-input:scripts/ci-scope.test.mjs",
+      "global-input:scripts/ci-workflow-plan.mjs",
+      "global-input:scripts/ci-workflow-plan.test.mjs",
+      "global-input:scripts/crate-boundaries.test.mjs",
+      "global-input:scripts/fixtures/ci-plan-fixture.mjs",
+      "global-input:scripts/native-contract-progress.test.mjs",
+      "global-input:scripts/native-rust-contracts.test.mjs",
+      "global-input:scripts/run_native_rust_contracts.mjs",
+      "global-input:tests/fixtures/issue_automation_timeline_journal_v1.json",
+      "root-consumer-requires-full",
+      "unregistered-input:base:src/adapter/outbound/db/sqlite_planning_authority_adapter/kernel_events/issue_timeline.rs",
+      "unregistered-input:base:src/adapter/outbound/filesystem/task_evidence_artifact/files.rs",
+      "unregistered-input:base:src/adapter/outbound/git/task_verification.rs",
+      "unregistered-input:base:src/adapter/outbound/git/task_verification/context.rs",
+      "unregistered-input:base:src/adapter/outbound/git/task_verification/diagnostics.rs",
+      "unregistered-input:base:src/adapter/outbound/git/task_verification/environment.rs",
+      "unregistered-input:base:src/adapter/outbound/git/task_verification/input.rs",
+      "unregistered-input:base:src/adapter/outbound/git/task_verification/tests.rs",
+      "unregistered-input:base:src/adapter/outbound/github/automation.rs",
+      "unregistered-input:base:src/adapter/outbound/github/automation/tests/windows_temp.rs",
+      "unregistered-input:base:src/application/port/outbound/issue_policy_source_port.rs",
+      "unregistered-input:base:src/application/port/outbound/issue_template_source_port.rs",
+      "unregistered-input:base:src/application/port/outbound/task_evidence_artifact_port.rs",
+      "unregistered-input:base:src/application/port/outbound/task_verification_runner_port.rs",
+      "unregistered-input:base:src/application/service/issue_policy.rs",
+      "unregistered-input:base:src/application/service/issue_template.rs",
+      "unregistered-input:base:src/application/service/mod.rs",
+      "unregistered-input:base:src/application/service/parallel_mode/tests.rs",
+      "unregistered-input:base:src/application/service/parallel_mode/tests/automatic_verification.rs",
+      "unregistered-input:base:src/application/service/task_verification/continuation.rs",
+      "unregistered-input:base:src/application/service/task_verification/execution.rs",
+      "unregistered-input:base:src/composition/native_client_runtime/issue_timeline.rs",
+      "unregistered-input:base:src/domain/issue_automation/timeline.rs",
+      "unregistered-input:base:src/domain/issue_automation/timeline/tests.rs",
+      "unregistered-input:base:src/domain/issue_creation.rs",
+      "unregistered-input:base:src/domain/issue_markdown.rs",
+      "unregistered-input:base:src/domain/issue_masking.rs",
+      "unregistered-input:base:src/domain/issue_masking/tests.rs",
+      "unregistered-input:base:src/domain/issue_policy.rs",
+      "unregistered-input:base:src/domain/issue_publish_intent.rs",
+      "unregistered-input:base:src/domain/issue_review.rs",
+      "unregistered-input:base:src/domain/issue_secret_spans.rs",
+      "unregistered-input:base:src/domain/issue_template.rs",
+      "unregistered-input:base:src/domain/issue_validation.rs",
+      "unregistered-input:base:src/domain/issue_work.rs",
+      "unregistered-input:base:src/domain/kernel_event.rs",
+      "unregistered-input:base:src/domain/mod.rs",
+      "unregistered-input:base:src/domain/planning/acceptance.rs",
+      "unregistered-input:base:src/domain/planning/acceptance/tests.rs",
+      "unregistered-input:base:src/domain/planning/delivery_evidence.rs",
+      "unregistered-input:base:src/domain/planning/delivery_evidence/tests.rs",
+      "unregistered-input:base:src/domain/planning/delivery_evidence/validation.rs",
+      "unregistered-input:base:src/domain/planning/evidence.rs",
+      "unregistered-input:base:src/domain/planning/evidence/tests.rs",
+      "unregistered-input:base:src/domain/planning/evidence/validation.rs",
+      "unregistered-input:base:src/domain/planning/verification.rs",
+      "unregistered-input:base:src/domain/planning/verification/tests.rs",
+      "unregistered-input:base:src/domain/planning/verification/validation.rs",
+      "unregistered-input:base:src/git_execution_guard.rs",
+      "unregistered-input:base:src/git_subprocess.rs",
+      "unregistered-input:base:src/private_directory.rs",
+      "unregistered-input:base:src/private_fs.rs",
+      "unregistered-input:base:src/private_sqlite.rs",
+      "unregistered-input:base:src/private_sqlite/pinned_directory.rs",
+      "unregistered-input:base:src/process_liveness.rs",
+      "unregistered-input:base:src/subprocess.rs",
+      "unregistered-input:base:src/subprocess/controlled.rs",
+      "unregistered-input:base:src/subprocess/controlled/tests.rs",
+      "unregistered-input:base:src/test_utils.rs",
+      "unregistered-input:base:src/trusted_executable.rs",
+      "unregistered-input:base:src/trusted_executable/fingerprint.rs",
+      "unregistered-input:base:src/trusted_executable/fingerprint/tests.rs",
+      "unregistered-input:base:tests/architecture_boundaries.rs"
+    ],
+    "changes": [
+      {
+        "status": "R",
+        "path": "crates/verification-native/src/task_verification/context.rs",
+        "oldPath": "src/adapter/outbound/git/task_verification/context.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/verification-native/src/task_verification/diagnostics.rs",
+        "oldPath": "src/adapter/outbound/git/task_verification/diagnostics.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/verification-native/src/task_verification/environment.rs",
+        "oldPath": "src/adapter/outbound/git/task_verification/environment.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/verification-native/src/task_verification/input.rs",
+        "oldPath": "src/adapter/outbound/git/task_verification/input.rs"
+      },
+      {
+        "status": "R",
+        "path": "src/application/service/issue_timeline/tests.rs",
+        "oldPath": "src/domain/issue_automation/timeline/tests.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/issue-core/src/issue_creation.rs",
+        "oldPath": "src/domain/issue_creation.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/issue-core/src/issue_markdown.rs",
+        "oldPath": "src/domain/issue_markdown.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/issue-core/src/issue_masking.rs",
+        "oldPath": "src/domain/issue_masking.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/issue-core/src/issue_masking/tests.rs",
+        "oldPath": "src/domain/issue_masking/tests.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/issue-core/src/issue_policy.rs",
+        "oldPath": "src/domain/issue_policy.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/issue-core/src/issue_publish_intent.rs",
+        "oldPath": "src/domain/issue_publish_intent.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/issue-core/src/issue_review.rs",
+        "oldPath": "src/domain/issue_review.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/issue-core/src/issue_secret_spans.rs",
+        "oldPath": "src/domain/issue_secret_spans.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/issue-core/src/issue_template.rs",
+        "oldPath": "src/domain/issue_template.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/issue-core/src/issue_validation.rs",
+        "oldPath": "src/domain/issue_validation.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/issue-core/src/issue_work.rs",
+        "oldPath": "src/domain/issue_work.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/verification/src/delivery_evidence/tests.rs",
+        "oldPath": "src/domain/planning/delivery_evidence/tests.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/verification/src/delivery_evidence/validation.rs",
+        "oldPath": "src/domain/planning/delivery_evidence/validation.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/verification/src/evidence/tests.rs",
+        "oldPath": "src/domain/planning/evidence/tests.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/verification/src/evidence/validation.rs",
+        "oldPath": "src/domain/planning/evidence/validation.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/verification/src/verification/tests.rs",
+        "oldPath": "src/domain/planning/verification/tests.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/verification/src/verification/validation.rs",
+        "oldPath": "src/domain/planning/verification/validation.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/native/src/private_path/pinned_directory.rs",
+        "oldPath": "src/private_sqlite/pinned_directory.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/native/src/subprocess/controlled.rs",
+        "oldPath": "src/subprocess/controlled.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/native/src/subprocess/controlled/tests.rs",
+        "oldPath": "src/subprocess/controlled/tests.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/native/src/trusted_executable/fingerprint.rs",
+        "oldPath": "src/trusted_executable/fingerprint.rs"
+      },
+      {
+        "status": "R",
+        "path": "crates/native/src/trusted_executable/fingerprint/tests.rs",
+        "oldPath": "src/trusted_executable/fingerprint/tests.rs"
+      },
+      {
+        "status": "M",
+        "path": ".github/workflows/native-pr-checks.yml"
+      },
+      {
+        "status": "M",
+        "path": "AGENTS.md"
+      },
+      {
+        "status": "M",
+        "path": "Cargo.lock"
+      },
+      {
+        "status": "M",
+        "path": "Cargo.toml"
+      },
+      {
+        "status": "A",
+        "path": "crates/issue-core/Cargo.toml"
+      },
+      {
+        "status": "A",
+        "path": "crates/issue-core/src/issue_policy_source_port.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/issue-core/src/issue_template_source_port.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/issue-core/src/lib.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/issue-core/src/policy.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/issue-core/src/template.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/native/Cargo.toml"
+      },
+      {
+        "status": "A",
+        "path": "crates/native/src/lib.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/native/src/private_directory.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/native/src/private_fs.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/native/src/private_path.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/native/src/private_temp.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/native/src/private_temp/windows_tests.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/native/src/process_liveness.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/native/src/stable_file.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/native/src/stable_file/tests.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/native/src/subprocess.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/native/src/test_utils.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/native/src/trusted_executable.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/native/src/trusted_executable/tests.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/native/src/windows_ace.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/verification-native/Cargo.toml"
+      },
+      {
+        "status": "A",
+        "path": "crates/verification-native/src/git_command.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/verification-native/src/git_config.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/verification-native/src/lib.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/verification-native/src/task_verification.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/verification-native/src/task_verification/tests.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/verification-native/src/test_support.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/verification/Cargo.toml"
+      },
+      {
+        "status": "A",
+        "path": "crates/verification/src/acceptance.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/verification/src/acceptance/tests.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/verification/src/continuation.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/verification/src/delivery_evidence.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/verification/src/evidence.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/verification/src/lib.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/verification/src/ports/mod.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/verification/src/ports/task_evidence_artifact_port.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/verification/src/ports/task_verification_runner_port.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/verification/src/service/capture.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/verification/src/service/capture/tests.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/verification/src/service/mod.rs"
+      },
+      {
+        "status": "A",
+        "path": "crates/verification/src/verification.rs"
+      },
+      {
+        "status": "M",
+        "path": "docs/reference/ci-cache-policy.md"
+      },
+      {
+        "status": "A",
+        "path": "docs/reference/ci-contract-targets.md"
+      },
+      {
+        "status": "A",
+        "path": "docs/reference/ci-crate-boundaries.md"
+      },
+      {
+        "status": "A",
+        "path": "docs/reference/ci-impact-plan.md"
+      },
+      {
+        "status": "A",
+        "path": "docs/reference/ci-local-validation.md"
+      },
+      {
+        "status": "A",
+        "path": "docs/reference/ci-native-progress.md"
+      },
+      {
+        "status": "M",
+        "path": "docs/reference/ci-rust-tests.md"
+      },
+      {
+        "status": "A",
+        "path": "docs/reference/ci-workflow-plan.md"
+      },
+      {
+        "status": "M",
+        "path": "docs/reference/ci-workspace-decision.md"
+      },
+      {
+        "status": "M",
+        "path": "docs/reference/development.md"
+      },
+      {
+        "status": "A",
+        "path": "docs/validation/ci-automation-kernel-boundary-20261127.md"
+      },
+      {
+        "status": "A",
+        "path": "docs/validation/ci-cache-inputs-2026-11-27.json"
+      },
+      {
+        "status": "A",
+        "path": "docs/validation/ci-cache-inputs-2026-11-27.md"
+      },
+      {
+        "status": "A",
+        "path": "docs/validation/ci-contract-targets-20261127.json"
+      },
+      {
+        "status": "A",
+        "path": "docs/validation/ci-issue-core-extraction-20261127.json"
+      },
+      {
+        "status": "A",
+        "path": "docs/validation/ci-issue-core-extraction-20261127.md"
+      },
+      {
+        "status": "A",
+        "path": "docs/validation/ci-linux-test-performance-2026-11-27.md"
+      },
+      {
+        "status": "A",
+        "path": "docs/validation/ci-local-build-baseline-2026-11-27.json"
+      },
+      {
+        "status": "A",
+        "path": "docs/validation/ci-local-build-baseline-2026-11-27.md"
+      },
+      {
+        "status": "A",
+        "path": "docs/validation/ci-local-validation-2026-11-27.md"
+      },
+      {
+        "status": "A",
+        "path": "docs/validation/ci-native-crate-extraction-20261127.md"
+      },
+      {
+        "status": "A",
+        "path": "docs/validation/ci-native-crate-inventory-windows-20261127.json"
+      },
+      {
+        "status": "A",
+        "path": "docs/validation/ci-native-process-wakeup-20261127.md"
+      },
+      {
+        "status": "A",
+        "path": "docs/validation/ci-rollout-acceptance-20261127.json"
+      },
+      {
+        "status": "A",
+        "path": "docs/validation/ci-rollout-acceptance-20261127.md"
+      },
+      {
+        "status": "A",
+        "path": "docs/validation/ci-verification-crate-2026-11-27.json"
+      },
+      {
+        "status": "A",
+        "path": "docs/validation/ci-verification-crate-2026-11-27.md"
+      },
+      {
+        "status": "A",
+        "path": "docs/validation/ci-verification-native-extraction-2026-11-27.json"
+      },
+      {
+        "status": "A",
+        "path": "docs/validation/ci-verification-native-extraction-2026-11-27.md"
+      },
+      {
+        "status": "M",
+        "path": "scripts/agent-plan.mjs"
+      },
+      {
+        "status": "M",
+        "path": "scripts/agent-plan.test.mjs"
+      },
+      {
+        "status": "A",
+        "path": "scripts/check_ci_cache_inputs.mjs"
+      },
+      {
+        "status": "A",
+        "path": "scripts/check_ci_contract_targets.mjs"
+      },
+      {
+        "status": "A",
+        "path": "scripts/check_crate_boundaries.mjs"
+      },
+      {
+        "status": "M",
+        "path": "scripts/check_native_pr.ps1"
+      },
+      {
+        "status": "M",
+        "path": "scripts/check_native_pr.sh"
+      },
+      {
+        "status": "M",
+        "path": "scripts/check_node_surfaces.sh"
+      },
+      {
+        "status": "M",
+        "path": "scripts/check_windows_portable.sh"
+      },
+      {
+        "status": "A",
+        "path": "scripts/ci-cache-inputs.mjs"
+      },
+      {
+        "status": "A",
+        "path": "scripts/ci-cache-inputs.test.mjs"
+      },
+      {
+        "status": "A",
+        "path": "scripts/ci-contract-targets.mjs"
+      },
+      {
+        "status": "A",
+        "path": "scripts/ci-contract-targets.test.mjs"
+      },
+      {
+        "status": "A",
+        "path": "scripts/ci-crate-ownership.json"
+      },
+      {
+        "status": "A",
+        "path": "scripts/ci-impact-plan.mjs"
+      },
+      {
+        "status": "A",
+        "path": "scripts/ci-impact-plan.test.mjs"
+      },
+      {
+        "status": "M",
+        "path": "scripts/ci-performance.mjs"
+      },
+      {
+        "status": "M",
+        "path": "scripts/ci-performance.test.mjs"
+      },
+      {
+        "status": "A",
+        "path": "scripts/ci-plan-inputs.mjs"
+      },
+      {
+        "status": "A",
+        "path": "scripts/ci-plan-inputs.test.mjs"
+      },
+      {
+        "status": "A",
+        "path": "scripts/ci-process-progress.mjs"
+      },
+      {
+        "status": "A",
+        "path": "scripts/ci-rust-test-profile.mjs"
+      },
+      {
+        "status": "A",
+        "path": "scripts/ci-rust-test-profile.test.mjs"
+      },
+      {
+        "status": "M",
+        "path": "scripts/ci-scope.mjs"
+      },
+      {
+        "status": "M",
+        "path": "scripts/ci-scope.test.mjs"
+      },
+      {
+        "status": "A",
+        "path": "scripts/ci-workflow-plan.mjs"
+      },
+      {
+        "status": "A",
+        "path": "scripts/ci-workflow-plan.test.mjs"
+      },
+      {
+        "status": "A",
+        "path": "scripts/crate-boundaries.test.mjs"
+      },
+      {
+        "status": "A",
+        "path": "scripts/fixtures/ci-plan-fixture.mjs"
+      },
+      {
+        "status": "A",
+        "path": "scripts/native-contract-progress.test.mjs"
+      },
+      {
+        "status": "M",
+        "path": "scripts/native-rust-contracts.test.mjs"
+      },
+      {
+        "status": "M",
+        "path": "scripts/run_native_rust_contracts.mjs"
+      },
+      {
+        "status": "M",
+        "path": "src/adapter/outbound/db/sqlite_planning_authority_adapter/kernel_events/issue_timeline.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/adapter/outbound/filesystem/task_evidence_artifact/files.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/adapter/outbound/git/task_verification.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/adapter/outbound/git/task_verification/tests.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/adapter/outbound/github/automation.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/adapter/outbound/github/automation/tests/windows_temp.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/application/port/outbound/issue_policy_source_port.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/application/port/outbound/issue_template_source_port.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/application/port/outbound/task_evidence_artifact_port.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/application/port/outbound/task_verification_runner_port.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/application/service/issue_policy.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/application/service/issue_template.rs"
+      },
+      {
+        "status": "A",
+        "path": "src/application/service/issue_timeline.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/application/service/mod.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/application/service/parallel_mode/tests.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/application/service/parallel_mode/tests/automatic_verification.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/application/service/task_verification/continuation.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/application/service/task_verification/execution.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/composition/native_client_runtime/issue_timeline.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/domain/issue_automation/timeline.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/domain/kernel_event.rs"
+      },
+      {
+        "status": "A",
+        "path": "src/domain/kernel_event/issue_scope.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/domain/mod.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/domain/planning/acceptance.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/domain/planning/acceptance/tests.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/domain/planning/delivery_evidence.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/domain/planning/evidence.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/domain/planning/verification.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/git_execution_guard.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/git_subprocess.rs"
+      },
+      {
+        "status": "A",
+        "path": "src/git_subprocess/test_support.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/private_directory.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/private_fs.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/private_sqlite.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/process_liveness.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/subprocess.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/test_utils.rs"
+      },
+      {
+        "status": "M",
+        "path": "src/trusted_executable.rs"
+      },
+      {
+        "status": "M",
+        "path": "tests/architecture_boundaries.rs"
+      },
+      {
+        "status": "A",
+        "path": "tests/fixtures/issue_automation_timeline_journal_v1.json"
+      }
+    ],
+    "nodeRequired": true,
+    "docsOnly": false,
+    "compilePackages": [
+      {
+        "packageKey": "Cargo.toml::akra-ade",
+        "name": "akra-ade",
+        "manifest": "Cargo.toml",
+        "targets": [
+          {
+            "name": "akra",
+            "kind": "bin",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "akra-ade",
+            "kind": "bin",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "akra-admin",
+            "kind": "bin",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "akra-gateway",
+            "kind": "bin",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "akra-telegram",
+            "kind": "bin",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "architecture_boundaries",
+            "kind": "test",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "binary_entrypoints",
+            "kind": "test",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "gateway_relay",
+            "kind": "test",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "issue_automation_policy_invariants",
+            "kind": "test",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "issue_automation_policy_schema",
+            "kind": "test",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "kernel_cli",
+            "kind": "test",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "native_validation_scripts",
+            "kind": "test",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "repository_hygiene",
+            "kind": "test",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "tui_terminal_disconnect",
+            "kind": "test",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "akra_ade",
+            "kind": "lib",
+            "requiredFeatures": [],
+            "doctest": true,
+            "test": true
+          }
+        ],
+        "reasons": [
+          "full-validation"
+        ]
+      },
+      {
+        "packageKey": "crates/issue-core/Cargo.toml::akra-issue-core",
+        "name": "akra-issue-core",
+        "manifest": "crates/issue-core/Cargo.toml",
+        "targets": [
+          {
+            "name": "akra_issue_core",
+            "kind": "lib",
+            "requiredFeatures": [],
+            "doctest": true,
+            "test": true
+          }
+        ],
+        "reasons": [
+          "full-validation"
+        ]
+      },
+      {
+        "packageKey": "crates/native/Cargo.toml::akra-native",
+        "name": "akra-native",
+        "manifest": "crates/native/Cargo.toml",
+        "targets": [
+          {
+            "name": "akra_native",
+            "kind": "lib",
+            "requiredFeatures": [],
+            "doctest": true,
+            "test": true
+          }
+        ],
+        "reasons": [
+          "full-validation"
+        ]
+      },
+      {
+        "packageKey": "crates/verification-native/Cargo.toml::akra-verification-native",
+        "name": "akra-verification-native",
+        "manifest": "crates/verification-native/Cargo.toml",
+        "targets": [
+          {
+            "name": "akra_verification_native",
+            "kind": "lib",
+            "requiredFeatures": [],
+            "doctest": true,
+            "test": true
+          }
+        ],
+        "reasons": [
+          "full-validation"
+        ]
+      },
+      {
+        "packageKey": "crates/verification/Cargo.toml::akra-verification",
+        "name": "akra-verification",
+        "manifest": "crates/verification/Cargo.toml",
+        "targets": [
+          {
+            "name": "akra_verification",
+            "kind": "lib",
+            "requiredFeatures": [],
+            "doctest": true,
+            "test": true
+          }
+        ],
+        "reasons": [
+          "full-validation"
+        ]
+      }
+    ],
+    "testPackages": [
+      {
+        "packageKey": "Cargo.toml::akra-ade",
+        "name": "akra-ade",
+        "manifest": "Cargo.toml",
+        "targets": [
+          {
+            "name": "akra",
+            "kind": "bin",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "akra-ade",
+            "kind": "bin",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "akra-admin",
+            "kind": "bin",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "akra-gateway",
+            "kind": "bin",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "akra-telegram",
+            "kind": "bin",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "architecture_boundaries",
+            "kind": "test",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "binary_entrypoints",
+            "kind": "test",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "gateway_relay",
+            "kind": "test",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "issue_automation_policy_invariants",
+            "kind": "test",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "issue_automation_policy_schema",
+            "kind": "test",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "kernel_cli",
+            "kind": "test",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "native_validation_scripts",
+            "kind": "test",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "repository_hygiene",
+            "kind": "test",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "tui_terminal_disconnect",
+            "kind": "test",
+            "requiredFeatures": [],
+            "doctest": false,
+            "test": true
+          },
+          {
+            "name": "akra_ade",
+            "kind": "lib",
+            "requiredFeatures": [],
+            "doctest": true,
+            "test": true
+          }
+        ],
+        "coverage": "full",
+        "reasons": [
+          "full-validation"
+        ]
+      },
+      {
+        "packageKey": "crates/issue-core/Cargo.toml::akra-issue-core",
+        "name": "akra-issue-core",
+        "manifest": "crates/issue-core/Cargo.toml",
+        "targets": [
+          {
+            "name": "akra_issue_core",
+            "kind": "lib",
+            "requiredFeatures": [],
+            "doctest": true,
+            "test": true
+          }
+        ],
+        "coverage": "full",
+        "reasons": [
+          "full-validation"
+        ]
+      },
+      {
+        "packageKey": "crates/native/Cargo.toml::akra-native",
+        "name": "akra-native",
+        "manifest": "crates/native/Cargo.toml",
+        "targets": [
+          {
+            "name": "akra_native",
+            "kind": "lib",
+            "requiredFeatures": [],
+            "doctest": true,
+            "test": true
+          }
+        ],
+        "coverage": "full",
+        "reasons": [
+          "full-validation"
+        ]
+      },
+      {
+        "packageKey": "crates/verification-native/Cargo.toml::akra-verification-native",
+        "name": "akra-verification-native",
+        "manifest": "crates/verification-native/Cargo.toml",
+        "targets": [
+          {
+            "name": "akra_verification_native",
+            "kind": "lib",
+            "requiredFeatures": [],
+            "doctest": true,
+            "test": true
+          }
+        ],
+        "coverage": "full",
+        "reasons": [
+          "full-validation"
+        ]
+      },
+      {
+        "packageKey": "crates/verification/Cargo.toml::akra-verification",
+        "name": "akra-verification",
+        "manifest": "crates/verification/Cargo.toml",
+        "targets": [
+          {
+            "name": "akra_verification",
+            "kind": "lib",
+            "requiredFeatures": [],
+            "doctest": true,
+            "test": true
+          }
+        ],
+        "coverage": "full",
+        "reasons": [
+          "full-validation"
+        ]
+      }
+    ],
+    "contractTests": [
+      {
+        "id": "dirty-snapshot-verification",
+        "packageKey": "Cargo.toml::akra-ade",
+        "name": "akra-ade",
+        "manifest": "Cargo.toml",
+        "target": {
+          "kind": "lib",
+          "name": "akra_ade"
+        },
+        "filter": "adapter::outbound::git::task_verification::tests::a_real_dirty_snapshot_is_checked_and_the_source_index_is_preserved",
+        "platforms": [
+          "windows"
+        ],
+        "features": "all",
+        "isolation": "process-per-filter"
+      },
+      {
+        "id": "orchestrator-verification",
+        "packageKey": "Cargo.toml::akra-ade",
+        "name": "akra-ade",
+        "manifest": "Cargo.toml",
+        "target": {
+          "kind": "lib",
+          "name": "akra_ade"
+        },
+        "filter": "application::service::parallel_mode::orchestrator_loop::tests::automatic_verification::",
+        "platforms": [
+          "windows"
+        ],
+        "features": "all",
+        "isolation": "process-per-filter"
+      },
+      {
+        "id": "evidence-gate",
+        "packageKey": "Cargo.toml::akra-ade",
+        "name": "akra-ade",
+        "manifest": "Cargo.toml",
+        "target": {
+          "kind": "lib",
+          "name": "akra_ade"
+        },
+        "filter": "application::service::parallel_mode::tests::distributor::evidence_gate::",
+        "platforms": [
+          "windows"
+        ],
+        "features": "all",
+        "isolation": "process-per-filter"
+      },
+      {
+        "id": "post-turn-verification",
+        "packageKey": "Cargo.toml::akra-ade",
+        "name": "akra-ade",
+        "manifest": "Cargo.toml",
+        "target": {
+          "kind": "lib",
+          "name": "akra_ade"
+        },
+        "filter": "application::service::post_turn_evaluation::tests::automatic_verification::",
+        "platforms": [
+          "windows"
+        ],
+        "features": "all",
+        "isolation": "process-per-filter"
+      },
+      {
+        "id": "git-command-isolation",
+        "packageKey": "crates/verification-native/Cargo.toml::akra-verification-native",
+        "name": "akra-verification-native",
+        "manifest": "crates/verification-native/Cargo.toml",
+        "target": {
+          "kind": "lib",
+          "name": "akra_verification_native"
+        },
+        "filter": "git_command::tests::",
+        "platforms": [
+          "windows"
+        ],
+        "features": "all",
+        "isolation": "process-per-filter"
+      },
+      {
+        "id": "git-execution-config-keys",
+        "packageKey": "crates/verification-native/Cargo.toml::akra-verification-native",
+        "name": "akra-verification-native",
+        "manifest": "crates/verification-native/Cargo.toml",
+        "target": {
+          "kind": "lib",
+          "name": "akra_verification_native"
+        },
+        "filter": "git_config::tests::",
+        "platforms": [
+          "windows"
+        ],
+        "features": "all",
+        "isolation": "process-per-filter"
+      },
+      {
+        "id": "lease-verification",
+        "packageKey": "Cargo.toml::akra-ade",
+        "name": "akra-ade",
+        "manifest": "Cargo.toml",
+        "target": {
+          "kind": "lib",
+          "name": "akra_ade"
+        },
+        "filter": "parallel_mode::tests::pool::lease::task_verification::",
+        "platforms": [
+          "windows"
+        ],
+        "features": "all",
+        "isolation": "process-per-filter"
+      },
+      {
+        "id": "native-private-directory",
+        "packageKey": "crates/native/Cargo.toml::akra-native",
+        "name": "akra-native",
+        "manifest": "crates/native/Cargo.toml",
+        "target": {
+          "kind": "lib",
+          "name": "akra_native"
+        },
+        "filter": "private_directory::",
+        "platforms": [
+          "windows"
+        ],
+        "features": "all",
+        "isolation": "process-per-filter"
+      },
+      {
+        "id": "native-windows-identity",
+        "packageKey": "crates/native/Cargo.toml::akra-native",
+        "name": "akra-native",
+        "manifest": "crates/native/Cargo.toml",
+        "target": {
+          "kind": "lib",
+          "name": "akra_native"
+        },
+        "filter": "private_fs::",
+        "platforms": [
+          "windows"
+        ],
+        "features": "all",
+        "isolation": "process-per-filter"
+      },
+      {
+        "id": "native-private-temp",
+        "packageKey": "crates/native/Cargo.toml::akra-native",
+        "name": "akra-native",
+        "manifest": "crates/native/Cargo.toml",
+        "target": {
+          "kind": "lib",
+          "name": "akra_native"
+        },
+        "filter": "private_temp::",
+        "platforms": [
+          "windows"
+        ],
+        "features": "all",
+        "isolation": "process-per-filter"
+      },
+      {
+        "id": "native-liveness",
+        "packageKey": "crates/native/Cargo.toml::akra-native",
+        "name": "akra-native",
+        "manifest": "crates/native/Cargo.toml",
+        "target": {
+          "kind": "lib",
+          "name": "akra_native"
+        },
+        "filter": "process_liveness::",
+        "platforms": [
+          "windows"
+        ],
+        "features": "all",
+        "isolation": "process-per-filter"
+      },
+      {
+        "id": "native-stable-file",
+        "packageKey": "crates/native/Cargo.toml::akra-native",
+        "name": "akra-native",
+        "manifest": "crates/native/Cargo.toml",
+        "target": {
+          "kind": "lib",
+          "name": "akra_native"
+        },
+        "filter": "stable_file::tests::",
+        "platforms": [
+          "windows"
+        ],
+        "features": "all",
+        "isolation": "process-per-filter"
+      },
+      {
+        "id": "native-process-containment",
+        "packageKey": "crates/native/Cargo.toml::akra-native",
+        "name": "akra-native",
+        "manifest": "crates/native/Cargo.toml",
+        "target": {
+          "kind": "lib",
+          "name": "akra_native"
+        },
+        "filter": "subprocess::",
+        "platforms": [
+          "windows"
+        ],
+        "features": "all",
+        "isolation": "process-per-filter"
+      },
+      {
+        "id": "git-verification-adapter",
+        "packageKey": "crates/verification-native/Cargo.toml::akra-verification-native",
+        "name": "akra-verification-native",
+        "manifest": "crates/verification-native/Cargo.toml",
+        "target": {
+          "kind": "lib",
+          "name": "akra_verification_native"
+        },
+        "filter": "task_verification::tests::",
+        "platforms": [
+          "windows"
+        ],
+        "features": "all",
+        "isolation": "process-per-filter"
+      },
+      {
+        "id": "native-trusted-executable",
+        "packageKey": "crates/native/Cargo.toml::akra-native",
+        "name": "akra-native",
+        "manifest": "crates/native/Cargo.toml",
+        "target": {
+          "kind": "lib",
+          "name": "akra_native"
+        },
+        "filter": "trusted_executable::",
+        "platforms": [
+          "windows"
+        ],
+        "features": "all",
+        "isolation": "process-per-filter"
+      },
+      {
+        "id": "native-ace-classifier",
+        "packageKey": "crates/native/Cargo.toml::akra-native",
+        "name": "akra-native",
+        "manifest": "crates/native/Cargo.toml",
+        "target": {
+          "kind": "lib",
+          "name": "akra_native"
+        },
+        "filter": "windows_ace::tests::",
+        "platforms": [
+          "windows"
+        ],
+        "features": "all",
+        "isolation": "process-per-filter"
+      }
+    ],
+    "removedPackages": [],
+    "excludedPackages": [],
+    "ownership": {
+      "schemaVersion": 1,
+      "baseRevision": null,
+      "headRevision": 3,
+      "baseHash": null,
+      "headHash": "b7cc2bdb37bb18eeebdfa8f58d47c1c0ab1b52e077fd7899563234c18dc16ea3"
+    },
+    "graphs": {
+      "schemaVersion": 1,
+      "baseHash": "5d13d58802ad02652cc282b482b33dc02de166fc39625274561f8449b6dbe5b0",
+      "headHash": "1608df9fa007a7d4182ee197cdfbe39960423e9f2fd1a9a737b011db86fe5518",
+      "edgePolicy": "all-normal-dev-build-optional-and-target-conditions-retained"
+    },
+    "explanations": [
+      "classified-non-rust-input:docs/reference/ci-cache-policy.md",
+      "classified-non-rust-input:docs/reference/ci-contract-targets.md",
+      "classified-non-rust-input:docs/reference/ci-crate-boundaries.md",
+      "classified-non-rust-input:docs/reference/ci-impact-plan.md",
+      "classified-non-rust-input:docs/reference/ci-local-validation.md",
+      "classified-non-rust-input:docs/reference/ci-native-progress.md",
+      "classified-non-rust-input:docs/reference/ci-rust-tests.md",
+      "classified-non-rust-input:docs/reference/ci-workflow-plan.md",
+      "classified-non-rust-input:docs/reference/ci-workspace-decision.md",
+      "classified-non-rust-input:docs/reference/development.md",
+      "classified-non-rust-input:docs/validation/ci-automation-kernel-boundary-20261127.md",
+      "classified-non-rust-input:docs/validation/ci-cache-inputs-2026-11-27.json",
+      "classified-non-rust-input:docs/validation/ci-cache-inputs-2026-11-27.md",
+      "classified-non-rust-input:docs/validation/ci-contract-targets-20261127.json",
+      "classified-non-rust-input:docs/validation/ci-issue-core-extraction-20261127.json",
+      "classified-non-rust-input:docs/validation/ci-issue-core-extraction-20261127.md",
+      "classified-non-rust-input:docs/validation/ci-linux-test-performance-2026-11-27.md",
+      "classified-non-rust-input:docs/validation/ci-local-build-baseline-2026-11-27.json",
+      "classified-non-rust-input:docs/validation/ci-local-build-baseline-2026-11-27.md",
+      "classified-non-rust-input:docs/validation/ci-local-validation-2026-11-27.md",
+      "classified-non-rust-input:docs/validation/ci-native-crate-extraction-20261127.md",
+      "classified-non-rust-input:docs/validation/ci-native-crate-inventory-windows-20261127.json",
+      "classified-non-rust-input:docs/validation/ci-native-process-wakeup-20261127.md",
+      "classified-non-rust-input:docs/validation/ci-rollout-acceptance-20261127.json",
+      "classified-non-rust-input:docs/validation/ci-rollout-acceptance-20261127.md",
+      "classified-non-rust-input:docs/validation/ci-verification-crate-2026-11-27.json",
+      "classified-non-rust-input:docs/validation/ci-verification-crate-2026-11-27.md",
+      "classified-non-rust-input:docs/validation/ci-verification-native-extraction-2026-11-27.json",
+      "classified-non-rust-input:docs/validation/ci-verification-native-extraction-2026-11-27.md",
+      "head:owner:Cargo.toml=>Cargo.toml::akra-ade",
+      "head:owner:crates/issue-core/Cargo.toml=>crates/issue-core/Cargo.toml::akra-issue-core",
+      "head:owner:crates/issue-core/src/issue_creation.rs=>crates/issue-core/Cargo.toml::akra-issue-core",
+      "head:owner:crates/issue-core/src/issue_markdown.rs=>crates/issue-core/Cargo.toml::akra-issue-core",
+      "head:owner:crates/issue-core/src/issue_masking.rs=>crates/issue-core/Cargo.toml::akra-issue-core",
+      "head:owner:crates/issue-core/src/issue_masking/tests.rs=>crates/issue-core/Cargo.toml::akra-issue-core",
+      "head:owner:crates/issue-core/src/issue_policy.rs=>crates/issue-core/Cargo.toml::akra-issue-core",
+      "head:owner:crates/issue-core/src/issue_policy_source_port.rs=>crates/issue-core/Cargo.toml::akra-issue-core",
+      "head:owner:crates/issue-core/src/issue_publish_intent.rs=>crates/issue-core/Cargo.toml::akra-issue-core",
+      "head:owner:crates/issue-core/src/issue_review.rs=>crates/issue-core/Cargo.toml::akra-issue-core",
+      "head:owner:crates/issue-core/src/issue_secret_spans.rs=>crates/issue-core/Cargo.toml::akra-issue-core",
+      "head:owner:crates/issue-core/src/issue_template.rs=>crates/issue-core/Cargo.toml::akra-issue-core",
+      "head:owner:crates/issue-core/src/issue_template_source_port.rs=>crates/issue-core/Cargo.toml::akra-issue-core",
+      "head:owner:crates/issue-core/src/issue_validation.rs=>crates/issue-core/Cargo.toml::akra-issue-core",
+      "head:owner:crates/issue-core/src/issue_work.rs=>crates/issue-core/Cargo.toml::akra-issue-core",
+      "head:owner:crates/issue-core/src/lib.rs=>crates/issue-core/Cargo.toml::akra-issue-core",
+      "head:owner:crates/issue-core/src/policy.rs=>crates/issue-core/Cargo.toml::akra-issue-core",
+      "head:owner:crates/issue-core/src/template.rs=>crates/issue-core/Cargo.toml::akra-issue-core",
+      "head:owner:crates/native/Cargo.toml=>crates/native/Cargo.toml::akra-native",
+      "head:owner:crates/native/src/lib.rs=>crates/native/Cargo.toml::akra-native",
+      "head:owner:crates/native/src/private_directory.rs=>crates/native/Cargo.toml::akra-native",
+      "head:owner:crates/native/src/private_fs.rs=>crates/native/Cargo.toml::akra-native",
+      "head:owner:crates/native/src/private_path.rs=>crates/native/Cargo.toml::akra-native",
+      "head:owner:crates/native/src/private_path/pinned_directory.rs=>crates/native/Cargo.toml::akra-native",
+      "head:owner:crates/native/src/private_temp.rs=>crates/native/Cargo.toml::akra-native",
+      "head:owner:crates/native/src/private_temp/windows_tests.rs=>crates/native/Cargo.toml::akra-native",
+      "head:owner:crates/native/src/process_liveness.rs=>crates/native/Cargo.toml::akra-native",
+      "head:owner:crates/native/src/stable_file.rs=>crates/native/Cargo.toml::akra-native",
+      "head:owner:crates/native/src/stable_file/tests.rs=>crates/native/Cargo.toml::akra-native",
+      "head:owner:crates/native/src/subprocess.rs=>crates/native/Cargo.toml::akra-native",
+      "head:owner:crates/native/src/subprocess/controlled.rs=>crates/native/Cargo.toml::akra-native",
+      "head:owner:crates/native/src/subprocess/controlled/tests.rs=>crates/native/Cargo.toml::akra-native",
+      "head:owner:crates/native/src/test_utils.rs=>crates/native/Cargo.toml::akra-native",
+      "head:owner:crates/native/src/trusted_executable.rs=>crates/native/Cargo.toml::akra-native",
+      "head:owner:crates/native/src/trusted_executable/fingerprint.rs=>crates/native/Cargo.toml::akra-native",
+      "head:owner:crates/native/src/trusted_executable/fingerprint/tests.rs=>crates/native/Cargo.toml::akra-native",
+      "head:owner:crates/native/src/trusted_executable/tests.rs=>crates/native/Cargo.toml::akra-native",
+      "head:owner:crates/native/src/windows_ace.rs=>crates/native/Cargo.toml::akra-native",
+      "head:owner:crates/verification-native/Cargo.toml=>crates/verification-native/Cargo.toml::akra-verification-native",
+      "head:owner:crates/verification-native/src/git_command.rs=>crates/verification-native/Cargo.toml::akra-verification-native",
+      "head:owner:crates/verification-native/src/git_config.rs=>crates/verification-native/Cargo.toml::akra-verification-native",
+      "head:owner:crates/verification-native/src/lib.rs=>crates/verification-native/Cargo.toml::akra-verification-native",
+      "head:owner:crates/verification-native/src/task_verification.rs=>crates/verification-native/Cargo.toml::akra-verification-native",
+      "head:owner:crates/verification-native/src/task_verification/context.rs=>crates/verification-native/Cargo.toml::akra-verification-native",
+      "head:owner:crates/verification-native/src/task_verification/diagnostics.rs=>crates/verification-native/Cargo.toml::akra-verification-native",
+      "head:owner:crates/verification-native/src/task_verification/environment.rs=>crates/verification-native/Cargo.toml::akra-verification-native",
+      "head:owner:crates/verification-native/src/task_verification/input.rs=>crates/verification-native/Cargo.toml::akra-verification-native",
+      "head:owner:crates/verification-native/src/task_verification/tests.rs=>crates/verification-native/Cargo.toml::akra-verification-native",
+      "head:owner:crates/verification-native/src/test_support.rs=>crates/verification-native/Cargo.toml::akra-verification-native",
+      "head:owner:crates/verification/Cargo.toml=>crates/verification/Cargo.toml::akra-verification",
+      "head:owner:crates/verification/src/acceptance.rs=>crates/verification/Cargo.toml::akra-verification",
+      "head:owner:crates/verification/src/acceptance/tests.rs=>crates/verification/Cargo.toml::akra-verification",
+      "head:owner:crates/verification/src/continuation.rs=>crates/verification/Cargo.toml::akra-verification",
+      "head:owner:crates/verification/src/delivery_evidence.rs=>crates/verification/Cargo.toml::akra-verification",
+      "head:owner:crates/verification/src/delivery_evidence/tests.rs=>crates/verification/Cargo.toml::akra-verification",
+      "head:owner:crates/verification/src/delivery_evidence/validation.rs=>crates/verification/Cargo.toml::akra-verification",
+      "head:owner:crates/verification/src/evidence.rs=>crates/verification/Cargo.toml::akra-verification",
+      "head:owner:crates/verification/src/evidence/tests.rs=>crates/verification/Cargo.toml::akra-verification",
+      "head:owner:crates/verification/src/evidence/validation.rs=>crates/verification/Cargo.toml::akra-verification",
+      "head:owner:crates/verification/src/lib.rs=>crates/verification/Cargo.toml::akra-verification",
+      "head:owner:crates/verification/src/ports/mod.rs=>crates/verification/Cargo.toml::akra-verification",
+      "head:owner:crates/verification/src/ports/task_evidence_artifact_port.rs=>crates/verification/Cargo.toml::akra-verification",
+      "head:owner:crates/verification/src/ports/task_verification_runner_port.rs=>crates/verification/Cargo.toml::akra-verification",
+      "head:owner:crates/verification/src/service/capture.rs=>crates/verification/Cargo.toml::akra-verification",
+      "head:owner:crates/verification/src/service/capture/tests.rs=>crates/verification/Cargo.toml::akra-verification",
+      "head:owner:crates/verification/src/service/mod.rs=>crates/verification/Cargo.toml::akra-verification",
+      "head:owner:crates/verification/src/verification.rs=>crates/verification/Cargo.toml::akra-verification",
+      "head:owner:crates/verification/src/verification/tests.rs=>crates/verification/Cargo.toml::akra-verification",
+      "head:owner:crates/verification/src/verification/validation.rs=>crates/verification/Cargo.toml::akra-verification",
+      "head:owner:src/adapter/outbound/db/sqlite_planning_authority_adapter/kernel_events/issue_timeline.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/adapter/outbound/filesystem/task_evidence_artifact/files.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/adapter/outbound/git/task_verification.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/adapter/outbound/git/task_verification/tests.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/adapter/outbound/github/automation.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/adapter/outbound/github/automation/tests/windows_temp.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/application/port/outbound/issue_policy_source_port.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/application/port/outbound/issue_template_source_port.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/application/port/outbound/task_evidence_artifact_port.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/application/port/outbound/task_verification_runner_port.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/application/service/issue_policy.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/application/service/issue_template.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/application/service/issue_timeline.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/application/service/issue_timeline/tests.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/application/service/mod.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/application/service/parallel_mode/tests.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/application/service/parallel_mode/tests/automatic_verification.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/application/service/task_verification/continuation.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/application/service/task_verification/execution.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/composition/native_client_runtime/issue_timeline.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/domain/issue_automation/timeline.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/domain/kernel_event.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/domain/kernel_event/issue_scope.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/domain/mod.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/domain/planning/acceptance.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/domain/planning/acceptance/tests.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/domain/planning/delivery_evidence.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/domain/planning/evidence.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/domain/planning/verification.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/git_execution_guard.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/git_subprocess.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/git_subprocess/test_support.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/private_directory.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/private_fs.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/private_sqlite.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/process_liveness.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/subprocess.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/test_utils.rs=>Cargo.toml::akra-ade",
+      "head:owner:src/trusted_executable.rs=>Cargo.toml::akra-ade",
+      "head:owner:tests/architecture_boundaries.rs=>Cargo.toml::akra-ade",
+      "head:owner:tests/fixtures/issue_automation_timeline_journal_v1.json=>Cargo.toml::akra-ade"
+    ],
+    "planHash": "789fc27130494941b97528bafad6a5f48ff4629ab547f2534b7f372d70f1e564",
+    "generated": true,
+    "fullRunExecuted": false,
+    "planAcceptanceComplete": false,
+    "evidence": {
+      "path": "C:/dev/worktrees/akra-ci-final-20261127/artifacts/ci-final-validation/macos-fixture-fix/final-plan.json",
+      "sha256": "68683df711b27ec636abefc61bdff9f83af1311a3490eb649dc9e7e5c0f8d46b"
+    }
+  },
+  "localValidation": {
+    "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+    "platform": "windows",
+    "rust": "1.95.0",
+    "metadata": {
+      "workspaceMembers": 5,
+      "lockedOffline": true
+    },
+    "format": {
+      "passed": true,
+      "command": "cargo fmt --all -- --check"
+    },
+    "node": {
+      "executedSourceSha": "310bb75ed5dec5c860e6d2cf44109e695e902aec",
+      "tests": 197,
+      "passed": 197,
+      "failed": 0,
+      "skipped": 0,
+      "rerunOnFinalSource": false,
+      "reuseBasis": "31 Node entry/helper files and direct repository inputs are unchanged; final diff only changes two Rust shim test-only imports",
+      "equivalenceArtifact": "C:/dev/worktrees/akra-ci-final-20261127/artifacts/ci-final-validation/node-input-equivalence-10df53ce.json",
+      "equivalence": {
+        "status": "source-input-equivalent",
+        "sha256": "61d0bca04bad072a8ec661525a2e078a7d8fdf6412c7c0acfddbcbd9b45928d0",
+        "trackedFiles": 3720,
+        "changedRustShimFiles": 2,
+        "unchangedBlobAndModeFiles": 3718,
+        "entryTests": 15,
+        "importClosureFiles": 31,
+        "fixtureFiles": 81,
+        "workflowFiles": 3,
+        "registryFiles": 1,
+        "cargoToolchainFiles": 7,
+        "nodeManifestLockFiles": 10,
+        "reexecutedAtFinalSha": false
+      }
+    },
+    "architecture": {
+      "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\architecture-10df53ce.json",
+      "bytes": 13567,
+      "sha256": "dbdf52a57c443a12bbc39b1cbd186cfbc1911b04834f72a533bae166f598b6c6",
+      "value": {
+        "schemaVersion": 1,
+        "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+        "status": "passed",
+        "testResult": {
+          "passed": 150,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filteredOut": 0,
+          "reportedSeconds": 69.02
+        },
+        "sourceShaAfter": "10df53cedda2139998f7ee6e5842926537adb472",
+        "trackedStatusAfter": "",
+        "logSha256": "a2d47142836e81751fdc3b6715aae093826e9e2f0434ce9ff97581b608fe53e3",
+        "startedAt": "2026-11-27T10:01:44.238Z",
+        "completedAt": "2026-11-27T10:02:53.790Z"
+      }
+    },
+    "build": {
+      "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\build-result.json",
+      "bytes": 955,
+      "sha256": "d54e2cc9c851c1c053164e95809f1defc447843c50ca92248aebcfa44c35fe2e",
+      "value": {
+        "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+        "baseSha": "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
+        "cwd": "C:\\dev\\worktrees\\akra-ci-final-20261127",
+        "targetDirectory": "C:/dev/tmp/akra-ci-final-target-20261127",
+        "toolchain": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.95.0\nLLVM version: 22.1.2",
+        "features": "default",
+        "target": "native-host",
+        "profile": "test",
+        "incremental": "1",
+        "buildJobs": "4",
+        "command": [
+          "C:/Users/dorani/.rustup/toolchains/1.95.0-x86_64-pc-windows-msvc/bin/cargo.exe",
+          "test",
+          "--workspace",
+          "--lib",
+          "--locked",
+          "--offline",
+          "--no-run",
+          "--message-format=json",
+          "--timings"
+        ],
+        "startedAt": "2026-11-27T10:00:59.387Z",
+        "attempt": 3,
+        "exitCode": 0,
+        "elapsedMs": 59018,
+        "endedAt": "2026-11-27T10:01:58.406Z"
+      }
+    },
+    "clippy": {
+      "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\clippy-result.json",
+      "bytes": 1007,
+      "sha256": "8f33f48ebea53fe148e5bfef945095dc65da3337da48adaa6c975c88e8fbda40",
+      "value": {
+        "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+        "baseSha": "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
+        "cwd": "C:\\dev\\worktrees\\akra-ci-final-20261127",
+        "targetDirectory": "C:/dev/tmp/akra-ci-final-target-20261127",
+        "toolchain": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.95.0\nLLVM version: 22.1.2",
+        "features": "default",
+        "target": "native-host",
+        "profile": "test",
+        "incremental": "1",
+        "buildJobs": "4",
+        "command": [
+          "C:/Users/dorani/.rustup/toolchains/1.95.0-x86_64-pc-windows-msvc/bin/cargo.exe",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--all-features",
+          "--locked",
+          "--offline",
+          "--message-format=json",
+          "--timings",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "startedAt": "2026-11-27T09:59:41.485Z",
+        "attempt": 3,
+        "exitCode": 0,
+        "elapsedMs": 77900,
+        "endedAt": "2026-11-27T10:00:59.386Z"
+      },
+      "effectiveFeatures": "all",
+      "effectiveTargets": "all-targets",
+      "contextTagNote": "The generic context labels features=default/profile=test; the actual command explicitly requests --all-targets --all-features and -D warnings."
+    },
+    "memberDocs": {
+      "result": {
+        "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\member-docs-result.json",
+        "bytes": 1013,
+        "sha256": "6deee1d128603d210d5e72a23cc4e7326f11a32061e83f19cec38898f0a36af7",
+        "value": {
+          "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+          "baseSha": "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
+          "cwd": "C:\\dev\\worktrees\\akra-ci-final-20261127",
+          "targetDirectory": "C:/dev/tmp/akra-ci-final-target-20261127",
+          "toolchain": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.95.0\nLLVM version: 22.1.2",
+          "features": "default",
+          "target": "native-host",
+          "profile": "test",
+          "incremental": "1",
+          "buildJobs": "4",
+          "command": [
+            "C:/Users/dorani/.rustup/toolchains/1.95.0-x86_64-pc-windows-msvc/bin/cargo.exe",
+            "test",
+            "--locked",
+            "--offline",
+            "--doc",
+            "-p",
+            "akra-issue-core",
+            "-p",
+            "akra-native",
+            "-p",
+            "akra-verification",
+            "-p",
+            "akra-verification-native"
+          ],
+          "startedAt": "2026-11-27T10:01:58.406Z",
+          "attempt": 3,
+          "exitCode": 0,
+          "elapsedMs": 13539,
+          "endedAt": "2026-11-27T10:02:11.946Z"
+        }
+      },
+      "log": {
+        "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\member-docs.log",
+        "sha256": "e2d2401edfc2dd2894237da451e1af3b8fa4682e9aa76313f258051d1f89c24d"
+      },
+      "passed": 3,
+      "failed": 0,
+      "compileFail": 3
+    },
+    "units": {
+      "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+      "status": "failed",
+      "totals": {
+        "plannedDistinct": 180,
+        "executedNow": {
+          "passed": 38,
+          "failed": 0,
+          "tests": 38,
+          "groups": 27
+        },
+        "reused": {
+          "passed": 139,
+          "failed": 3,
+          "tests": 142,
+          "targets": 4
+        },
+        "combined": {
+          "passed": 177,
+          "failed": 3,
+          "accounted": 180
+        },
+        "ignoredHelpersExecutedDirectly": 0
+      },
+      "reusedTargets": [
+        {
+          "package": "akra-issue-core",
+          "target": {
+            "name": "akra_issue_core",
+            "kind": "lib"
+          },
+          "previousSourceSha": "310bb75ed5dec5c860e6d2cf44109e695e902aec",
+          "executable": "C:/dev/tmp/akra-ci-final-target-20261127\\debug\\deps\\akra_issue_core-a2e33656564f200e.exe",
+          "previousExecutable": "C:/dev/tmp/akra-ci-final-target-20261127\\debug\\deps\\akra_issue_core-a2e33656564f200e.exe",
+          "executableSha256": "0bd795fff8a57f1a695bdaeb1409b67534e62a3002eecc436ee4412be83c5c95",
+          "ordinaryTests": 53,
+          "ignoredTests": 0
+        },
+        {
+          "package": "akra-native",
+          "target": {
+            "name": "akra_native",
+            "kind": "lib"
+          },
+          "previousSourceSha": "310bb75ed5dec5c860e6d2cf44109e695e902aec",
+          "executable": "C:/dev/tmp/akra-ci-final-target-20261127\\debug\\deps\\akra_native-8b204819dea93b3f.exe",
+          "previousExecutable": "C:/dev/tmp/akra-ci-final-target-20261127\\debug\\deps\\akra_native-8b204819dea93b3f.exe",
+          "executableSha256": "02e0d2a00d83148d780746874bd43cf1c392493886513772ba790a4728722aee",
+          "ordinaryTests": 42,
+          "ignoredTests": 1
+        },
+        {
+          "package": "akra-verification",
+          "target": {
+            "name": "akra_verification",
+            "kind": "lib"
+          },
+          "previousSourceSha": "310bb75ed5dec5c860e6d2cf44109e695e902aec",
+          "executable": "C:/dev/tmp/akra-ci-final-target-20261127\\debug\\deps\\akra_verification-1db630b8ab6dd6dc.exe",
+          "previousExecutable": "C:/dev/tmp/akra-ci-final-target-20261127\\debug\\deps\\akra_verification-1db630b8ab6dd6dc.exe",
+          "executableSha256": "a0ada893f947c06aa7201d6bf937514c1e5e4e842f4fe3e9a487901fe9bf610e",
+          "ordinaryTests": 24,
+          "ignoredTests": 0
+        },
+        {
+          "package": "akra-verification-native",
+          "target": {
+            "name": "akra_verification_native",
+            "kind": "lib"
+          },
+          "previousSourceSha": "310bb75ed5dec5c860e6d2cf44109e695e902aec",
+          "executable": "C:/dev/tmp/akra-ci-final-target-20261127\\debug\\deps\\akra_verification_native-30aa1c78a7e2b6d5.exe",
+          "previousExecutable": "C:/dev/tmp/akra-ci-final-target-20261127\\debug\\deps\\akra_verification_native-30aa1c78a7e2b6d5.exe",
+          "executableSha256": "a426a649dc442deba541169edeaa84f4c5fa1126699e038cc5f6550ed3d4c6b4",
+          "ordinaryTests": 23,
+          "ignoredTests": 0
+        }
+      ],
+      "remainingFailures": [
+        {
+          "package": "akra-native",
+          "name": "trusted_executable::fingerprint::tests::a_modified_pinned_executable_cannot_keep_its_prepared_identity",
+          "status": "failed",
+          "evidence": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\unit-validation-result.json",
+          "previousSourceSha": "310bb75ed5dec5c860e6d2cf44109e695e902aec",
+          "executableSha256": "02e0d2a00d83148d780746874bd43cf1c392493886513772ba790a4728722aee",
+          "reuseBasis": "byte-identical executable and identical ordinary/ignored inventory"
+        },
+        {
+          "package": "akra-native",
+          "name": "trusted_executable::fingerprint::tests::pinned_native_format_and_digest_describe_the_same_bytes",
+          "status": "failed",
+          "evidence": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\unit-validation-result.json",
+          "previousSourceSha": "310bb75ed5dec5c860e6d2cf44109e695e902aec",
+          "executableSha256": "02e0d2a00d83148d780746874bd43cf1c392493886513772ba790a4728722aee",
+          "reuseBasis": "byte-identical executable and identical ordinary/ignored inventory"
+        },
+        {
+          "package": "akra-native",
+          "name": "trusted_executable::tests::native_host_git_and_node_formats_are_accepted",
+          "status": "failed",
+          "evidence": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\unit-validation-result.json",
+          "previousSourceSha": "310bb75ed5dec5c860e6d2cf44109e695e902aec",
+          "executableSha256": "02e0d2a00d83148d780746874bd43cf1c392493886513772ba790a4728722aee",
+          "reuseBasis": "byte-identical executable and identical ordinary/ignored inventory"
+        }
+      ],
+      "evidence": {
+        "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\unit-validation-10df53ce.json",
+        "sha256": "c3c1efac256ba2a71c649f6ee9b243a2aadda27bc1b9984dfffe29631e5881e5"
+      },
+      "original310": {
+        "passed": 168,
+        "failed": 12,
+        "distinct": 180
+      },
+      "shellPrerequisiteCorrection": {
+        "scope": "same native subprocess filter15 + two exact root tests",
+        "passed": 17,
+        "failed": 0,
+        "appendedOnlyToChildPath": "C:/Program Files/Git/usr/bin",
+        "globalEnvironmentChanged": false
+      },
+      "allTestsPassed": false
+    },
+    "fullWorkspaceGatePassed": false,
+    "performanceBenchmark": false,
+    "sourceAttribution": "Actual build/clippy/docs/architecture/root and inventory evidence stays bound to 10df; the subsequent macOS test-only correction is separately recorded and was not rerun as those Windows gates."
+  },
+  "deliverySnapshotAt": "2026-11-27T09:50:20Z",
+  "finalComponentHeads": {
+    "2864": "87b5886656d5e1f98c4bd6e82529d27efbe2086c",
+    "2865": "0347fe71ad69d82b82abd3d54f901fdd0fdf1950",
+    "2866": "35f48e915a15dc9c4d7091a91ee66d6402e3c05c",
+    "2903": "f9e39762eead950b145a78236ff6f2ae7fdaca7b",
+    "2904": "044dc3c798e60829f4af473f4b3fc96dfdb29988",
+    "2905": "ed03f99a6b122cfd2e56b5e48c1b922a0b953d3d",
+    "2906": "7b0eb17ccd07b63f6fe6b122fd5233c2ade2fe52",
+    "2907": "a3243d5430dcd57ef1dbe5c6e95442e1256e1c70",
+    "2908": "38efaebd651c4b6c3879975650057fcbe209ccbc",
+    "2909": "a389504bfcc2dc37096a02cb5db1e27840844745",
+    "2910": "ceb9f629b30480581ce412f0f089550ca1b085c6",
+    "2912": "3d23199ac0d304e563f20ece52d853b5f31ea305",
+    "2930": "501fafb59575563c022db8f05d98ccf7b8d87de8"
+  },
+  "ciSnapshot": {
+    "observedAtUtc": "2026-11-27T09:50:20Z",
+    "observedAtKst": "2026-11-27T18:50:20+09:00",
+    "summary": {
+      "pullRequests": 16,
+      "mergeable": 16,
+      "mergeableUnknown": 0,
+      "mergeConflicts": 0,
+      "runStates": {
+        "success": 3,
+        "in_progress": 4,
+        "queued": 3,
+        "pending": 6
+      },
+      "completedFailedJobs": 0,
+      "cancelledCandidatesExcluded": 8
+    },
+    "appliesOnlyToRecordedHeads": true,
+    "reportPrOwnPreviousHeadOnly": true,
+    "artifact": "C:/dev/worktrees/akra-ci-final-20261127/artifacts/ci-final-validation/ci-head-snapshot.json"
+  },
+  "latestCiBlockingFailures": [
+    {
+      "pr": 2939,
+      "headSha": "044dc3c798e60829f4af473f4b3fc96dfdb29988",
+      "checkoutSha": "fb395bc41135f64ecebcfaad29ce079f0ca41cc1",
+      "checkoutTree": "85813e622acd68e82185760b6faa8e6f6ff5260b",
+      "checkoutTreeMatchesHead": true,
+      "run": 45973397203,
+      "job": 140419295149,
+      "test": "adapter::outbound::app_server::codex_thread::tests::fixture_classifies_terminal_receipts_and_accepts_only_final_text",
+      "assertion": "approval fixture: actual End { Unavailable, NotSent }, expected Complete(\"{\\\"suggestions\\\":[]}\")",
+      "passed": 6486,
+      "failed": 1,
+      "ignored": 27,
+      "seconds": 832.15,
+      "exitCode": 101,
+      "cause": "unknown; unchanged related source does not prove a pre-existing flake",
+      "evidence": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45973397203/job/140419295149",
+      "classification": "current-pr-head-test-assertion-not-60-minute-job-timeout",
+      "command": "node scripts/ci-performance.mjs run rust-tests -- cargo test --workspace --locked --timings",
+      "observedAfter": "2026-11-27T09:50:20Z",
+      "finalCombinedSourceReproduction": false,
+      "blocksAcceptance": true
+    },
+    {
+      "pr": 2940,
+      "headSha": "ed03f99a6b122cfd2e56b5e48c1b922a0b953d3d",
+      "checkoutSha": "5c51ee8840eeddf04062c0ea2d858412c897c525",
+      "checkoutTree": "36533bcd6659d9dedc1cf0db73c93a456f797a70",
+      "checkoutTreeMatchesHead": true,
+      "run": 45973398822,
+      "job": 140419316470,
+      "test": "adapter::outbound::github::review_poller::timeout_policy_tests::run_git_command_uses_shared_timeout_policy",
+      "assertion": "error_chain.contains(\"timed out after\") at review_poller.rs:1765",
+      "passed": 6486,
+      "failed": 1,
+      "ignored": 27,
+      "seconds": 839.66,
+      "exitCode": 101,
+      "cause": "unknown; the failing assertion does not print the actual error chain",
+      "evidence": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45973398822/job/140419316470",
+      "classification": "current-pr-head-test-assertion-not-60-minute-job-timeout",
+      "command": "node scripts/ci-performance.mjs run rust-tests -- cargo test --workspace --locked --timings",
+      "observedAfter": "2026-11-27T09:50:20Z",
+      "finalCombinedSourceReproduction": false,
+      "blocksAcceptance": true
+    },
+    {
+      "pr": 2938,
+      "headSha": "0043cae72cd024a3bd4b0ee8822ea094fc9baedb",
+      "checkoutSha": "87b92d6486672fb9109e0bf3c82e83445ba05a7f",
+      "run": 45976377597,
+      "job": 140431899770,
+      "platform": "macos",
+      "observedAt": "2026-11-27T10:13:27Z",
+      "classification": "confirmed-extraction-compatibility-compile-regression",
+      "diagnostic": "E0425: super::MACOS_ADMIN_GROUP_ID missing",
+      "source": "src/trusted_executable.rs:843:71",
+      "productionNativeCheckSeconds": 168.62,
+      "testCompilationStepSeconds": 324.82,
+      "exitCode": 1,
+      "cause": "Native extraction moved the production constant into a private member module but left one root macOS launcher integration test reference.",
+      "fixScope": "Test-local fixture GID80 constant; production API/policy and test names/scope unchanged.",
+      "remediationStatus": "test-only-fix-published-awaiting-current-head-macos-ci",
+      "blocksAcceptance": true,
+      "evidence": "https://github.com/RefinedStone/codex-exec-loop/actions/runs/45976377597/job/140431899770",
+      "fixCommitSha": "38efaebd651c4b6c3879975650057fcbe209ccbc",
+      "currentHeadSha": "a389504bfcc2dc37096a02cb5db1e27840844745",
+      "supersededHead": true,
+      "fixPublishedAt": "2026-11-27T10:24:06.199Z"
+    }
+  ],
+  "ciFollowups": {
+    "portShimGuard": {
+      "localFinalArchitecturePassed": 150,
+      "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+      "remoteFinalFullAcceptance": false
+    },
+    "oldVerificationPrefix": {
+      "packageAwareRunnerPublished": true,
+      "memberTestsPassed": true,
+      "fullThreeOsNativeContractAcceptance": false
+    },
+    "oldFormatFailure": {
+      "localFinalFmtAndClippyPassed": true,
+      "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472"
+    },
+    "priorRestartTimeout": {
+      "directCauseKnown": false,
+      "finalFullRuntimeAccepted": false
+    }
+  },
+  "validationSourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+  "sourceStatus": "published-macos-test-fix-windows-execution-evidence-bound-to-10df",
+  "followupMacosCompatibilityFix": {
+    "issue": 2908,
+    "status": "published-awaiting-macos-ci",
+    "productionPolicyChanged": false,
+    "testNamesOrScopeChanged": false,
+    "newDeliverySourceSha": "9098f0e7aa994cd0a2f2f3ca926b47381c9bdf29",
+    "validationOn10dfMustNotBeAttributedToFutureSha": true,
+    "localFixCommitSha": "38efaebd651c4b6c3879975650057fcbe209ccbc",
+    "actualMacosCompileOrTestsExecuted": false,
+    "previousValidationSourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+    "publishedAt": "2026-11-27T10:24:06.199Z",
+    "updatedPrHeads": {
+      "2938": "a389504bfcc2dc37096a02cb5db1e27840844745",
+      "2941": "3d23199ac0d304e563f20ece52d853b5f31ea305",
+      "2945": "38efaebd651c4b6c3879975650057fcbe209ccbc",
+      "2946": "ceb9f629b30480581ce412f0f089550ca1b085c6"
+    },
+    "changedFiles": [
+      "src/trusted_executable.rs"
+    ],
+    "scope": "Only local fixture group constant and its reference inside the existing cfg(target_os = macos) test function.",
+    "windowsBuildClippyTestsRerun": false,
+    "verification": {
+      "sourceSha": "9098f0e7aa994cd0a2f2f3ca926b47381c9bdf29",
+      "previousValidationSourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+      "recordedAt": "2026-11-27T10:23:33.363Z",
+      "checks": [
+        {
+          "name": "fmt",
+          "exe": "C:/Users/dorani/.rustup/toolchains/1.95.0-x86_64-pc-windows-msvc/bin/cargo.exe",
+          "args": [
+            "fmt",
+            "--all",
+            "--",
+            "--check"
+          ],
+          "sourceSha": "9098f0e7aa994cd0a2f2f3ca926b47381c9bdf29",
+          "exitCode": 0,
+          "elapsedMs": 8374,
+          "error": null
+        },
+        {
+          "name": "crate-boundaries",
+          "exe": "C:\\nvm\\v24.13.0\\node.exe",
+          "args": [
+            "scripts/check_crate_boundaries.mjs"
+          ],
+          "sourceSha": "9098f0e7aa994cd0a2f2f3ca926b47381c9bdf29",
+          "exitCode": 0,
+          "elapsedMs": 528,
+          "error": null
+        },
+        {
+          "name": "plan",
+          "exe": "C:\\nvm\\v24.13.0\\node.exe",
+          "args": [
+            "scripts/agent-plan.mjs",
+            "--base",
+            "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
+            "--json"
+          ],
+          "sourceSha": "9098f0e7aa994cd0a2f2f3ca926b47381c9bdf29",
+          "exitCode": 0,
+          "elapsedMs": 6694,
+          "error": null
+        }
+      ],
+      "planHash": "789fc27130494941b97528bafad6a5f48ff4629ab547f2534b7f372d70f1e564",
+      "planMode": "full",
+      "planGenerationOnly": true,
+      "actualMacOsCompilePassed": false,
+      "priorWindowsGatesRerun": false,
+      "sourceClean": true
+    },
+    "evidence": {
+      "sourceChange": {
+        "path": "C:/dev/worktrees/akra-ci-final-20261127/artifacts/ci-final-validation/macos-fixture-fix/source-change.json",
+        "sha256": "fb4068088eb00f09fb20d7f793f60053459edfc12f3d9d1e0e49a171b18c6c9d"
+      },
+      "verification": {
+        "path": "C:/dev/worktrees/akra-ci-final-20261127/artifacts/ci-final-validation/macos-fixture-fix/verification.json",
+        "sha256": "8fbb4c4fc2667a2c4dfe2ac93d2bfd837c3c2210c71932013e09d582967cb150"
+      },
+      "nodeEquivalence": {
+        "path": "C:/dev/worktrees/akra-ci-final-20261127/artifacts/ci-final-validation/node-input-equivalence-9098f0e7.json",
+        "sha256": "e26ac6a6373ce93875340af19c543ce7beb0d991dd4c765f44defaf158b8dd2d"
+      }
+    }
+  },
+  "validationPlan": {
+    "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+    "baseSha": "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
+    "planHash": "55e18b175f8f64289f3509b3fc07269471c487ef07c16e714a7881b8a572a80a",
+    "localChangeId": "sha256:f198d943d2054ffb9c3444b5208d4b7117b7c2762c80ac0fc2458f33d5afeed8",
+    "mode": "full",
+    "configuration": {
+      "platforms": [
+        "windows"
+      ],
+      "features": [
+        "all",
+        "default"
+      ],
+      "profile": "test",
+      "targetTriples": []
+    },
+    "fullReasons": [
+      "base:ownership-incomplete",
+      "global-input:.github/workflows/native-pr-checks.yml",
+      "global-input:AGENTS.md",
+      "global-input:Cargo.lock",
+      "global-input:Cargo.toml",
+      "global-input:crates/issue-core/Cargo.toml",
+      "global-input:crates/native/Cargo.toml",
+      "global-input:crates/verification-native/Cargo.toml",
+      "global-input:crates/verification/Cargo.toml",
+      "global-input:scripts/agent-plan.mjs",
+      "global-input:scripts/agent-plan.test.mjs",
+      "global-input:scripts/check_ci_cache_inputs.mjs",
+      "global-input:scripts/check_ci_contract_targets.mjs",
+      "global-input:scripts/check_crate_boundaries.mjs",
+      "global-input:scripts/check_native_pr.ps1",
+      "global-input:scripts/check_native_pr.sh",
+      "global-input:scripts/check_node_surfaces.sh",
+      "global-input:scripts/check_windows_portable.sh",
+      "global-input:scripts/ci-cache-inputs.mjs",
+      "global-input:scripts/ci-cache-inputs.test.mjs",
+      "global-input:scripts/ci-contract-targets.mjs",
+      "global-input:scripts/ci-contract-targets.test.mjs",
+      "global-input:scripts/ci-crate-ownership.json",
+      "global-input:scripts/ci-impact-plan.mjs",
+      "global-input:scripts/ci-impact-plan.test.mjs",
+      "global-input:scripts/ci-performance.mjs",
+      "global-input:scripts/ci-performance.test.mjs",
+      "global-input:scripts/ci-plan-inputs.mjs",
+      "global-input:scripts/ci-plan-inputs.test.mjs",
+      "global-input:scripts/ci-process-progress.mjs",
+      "global-input:scripts/ci-rust-test-profile.mjs",
+      "global-input:scripts/ci-rust-test-profile.test.mjs",
+      "global-input:scripts/ci-scope.mjs",
+      "global-input:scripts/ci-scope.test.mjs",
+      "global-input:scripts/ci-workflow-plan.mjs",
+      "global-input:scripts/ci-workflow-plan.test.mjs",
+      "global-input:scripts/crate-boundaries.test.mjs",
+      "global-input:scripts/fixtures/ci-plan-fixture.mjs",
+      "global-input:scripts/native-contract-progress.test.mjs",
+      "global-input:scripts/native-rust-contracts.test.mjs",
+      "global-input:scripts/run_native_rust_contracts.mjs",
+      "global-input:tests/fixtures/issue_automation_timeline_journal_v1.json",
+      "root-consumer-requires-full",
+      "unregistered-input:base:src/adapter/outbound/db/sqlite_planning_authority_adapter/kernel_events/issue_timeline.rs",
+      "unregistered-input:base:src/adapter/outbound/filesystem/task_evidence_artifact/files.rs",
+      "unregistered-input:base:src/adapter/outbound/git/task_verification.rs",
+      "unregistered-input:base:src/adapter/outbound/git/task_verification/context.rs",
+      "unregistered-input:base:src/adapter/outbound/git/task_verification/diagnostics.rs",
+      "unregistered-input:base:src/adapter/outbound/git/task_verification/environment.rs",
+      "unregistered-input:base:src/adapter/outbound/git/task_verification/input.rs",
+      "unregistered-input:base:src/adapter/outbound/git/task_verification/tests.rs",
+      "unregistered-input:base:src/adapter/outbound/github/automation.rs",
+      "unregistered-input:base:src/adapter/outbound/github/automation/tests/windows_temp.rs",
+      "unregistered-input:base:src/application/port/outbound/issue_policy_source_port.rs",
+      "unregistered-input:base:src/application/port/outbound/issue_template_source_port.rs",
+      "unregistered-input:base:src/application/port/outbound/task_evidence_artifact_port.rs",
+      "unregistered-input:base:src/application/port/outbound/task_verification_runner_port.rs",
+      "unregistered-input:base:src/application/service/issue_policy.rs",
+      "unregistered-input:base:src/application/service/issue_template.rs",
+      "unregistered-input:base:src/application/service/mod.rs",
+      "unregistered-input:base:src/application/service/parallel_mode/tests.rs",
+      "unregistered-input:base:src/application/service/parallel_mode/tests/automatic_verification.rs",
+      "unregistered-input:base:src/application/service/task_verification/continuation.rs",
+      "unregistered-input:base:src/application/service/task_verification/execution.rs",
+      "unregistered-input:base:src/composition/native_client_runtime/issue_timeline.rs",
+      "unregistered-input:base:src/domain/issue_automation/timeline.rs",
+      "unregistered-input:base:src/domain/issue_automation/timeline/tests.rs",
+      "unregistered-input:base:src/domain/issue_creation.rs",
+      "unregistered-input:base:src/domain/issue_markdown.rs",
+      "unregistered-input:base:src/domain/issue_masking.rs",
+      "unregistered-input:base:src/domain/issue_masking/tests.rs",
+      "unregistered-input:base:src/domain/issue_policy.rs",
+      "unregistered-input:base:src/domain/issue_publish_intent.rs",
+      "unregistered-input:base:src/domain/issue_review.rs",
+      "unregistered-input:base:src/domain/issue_secret_spans.rs",
+      "unregistered-input:base:src/domain/issue_template.rs",
+      "unregistered-input:base:src/domain/issue_validation.rs",
+      "unregistered-input:base:src/domain/issue_work.rs",
+      "unregistered-input:base:src/domain/kernel_event.rs",
+      "unregistered-input:base:src/domain/mod.rs",
+      "unregistered-input:base:src/domain/planning/acceptance.rs",
+      "unregistered-input:base:src/domain/planning/acceptance/tests.rs",
+      "unregistered-input:base:src/domain/planning/delivery_evidence.rs",
+      "unregistered-input:base:src/domain/planning/delivery_evidence/tests.rs",
+      "unregistered-input:base:src/domain/planning/delivery_evidence/validation.rs",
+      "unregistered-input:base:src/domain/planning/evidence.rs",
+      "unregistered-input:base:src/domain/planning/evidence/tests.rs",
+      "unregistered-input:base:src/domain/planning/evidence/validation.rs",
+      "unregistered-input:base:src/domain/planning/verification.rs",
+      "unregistered-input:base:src/domain/planning/verification/tests.rs",
+      "unregistered-input:base:src/domain/planning/verification/validation.rs",
+      "unregistered-input:base:src/git_execution_guard.rs",
+      "unregistered-input:base:src/git_subprocess.rs",
+      "unregistered-input:base:src/private_directory.rs",
+      "unregistered-input:base:src/private_fs.rs",
+      "unregistered-input:base:src/private_sqlite.rs",
+      "unregistered-input:base:src/private_sqlite/pinned_directory.rs",
+      "unregistered-input:base:src/process_liveness.rs",
+      "unregistered-input:base:src/subprocess.rs",
+      "unregistered-input:base:src/subprocess/controlled.rs",
+      "unregistered-input:base:src/subprocess/controlled/tests.rs",
+      "unregistered-input:base:src/test_utils.rs",
+      "unregistered-input:base:src/trusted_executable.rs",
+      "unregistered-input:base:src/trusted_executable/fingerprint.rs",
+      "unregistered-input:base:src/trusted_executable/fingerprint/tests.rs",
+      "unregistered-input:base:tests/architecture_boundaries.rs"
+    ],
+    "generated": true,
+    "fullRunExecuted": false,
+    "planAcceptanceComplete": false,
+    "evidence": {
+      "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\final-plan.json",
+      "sha256": "480b0fd60669853ab85e39fd5521fd39ea83aeda6dfc1c41963aff72ea65eea7"
+    }
+  },
+  "additionalScopedObservations": {
+    "gitFixture": {
+      "baselineSourceSha": "ce02eb62f",
+      "candidateSourceSha": "79bcfcafd",
+      "baselineSeconds": [
+        1.33,
+        1.27,
+        1.25
+      ],
+      "candidateSeconds": [
+        1.18,
+        1.22,
+        1.2
+      ],
+      "sampleCountPerSide": 3,
+      "baselineMedianSeconds": 1.27,
+      "candidateMedianSeconds": 1.2,
+      "medianReductionPercent": 5.511811023622052,
+      "wholeCiImprovementClaim": false,
+      "evidence": "https://github.com/RefinedStone/codex-exec-loop/blob/a58d3160d4d1ce58a2e3f57ecd77bfec672bdbd8/docs/validation/ci-verification-native-extraction-2026-11-27.md"
+    }
   }
 }
