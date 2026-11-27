@@ -572,9 +572,9 @@ fn safe_plain_value(value: &OsString) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{copy_native_executable_fixture, parse_windows_npm_codex_cmd_shim};
     #[cfg(unix)]
-    use super::{resolve_codex_command_from_path, sanitized_path};
+    use super::resolve_codex_command_from_path;
+    use super::{copy_native_executable_fixture, parse_windows_npm_codex_cmd_shim};
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::{PermissionsExt, symlink};
@@ -868,7 +868,7 @@ mod tests {
             plan.program,
             fs::canonicalize(&node).expect("Node should canonicalize")
         );
-        sanitized_path(bin.as_os_str(), &workspace)
+        super::sanitized_path(bin.as_os_str(), &workspace)
             .expect("standard Homebrew bin should remain on the sanitized PATH");
         let _ = fs::remove_dir_all(root);
     }
