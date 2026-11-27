@@ -56,6 +56,7 @@ pub(crate) struct Fixture {
 
 impl Fixture {
     pub(crate) fn new(label: &str) -> Self {
+        let _timer = crate::test_utils::NativeTestTimer::new("automatic_fixture_new");
         let repo = TempGitRepo::new(label);
         let workspace = repo.workspace_dir();
         let authority = Arc::new(SqlitePlanningAuthorityAdapter::new());

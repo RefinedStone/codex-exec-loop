@@ -149,3 +149,32 @@ mod tests {
         );
     }
 }
+
+/// Opt-in native fixture phase timings; no command arguments, paths, or environment values are logged.
+/// Spans can be nested or run on separate threads, so their totals are not additive wall time.
+pub(crate) struct NativeTestTimer {
+    label: &'static str,
+    started: Option<std::time::Instant>,
+}
+
+impl NativeTestTimer {
+    pub(crate) fn new(label: &'static str) -> Self {
+        Self {
+            label,
+            started: std::env::var_os("AKRA_NATIVE_TEST_TIMINGS")
+                .map(|_| std::time::Instant::now()),
+        }
+    }
+}
+
+impl Drop for NativeTestTimer {
+    fn drop(&mut self) {
+        if let Some(started) = self.started {
+            eprintln!(
+                "[native-profile] {} {}",
+                self.label,
+                started.elapsed().as_micros()
+            );
+        }
+    }
+}

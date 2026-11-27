@@ -212,6 +212,30 @@ impl ManagedChild {
         Ok(status)
     }
 
+    /// Keep cancellation/output polling bounded while waking immediately when a Windows child exits.
+    fn wait_for_progress(&self, maximum_wait: Duration) -> io::Result<()> {
+        #[cfg(windows)]
+        if !self.child_reaped {
+            use windows_sys::Win32::Foundation::{WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT};
+            use windows_sys::Win32::System::Threading::WaitForSingleObject;
+
+            // Never turn a finite duration into Win32's INFINITE sentinel. Sub-millisecond
+            // remainders use a zero wait so the surrounding absolute deadline stays authoritative.
+            let milliseconds = maximum_wait.as_millis().min(u128::from(u32::MAX - 1)) as u32;
+            return match unsafe { WaitForSingleObject(self.child.as_raw_handle(), milliseconds) } {
+                WAIT_OBJECT_0 | WAIT_TIMEOUT => Ok(()),
+                WAIT_FAILED => Err(io::Error::last_os_error()),
+                result => Err(io::Error::other(format!(
+                    "unexpected Windows subprocess wait result: {result}"
+                ))),
+            };
+        }
+        // An exited leader can leave inherited pipes open. Do not busy-loop on its signaled
+        // handle: continue bounded draining and the same descendant/timeout cleanup path.
+        std::thread::sleep(maximum_wait);
+        Ok(())
+    }
+
     fn terminate_process_tree(&mut self) -> io::Result<()> {
         #[cfg(target_os = "linux")]
         {
@@ -1524,6 +1548,8 @@ fn spawn_windows(command: &mut Command, console: WindowsConsole) -> io::Result<M
 }
 
 pub(crate) fn command_output(command: &mut Command, command_label: &str) -> io::Result<Output> {
+    #[cfg(test)]
+    let _timer = crate::test_utils::NativeTestTimer::new("command_output");
     command_output_with_timeout(command, command_label, configured_subprocess_timeout())
 }
 
@@ -1737,7 +1763,11 @@ pub(crate) fn wait_with_output_timeout_and_limits(
                 timeout_error(command_label, timeout),
             ));
         }
-        std::thread::sleep(POLL_INTERVAL.min(timeout.saturating_sub(started_at.elapsed())));
+        if let Err(error) =
+            child.wait_for_progress(POLL_INTERVAL.min(timeout.saturating_sub(started_at.elapsed())))
+        {
+            return Err(terminate_after_error(&mut child, error));
+        }
     }
 }
 

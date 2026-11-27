@@ -41,6 +41,8 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    #[cfg(test)]
+    let _timer = crate::test_utils::NativeTestTimer::new("git_prepare");
     let resolved_program = if is_git_program(program) {
         resolve_git_program(program)
     } else {
@@ -148,6 +150,8 @@ fn harden_command(
     command: &mut Command,
     inherited_environment: impl IntoIterator<Item = (OsString, OsString)>,
 ) {
+    #[cfg(test)]
+    let _timer = crate::test_utils::NativeTestTimer::new("git_harden");
     let explicit_environment = command
         .get_envs()
         .map(|(name, value)| (name.to_os_string(), value.map(OsStr::to_os_string)))

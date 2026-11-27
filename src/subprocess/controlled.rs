@@ -71,7 +71,14 @@ pub(crate) fn wait_with_output_controlled(
         {
             break ControlledTermination::Exited(completed);
         }
-        std::thread::sleep(POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())));
+        if child
+            .wait_for_progress(
+                POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
+            )
+            .is_err()
+        {
+            break ControlledTermination::IoFailure;
+        }
     };
     let cleanup = if matches!(termination, ControlledTermination::Exited(_)) {
         child.finish_success()

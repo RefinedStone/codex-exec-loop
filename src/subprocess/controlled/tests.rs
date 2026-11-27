@@ -155,3 +155,36 @@ fn overflow_retains_only_an_actual_bounded_prefix_and_never_synthetic_padding() 
     assert!(!result.stdout.contains(&0));
     assert!(!result.stdout_complete);
 }
+
+#[cfg(windows)]
+#[test]
+fn cancellation_after_exit_signal_keeps_the_cancelled_fact() {
+    let child = child("done");
+    child.wait_for_progress(Duration::from_secs(10)).unwrap();
+    assert_eq!(
+        unsafe {
+            windows_sys::Win32::System::Threading::WaitForSingleObject(
+                child.child.as_raw_handle(),
+                0,
+            )
+        },
+        windows_sys::Win32::Foundation::WAIT_OBJECT_0,
+        "the readiness wait must observe the real child exit"
+    );
+    assert!(
+        !child.child_reaped,
+        "waiting for readiness must not consume the capture loop's exit observation"
+    );
+    let result = wait_with_output_controlled(
+        child,
+        Instant::now() + Duration::from_secs(10),
+        &|| true,
+        8192,
+        8192,
+    );
+    assert!(matches!(
+        result.termination,
+        ControlledTermination::Cancelled
+    ));
+    assert!(!result.stdout_complete && !result.stderr_complete);
+}
