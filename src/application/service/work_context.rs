@@ -664,6 +664,59 @@ mod tests {
     }
 
     #[test]
+    fn linear_documents_skip_unavailable_keys_and_show_changed_then_read() {
+        struct LinearVersions(Arc<FakeVersions>);
+        impl ExternalResourceVersionPort for LinearVersions {
+            fn kind(&self) -> &'static str {
+                "linear"
+            }
+            fn available(&self, resource: &ExternalResourceRef) -> bool {
+                self.0.available(resource)
+            }
+            fn current_version(&self, resource: &ExternalResourceRef) -> Result<String> {
+                self.0.current_version(resource)
+            }
+        }
+        let transcript = Arc::new(FakeTranscript::default());
+        transcript.pages.lock().unwrap().push(ThreadTextPage {
+            fragments: vec![fragment("user", "https://linear.app/team/issue/APP-1 https://linear.app/team/issue/APP-2 https://linear.app/team/issue/APP-3 https://linear.app/team/issue/APP-4 https://linear.app/team/issue/APP-42")],
+            newest_item_id: Some("item-1".into()),
+        });
+        let versions = Arc::new(FakeVersions::default());
+        for n in 1..=4 {
+            versions
+                .blocked
+                .lock()
+                .unwrap()
+                .insert(format!("team/APP-{n}"));
+        }
+        versions.set("team/APP-42", "v1");
+        let (clock, now) = test_clock("2026-11-11T00:00:00Z");
+        let service = WorkContextService::new(transcript, Arc::new(FakeStore::default()))
+            .with_version_providers(vec![Arc::new(LinearVersions(versions.clone()))])
+            .with_clock(clock);
+        let first = service.refresh_thread_resources("thread-1").unwrap();
+        assert_eq!(first.len(), 5);
+        assert!(first.iter().all(|document| !document.changed));
+        assert_eq!(*versions.asked.lock().unwrap(), vec!["team/APP-42"]);
+        versions.set("team/APP-42", "v2");
+        *now.lock().unwrap() += chrono::Duration::minutes(6);
+        let later = service.refresh_thread_resources("thread-1").unwrap();
+        assert!(
+            later
+                .iter()
+                .find(|document| document.key == "team/APP-42")
+                .unwrap()
+                .changed
+        );
+        let read = service
+            .mark_thread_resource_read("thread-1", "linear", "team/APP-42")
+            .unwrap();
+        assert!(read.iter().all(|document| !document.changed));
+        assert_eq!(versions.asked.lock().unwrap().len(), 2);
+    }
+
+    #[test]
     fn concurrent_refresh_and_attach_reuse_the_completed_version_check() {
         for attach_second in [false, true] {
             let transcript = Arc::new(FakeTranscript::default());

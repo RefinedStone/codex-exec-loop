@@ -467,8 +467,16 @@ impl ProviderHttpAdapter {
                     report_jira_feedback_rejection: false,
                     query: vec![],
                     body: Some(json!({"query":query,"variables":variables})),
-                    limit: RESPONSE_LIMIT,
-                    timeout: REQUEST_TIMEOUT,
+                    limit: if query == linear::VERSION_QUERY {
+                        VERSION_RESPONSE_LIMIT
+                    } else {
+                        RESPONSE_LIMIT
+                    },
+                    timeout: if query == linear::VERSION_QUERY {
+                        VERSION_TIMEOUT
+                    } else {
+                        REQUEST_TIMEOUT
+                    },
                 },
                 token.as_str(),
                 token,
@@ -702,6 +710,45 @@ impl ProviderWorkApiPort for ProviderHttpAdapter {
             Instant::now() + REQUEST_TIMEOUT,
         )?;
         linear::assigned_issues(&value)
+    }
+    fn linear_current_version(
+        &self,
+        token: &SecretToken,
+        resource_key: &str,
+    ) -> CredentialResult<String> {
+        use crate::domain::work_context::linear_resource_key_for_url;
+        let (workspace, identifier) = resource_key
+            .split_once('/')
+            .ok_or(ProviderCredentialError::InvalidRequest)?;
+        // Never interpret an arbitrary URL or query from the ledger. Validate the key before I/O.
+        if !valid_linear_identifier(identifier)
+            || linear_resource_key_for_url(&format!(
+                "https://linear.app/{workspace}/issue/{identifier}"
+            ))
+            .as_deref()
+                != Some(resource_key)
+        {
+            return Err(ProviderCredentialError::InvalidRequest);
+        }
+        let value = self.linear_read(
+            token,
+            linear::VERSION_QUERY,
+            json!({"id":identifier}),
+            &AtomicBool::new(false),
+            Instant::now() + VERSION_TIMEOUT,
+        )?;
+        let issue = &value["issue"];
+        // Identifiers can overlap across workspaces. A returned URL must match the requested ledger key.
+        if issue["identifier"].as_str() != Some(identifier)
+            || issue["url"]
+                .as_str()
+                .and_then(linear_resource_key_for_url)
+                .as_deref()
+                != Some(resource_key)
+        {
+            return Err(ProviderCredentialError::Corrupt);
+        }
+        linear::version(&issue["updatedAt"])
     }
     fn linear_issue_prompt(&self, token: &SecretToken, id: &str) -> CredentialResult<String> {
         if !valid_linear_id(id) {

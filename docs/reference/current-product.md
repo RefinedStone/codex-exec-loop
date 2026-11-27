@@ -1372,16 +1372,20 @@ The Gateway records the external documents that a thread mentions, without a mod
   MCP hub through `akra/mcp/*`: recently viewed pages, search, open in the browser (https Notion hosts
   only), and hand-off that fills the new-thread screen's composer with the page (`desktop/src/renderer/work/`).
   The "Linear" view reads the latest 30 assigned, incomplete issues through Linear's
-  GraphQL API. Main validates the personal key with `viewer` before saving encrypted
-  credentials in `linear-token.bin`. Team/project IDs and the active-cycle filter
+  GraphQL API. Gateway validates and stores the personal key through the native provider
+  credential authority; Desktop receives only connection metadata. Team/project IDs and the active-cycle filter
   operate on that cached list. Open and refresh fetch data; filters do not.
   Hand-off reads the description and ten newest comments, preserves the issue URL
   and suggested branch name, and fills a draft capped at 20,000 characters.
   It uses the visible local thread's folder or asks for one; cancellation preserves
   the draft. It does not create a thread, branch or turn. Linear issue URLs are also
-  recognized as related documents, without a change-version provider. There are no
-  issue mutations or OAuth flows (`desktop/src/main/linearService.ts`,
-  `desktop/src/renderer/work/LinearPanel.tsx`, `src/domain/work_context.rs`).
+  recognized as related documents. Gateway checks `updatedAt` by canonical workspace/issue
+  key (#2829) through a fixed, bounded GraphQL query; missing credentials skip the check
+  without using its failure budget, and stale credential revisions cannot publish a version.
+  A changed response displays the existing per-thread "바뀜" mark until read.
+  No reverse Desktop version request or credential transfer is used
+  (`src/application/service/provider_work.rs`, `desktop/src/renderer/work/LinearPanel.tsx`,
+  `src/domain/work_context.rs`).
   The "Projects" view reads one GitHub Project (`owner/number` or its address, kept in the renderer's local
   storage) with `gh api graphql` (`ProjectV2`, `read:project` scope, at most 500 items). It shows the open
   issues, pull requests, and drafts grouped by the Status field and counts the closed ones. The repository

@@ -21,15 +21,17 @@ const threadDocuments = {
     document("notion", "0123456789abcdef0123456789abcdef", "https://www.notion.so/Sample-spec-0123456789abcdef0123456789abcdef", "Sample spec", "user"),
     document("github", "sample/widgets#42", "https://github.com/sample/widgets/pull/42", "sample/widgets PR #42", "tool"),
     document("jira", "sample.atlassian.net/ABC-124", "https://sample.atlassian.net/browse/ABC-124", "ABC-124", "agent"),
+    document("linear", "fixture/AKR-1", "https://linear.app/fixture/issue/AKR-1/fixture", "AKR-1", "user"),
   ],
 };
 
 const endpoint = fake.uniqueTestEndpoint();
 // 가짜 Gateway 는 버전 확인(`akra/context/refresh`)에서 이 문서가 바뀐 것으로 답한다.
 const CHANGED_KEY = "sample/widgets#42";
+const LINEAR_CHANGED_KEY = "fixture/AKR-1";
 const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING], {
   threadDocuments,
-  changedThreadDocuments: { [THREAD_ID]: [CHANGED_KEY] },
+  changedThreadDocuments: { [THREAD_ID]: [CHANGED_KEY, LINEAR_CHANGED_KEY] },
 });
 const env = { ...process.env, AKRA_GATEWAY_ENDPOINT: endpoint, AKRA_DESKTOP_HIDDEN: "1" };
 delete env.ELECTRON_RUN_AS_NODE;
@@ -48,30 +50,36 @@ try {
 
   await page.getByTestId("thread-entry").first().click();
   const toggle = page.getByTestId("documents-toggle");
-  await toggle.filter({ hasText: "문서 4" }).waitFor({ timeout: 15_000 });
+  await toggle.filter({ hasText: "문서 5" }).waitFor({ timeout: 15_000 });
   check("opening a thread collects its documents with the panel closed", gateway.receivedMethods.includes("akra/context/thread"));
-  await toggle.filter({ hasText: "문서 4 · 바뀜 1" }).waitFor({ timeout: 15_000 });
+  await toggle.filter({ hasText: "문서 5 · 바뀜 2" }).waitFor({ timeout: 15_000 });
   check("the version check runs after the list and the button shows the changed count", gateway.receivedMethods.indexOf("akra/context/refresh") > gateway.receivedMethods.indexOf("akra/context/thread"));
 
   await toggle.click();
   await page.getByTestId("documents-panel").waitFor({ timeout: 10_000 });
-  check("documents are grouped by kind in first-seen order", (await page.getByTestId("documents-group").allInnerTexts()).map((text) => text.split("\n")[0]).join("|") === "Jira (2)|Notion (1)|GitHub (1)");
+  check("documents are grouped by kind in first-seen order", (await page.getByTestId("documents-group").allInnerTexts()).map((text) => text.split("\n")[0]).join("|") === "Jira (2)|Notion (1)|GitHub (1)|Linear (1)");
   check("each document is a link to its URL", (await page.getByTestId("documents-item").first().getByRole("link").getAttribute("href")) === "https://sample.atlassian.net/browse/ABC-123");
   const changedItems = page.getByTestId("documents-item").filter({ has: page.getByTestId("documents-changed") });
-  check("only the changed document shows the mark", (await changedItems.allInnerTexts()).join("|").startsWith("sample/widgets PR #42"));
+  check("only the changed GitHub and Linear documents show the mark", await changedItems.count() === 2
+    && (await changedItems.allInnerTexts()).join("|").includes("sample/widgets PR #42")
+    && (await changedItems.allInnerTexts()).join("|").includes("AKR-1"));
 
-  console.log("--- documents panel text (one changed document) ---");
+  console.log("--- documents panel text (two changed documents) ---");
   console.log(await page.getByTestId("documents-panel").innerText());
   console.log("----------------------------");
 
   // 링크의 기본 동작(기본 브라우저 열기)은 막고 누른다. 읽음 처리는 그대로 일어난다.
   await page.evaluate(() => document.addEventListener("click", (event) => event.target instanceof Element && event.target.closest("a") && event.preventDefault(), true));
+  await changedItems.filter({ hasText: "AKR-1" }).getByRole("link").click();
+  await page.getByTestId("documents-item").filter({ hasText: "AKR-1" }).getByTestId("documents-changed").waitFor({ state: "detached", timeout: 10_000 });
+  check("reading Linear clears only its change mark", await changedItems.count() === 1 && (await changedItems.innerText()).includes("sample/widgets PR #42"));
   await changedItems.getByRole("link").click();
   await page.getByTestId("documents-changed").waitFor({ state: "detached", timeout: 10_000 });
   check("opening the changed document clears the mark", gateway.receivedMethods.includes("akra/context/markRead"));
   await toggle.click();
-  await toggle.filter({ hasText: /^문서 4$/ }).waitFor({ timeout: 10_000 });
+  await toggle.filter({ hasText: /^문서 5$/ }).waitFor({ timeout: 10_000 });
   check("the button no longer shows a changed count", true);
+  check("document checks use no reverse Desktop provider", !gateway.receivedMethods.some(method => method.startsWith("akra/resourceVersion/")));
   check("the panel never starts a turn", !gateway.receivedMethods.includes("turn/start"));
 } catch (error) {
   check(`flow finished without error (${String(error).split("\n")[0]})`, false);

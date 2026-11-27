@@ -6,7 +6,9 @@ use crate::application::port::outbound::provider_work_port::{
 };
 use crate::domain::provider_credentials::*;
 use crate::domain::provider_work::*;
-use crate::domain::work_context::{ExternalResourceRef, jira_resource_site};
+use crate::domain::work_context::{
+    ExternalResourceRef, jira_resource_site, linear_resource_key_for_url,
+};
 use std::sync::{Arc, Condvar, Mutex};
 
 #[derive(Default)]
@@ -289,6 +291,42 @@ impl ExternalResourceVersionPort for ProviderWorkService {
             .ok_or(ProviderCredentialError::NotConnected)?;
         self.jira_current_version(&active.reference, resource)
             .map_err(Into::into)
+    }
+}
+/// Linear uses the same Gateway credential authority as the Jira version provider.
+pub struct LinearResourceVersionProvider(pub Arc<ProviderWorkService>);
+
+impl ExternalResourceVersionPort for LinearResourceVersionProvider {
+    fn kind(&self) -> &'static str {
+        "linear"
+    }
+    fn available(&self, resource: &ExternalResourceRef) -> bool {
+        resource.kind == self.kind()
+            && linear_resource_key_for_url(&resource.url).as_deref() == Some(resource.key.as_str())
+            && self
+                .0
+                .credentials
+                .current_state(Provider::Linear)
+                .is_ok_and(|state| state.active_connection.is_some())
+    }
+    fn current_version(&self, resource: &ExternalResourceRef) -> anyhow::Result<String> {
+        if resource.kind != self.kind()
+            || linear_resource_key_for_url(&resource.url).as_deref() != Some(resource.key.as_str())
+        {
+            return Err(ProviderCredentialError::InvalidRequest.into());
+        }
+        let state = self.0.credentials.current_state(Provider::Linear)?;
+        let active = state
+            .active_connection
+            .ok_or(ProviderCredentialError::NotConnected)?;
+        ProviderWorkService::require_provider(&active.reference, Provider::Linear)?;
+        let lease = self.0.credentials.acquire(&active.reference)?;
+        let result = self
+            .0
+            .api
+            .linear_current_version(&lease.token, &resource.key);
+        self.0.credentials.validate_current(&active.reference)?;
+        result.map_err(Into::into)
     }
 }
 #[cfg(test)]

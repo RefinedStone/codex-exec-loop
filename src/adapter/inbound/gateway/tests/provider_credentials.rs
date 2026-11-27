@@ -122,6 +122,13 @@ impl ProviderWorkApiPort for Api {
     fn linear_assigned_issues(&self, _token: &SecretToken) -> CredentialResult<Vec<LinearIssue>> {
         Ok(vec![])
     }
+    fn linear_current_version(
+        &self,
+        _token: &SecretToken,
+        _resource_key: &str,
+    ) -> CredentialResult<String> {
+        Ok("2026-11-23T01:02:03.000Z".to_owned())
+    }
     fn linear_issue_prompt(&self, _token: &SecretToken, _id: &str) -> CredentialResult<String> {
         Ok(COMPANY_TEXT.to_owned())
     }
