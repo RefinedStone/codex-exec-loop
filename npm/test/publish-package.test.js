@@ -4,7 +4,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { windowsNpmInvocation } from "../scripts/publish-package.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const packageRoot = path.resolve(path.dirname(__filename), "..");
@@ -32,6 +33,7 @@ if (process.env.FAKE_NPM_RUNTIME_LOG) {
       cwd: process.cwd(),
       globalConfig,
       githubActions: process.env.GITHUB_ACTIONS,
+      inheritedNpmExecPath: process.env.npm_execpath,
       home: process.env.HOME,
       npmConfig,
       nodeAuthToken: process.env.NODE_AUTH_TOKEN,
@@ -205,9 +207,15 @@ function runPublisher({
     path.join(packageDir, "package.json"),
     JSON.stringify({ name: packageName, version, ...packageJsonExtras }),
   );
-  const npmPath = path.join(binDir, process.platform === "win32" ? "npm-fixture.cjs" : "npm");
+  const npmPath = path.join(binDir, "npm-fixture.cjs");
   fs.writeFileSync(npmPath, fakeNpm);
   fs.chmodSync(npmPath, 0o755);
+  const testEntry = path.join(root, "test-publisher.mjs");
+  fs.writeFileSync(testEntry,
+    'import { spawnSync } from "node:child_process"; ' +
+    'import { publishMain } from ' + JSON.stringify(pathToFileURL(publishScript).href) + '; ' +
+    'process.exitCode = publishMain(process.argv.slice(2), (args, runtime) => spawnSync(process.execPath, [' +
+    JSON.stringify(npmPath) + ', ...args], {cwd: runtime.cwd, env: runtime.env, encoding: "utf8"}));');
 
   const packageExists = [
     "existing-match",
@@ -233,7 +241,7 @@ function runPublisher({
   const result = spawnSync(
     process.execPath,
     [
-      publishScript,
+      testEntry,
       "--package-dir",
       packageDir,
       "--expected-version",
@@ -247,7 +255,7 @@ function runPublisher({
       env: {
         ...process.env,
         NODE_ENV: "test",
-        ...(process.platform === "win32" ? { npm_execpath: npmPath } : {}),
+        npm_execpath: path.join(root, "untrusted-pnpm.cjs"),
         PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
         NODE_AUTH_TOKEN: "fixture-token-must-not-be-printed",
         ACTIONS_ID_TOKEN_REQUEST_TOKEN: "fixture-oidc-token",
@@ -680,6 +688,7 @@ test("npm subprocesses ignore project, user, and inherited npm configuration", (
     assert.equal(fixture.result.status, 0, fixture.result.stderr);
     assert(fixture.runtimeRecords.length > 0);
     for (const record of fixture.runtimeRecords) {
+      assert.equal(record.inheritedNpmExecPath, undefined);
       assert.match(record.cwd, /akra-npm-pack-.*[/\\]runtime$/);
       assert.deepEqual(Object.keys(record.npmConfig).sort(), [
         "NPM_CONFIG_CACHE",
@@ -739,4 +748,37 @@ test("publication rejects registry, tag, access, and unknown publishConfig overr
       fixture.cleanup();
     }
   }
+});
+
+test("Windows npm selection is tied to Node, not an inherited package manager", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "akra-npm-install-"));
+  const previous = process.env.npm_execpath;
+  try {
+    const node = path.join(root, "node.exe");
+    const npmRoot = path.join(root, "node_modules", "npm");
+    const cli = path.join(npmRoot, "bin", "npm-cli.js");
+    fs.mkdirSync(path.dirname(cli), { recursive: true });
+    fs.writeFileSync(node, "");
+    fs.writeFileSync(cli, "");
+    fs.writeFileSync(path.join(npmRoot, "package.json"), '{"name":"npm"}');
+    const poison = path.join(root, "pnpm.cjs");
+    fs.writeFileSync(poison, "throw new Error('not npm')");
+    process.env.npm_execpath = poison;
+    const invocation = windowsNpmInvocation(["--version"], node);
+    assert.equal(invocation.executable, fs.realpathSync(node));
+    assert.deepEqual(invocation.args, [path.join(path.dirname(fs.realpathSync(node)), "node_modules", "npm", "bin", "npm-cli.js"), "--version"]);
+    fs.writeFileSync(path.join(npmRoot, "package.json"), '{"name":"pnpm"}');
+    assert.throws(() => windowsNpmInvocation([], node), /unavailable/);
+  } finally {
+    if (previous === undefined) delete process.env.npm_execpath;
+    else process.env.npm_execpath = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Windows installed npm CLI supports a real version probe", { skip: process.platform !== "win32" }, () => {
+  const invocation = windowsNpmInvocation(["--version"]);
+  const result = spawnSync(invocation.executable, invocation.args, { encoding: "utf8", timeout: 15000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout.trim(), /^\d+\.\d+\.\d+/);
 });

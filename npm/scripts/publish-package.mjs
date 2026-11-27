@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const REGISTRY = "https://registry.npmjs.org";
 const PACKAGE_NAME = "@refinedstone/akra";
@@ -139,7 +140,7 @@ function readPackage(packageDir, tag, expectedVersion) {
   return packageJson;
 }
 
-function createNpmRuntime(tempDir) {
+function createNpmRuntime(tempDir, runner) {
   const runtimeDir = path.join(tempDir, "runtime");
   const cacheDir = path.join(runtimeDir, "cache");
   const projectConfigPath = path.join(runtimeDir, ".npmrc");
@@ -163,7 +164,7 @@ function createNpmRuntime(tempDir) {
 
   const env = {};
   for (const [name, value] of Object.entries(process.env)) {
-    if (!name.toUpperCase().startsWith("NPM_CONFIG_")) {
+    if (!name.toUpperCase().startsWith("NPM_CONFIG_") && name.toUpperCase() !== "NPM_EXECPATH") {
       env[name] = value;
     }
   }
@@ -174,28 +175,34 @@ function createNpmRuntime(tempDir) {
     NPM_CONFIG_UPDATE_NOTIFIER: "false",
     NPM_CONFIG_USERCONFIG: userConfigPath,
   });
-  return { cwd: runtimeDir, env };
+  return { cwd: runtimeDir, env, runner };
 }
 
-function runNpm(args, runtime) {
-  // Windows npm is normally a .cmd shim, which cannot be spawned directly.
-  // Use the Node CLI entrypoint rather than enabling shell interpolation.
-  let executable = "npm";
-  let commandArgs = args;
-  if (process.platform === "win32") {
-    const cli = runtime.env.npm_execpath || path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
-    if (!path.isAbsolute(cli) || !/\.(?:[cm]?js)$/i.test(cli) || !fs.statSync(cli, { throwIfNoEntry: false })?.isFile()) {
-      throw new Error("Windows npm CLI entrypoint is unavailable; invoke through npm or install its Node CLI");
-    }
-    executable = process.execPath;
-    commandArgs = [cli, ...args];
+// Resolve only npm shipped alongside the running Node installation.
+// npm_execpath is inherited environment, not a trusted CLI selector.
+export function windowsNpmInvocation(args, nodeExecutable = process.execPath) {
+  const executable = fs.realpathSync(nodeExecutable);
+  const npmRoot = path.join(path.dirname(executable), "node_modules", "npm");
+  const cli = path.join(npmRoot, "bin", "npm-cli.js");
+  if (!fs.statSync(cli, { throwIfNoEntry: false })?.isFile()
+      || JSON.parse(fs.readFileSync(path.join(npmRoot, "package.json"), "utf8")).name !== "npm") {
+    throw new Error("Windows npm CLI entrypoint is unavailable in the Node installation");
   }
-  return spawnSync(executable, commandArgs, {
+  return { executable, args: [cli, ...args] };
+}
+
+function runInstalledNpm(args, runtime) {
+  const invocation = process.platform === "win32" ? windowsNpmInvocation(args) : { executable: "npm", args };
+  return spawnSync(invocation.executable, invocation.args, {
     cwd: runtime.cwd,
     encoding: "utf8",
     env: runtime.env,
     maxBuffer: 10 * 1024 * 1024,
   });
+}
+
+function runNpm(args, runtime) {
+  return runtime.runner(args, runtime);
 }
 
 function npmFailure(result, operation) {
@@ -534,13 +541,13 @@ function reconcileDistTag(tag, requestedVersion, runtime) {
   );
 }
 
-function publishPackage(packageDir, tag, expectedVersion) {
+function publishPackage(packageDir, tag, expectedVersion, runner) {
   const packageJson = readPackage(packageDir, tag, expectedVersion);
   const spec = `${packageJson.name}@${packageJson.version}`;
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "akra-npm-pack-"));
 
   try {
-    const runtime = createNpmRuntime(tempDir);
+    const runtime = createNpmRuntime(tempDir, runner);
     const { integrity: localIntegrity, tarballPath } = packPackage(
       packageDir,
       tempDir,
@@ -596,15 +603,20 @@ function publishPackage(packageDir, tag, expectedVersion) {
   }
 }
 
-try {
-  const args = parseArgs(process.argv.slice(2));
-  publishPackage(
-    path.resolve(args.packageDir),
-    args.tag,
-    args.expectedVersion,
-  );
-} catch (error) {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(`publish-package: ${message}`);
-  process.exitCode = 1;
+// Tests may supply a runner explicitly in-process. The CLI always uses the
+// installed npm; no environment flag enables the test runner.
+export function publishMain(argv, runner = runInstalledNpm) {
+  try {
+    const args = parseArgs(argv);
+    publishPackage(path.resolve(args.packageDir), args.tag, args.expectedVersion, runner);
+    return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("publish-package: " + message);
+    return 1;
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  process.exitCode = publishMain(process.argv.slice(2));
 }
