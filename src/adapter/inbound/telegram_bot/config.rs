@@ -382,14 +382,33 @@ fn same_unix_config_version(left: &std::fs::Metadata, right: &std::fs::Metadata)
 }
 
 #[cfg(windows)]
-struct WindowsTelegramConfigParentAnchor {
-    path: PathBuf,
-    file: std::fs::File,
-    identity: crate::private_fs::WindowsFileIdentitySnapshot,
-}
+mod windows_ancestors;
+
+#[cfg(windows)]
+use windows_ancestors::open_windows_telegram_config_parent_anchors;
 
 #[cfg(windows)]
 fn read_private_windows_telegram_environment_file(path: &std::path::Path) -> Result<String> {
+    read_validated_windows_telegram_environment_file(path, read_bounded_utf8_config)
+}
+
+#[cfg(all(test, windows))]
+pub(super) fn read_windows_telegram_environment_file_after_read(
+    path: &std::path::Path,
+    after_read: impl FnOnce(),
+) -> Result<String> {
+    read_validated_windows_telegram_environment_file(path, |file| {
+        let body = read_bounded_utf8_config(file)?;
+        after_read();
+        Ok(body)
+    })
+}
+
+#[cfg(windows)]
+fn read_validated_windows_telegram_environment_file(
+    path: &std::path::Path,
+    read_body: impl FnOnce(&mut std::fs::File) -> Result<String>,
+) -> Result<String> {
     use std::os::windows::fs::OpenOptionsExt;
 
     use crate::private_fs::{
@@ -412,7 +431,7 @@ fn read_private_windows_telegram_environment_file(path: &std::path::Path) -> Res
     validate_windows_private_owner_and_acl(path, &file)
         .context("Windows Telegram config must have a protected current-user-only DACL")?;
     let file_identity = windows_file_identity_snapshot(&file)?;
-    let body = read_bounded_utf8_config(&mut file)?;
+    let body = read_body(&mut file)?;
     validate_windows_identity_snapshot(file_identity, &file, false)
         .context("Windows Telegram config changed while being read")?;
     validate_windows_path_identity_only(path, &file, false)
@@ -420,83 +439,22 @@ fn read_private_windows_telegram_environment_file(path: &std::path::Path) -> Res
     validate_windows_private_owner_and_acl(path, &file)
         .context("Windows Telegram config security changed while being read")?;
     for anchor in &parent_anchors {
-        validate_windows_identity_snapshot(anchor.identity, &anchor.file, true).with_context(
-            || {
-                format!(
-                    "Windows Telegram config parent changed while reading: {}",
-                    anchor.path.display()
-                )
-            },
-        )?;
-        validate_windows_path_identity_only(&anchor.path, &anchor.file, true).with_context(
-            || {
-                format!(
-                    "Windows Telegram config parent path changed or became a reparse point: {}",
-                    anchor.path.display()
-                )
-            },
-        )?;
+        anchor.validate()?;
     }
     Ok(body)
 }
 
-#[cfg(windows)]
-fn open_windows_telegram_config_parent_anchors(
+#[cfg(all(test, windows))]
+pub(super) fn validate_windows_telegram_config_parents_after_change(
     path: &std::path::Path,
-) -> Result<Vec<WindowsTelegramConfigParentAnchor>> {
-    use std::os::windows::fs::OpenOptionsExt;
-
-    use crate::private_fs::{
-        WINDOWS_FILE_FLAG_BACKUP_SEMANTICS, WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT,
-        WINDOWS_FILE_SHARE_ALL, WINDOWS_GENERIC_READ, WINDOWS_READ_CONTROL,
-        validate_windows_path_identity, validate_windows_path_identity_only,
-        windows_file_identity_snapshot,
-    };
-
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow!("Windows Telegram config path has no parent"))?;
-    let mut paths = parent.ancestors().collect::<Vec<_>>();
-    paths.reverse();
-    let mut anchors = Vec::with_capacity(paths.len());
-    for parent_path in paths {
-        if parent_path.as_os_str().is_empty() {
-            continue;
-        }
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .access_mode(WINDOWS_GENERIC_READ | WINDOWS_READ_CONTROL)
-            .share_mode(WINDOWS_FILE_SHARE_ALL)
-            .custom_flags(WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT | WINDOWS_FILE_FLAG_BACKUP_SEMANTICS)
-            .open(parent_path)
-            .with_context(|| {
-                format!(
-                    "failed to securely open Windows Telegram config parent {}",
-                    parent_path.display()
-                )
-            })?;
-        validate_windows_path_identity_only(parent_path, &file, true).with_context(|| {
-            format!(
-                "Windows Telegram config parent must not be a junction or reparse point: {}",
-                parent_path.display()
-            )
-        })?;
-        if parent_path == parent {
-            validate_windows_path_identity(parent_path, &file, true).with_context(|| {
-                format!(
-                    "Windows Telegram config parent must be owned by the current user: {}",
-                    parent_path.display()
-                )
-            })?;
-        }
-        let identity = windows_file_identity_snapshot(&file)?;
-        anchors.push(WindowsTelegramConfigParentAnchor {
-            path: parent_path.to_path_buf(),
-            file,
-            identity,
-        });
+    change: impl FnOnce(),
+) -> Result<()> {
+    let anchors = open_windows_telegram_config_parent_anchors(path)?;
+    change();
+    for anchor in anchors {
+        anchor.validate()?;
     }
-    Ok(anchors)
+    Ok(())
 }
 
 pub(super) fn load_environment_from_sources(
