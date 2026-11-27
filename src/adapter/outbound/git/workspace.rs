@@ -27,15 +27,8 @@ use crate::{git_execution_guard, git_subprocess, subprocess};
 
 mod conversation_worktree;
 
-/// git 폴더 안의 이 파일이나 폴더가 있으면 그 작업이 끝나지 않았다.
-pub(super) const IN_PROGRESS_MARKERS: &[(&str, &str)] = &[
-    ("rebase-merge", "rebase"),
-    ("rebase-apply", "rebase"),
-    ("MERGE_HEAD", "merge"),
-    ("CHERRY_PICK_HEAD", "cherry-pick"),
-    ("REVERT_HEAD", "revert"),
-    ("BISECT_LOG", "bisect"),
-];
+use super::progress_markers::IN_PROGRESS_MARKERS;
+
 /// git 이 실패했을 때 올리는 글의 길이이다.
 const FAILURE_TEXT_LIMIT: usize = 600;
 /// `.gitattributes` 에서 필터를 정하는 글이다.
