@@ -768,7 +768,7 @@ export class KernelConnection {
     if (!event || this.store.getKernel().phase !== "attached") return;
     this.eventCounts.set(event.type, (this.eventCounts.get(event.type) ?? 0) + 1);
     if (["resync", "issue_decision", "issues", "planning", "parallel", "thread_activity", "auto_follow"].includes(event.type)
-      || (event.type === "recorded" && /^(issue_|criterion_|task_|planning_)/.test(event.event.kind))) {
+      || (event.type === "recorded" && /^(issue_|criterion_|task_|planning_|turn_started$|turn_ended$)/.test(event.event.kind))) {
       this.scheduleAttentionRead();
     }
     if (event.type === "resync") {

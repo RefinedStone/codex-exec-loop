@@ -592,7 +592,11 @@ export function App() {
   const selectedRegistered = registeredPanel(panel);
   useEffect(() => { if (panel !== "akra.storage-analysis") clearStorageEvidence(); }, [panel]);
   const extensionWorkspace = view === "thread" ? openCwd : view === "home" ? homeCwd : null;
-  const defaultWorkspace = view === "home" && homeCwd ? homeCwd : openCwd;
+  const [fleetWorkspace, setFleetWorkspace] = useState<string | null>(null);
+  const [attentionPr, setAttentionPr] = useState<{workspace: string; number: string} | null>(null);
+  useEffect(() => { if (panel !== "kernel") setAttentionPr(null); }, [panel]);
+  const defaultWorkspace = view === "fleet" ? fleetWorkspace ?? openCwd ?? homeCwd
+    : view === "home" && homeCwd ? homeCwd : openCwd;
   const kernelWorkspace = selectedExtension?.scope === "repository" || overlay === "settings" ? extensionWorkspace
     : panel === "issues" && issueAttentionTarget ? issueAttentionTarget.workspace
     : panel === "delegation" && delegationEnabled ? delegationWorkspace
@@ -601,7 +605,7 @@ export function App() {
     : panel === "issues" ? "issues" : panel === "kernel" ? "overview" : "issue_attention";
   const kernelPhase = useDesktopStore((state) => state.kernel.phase);
   const attachedWorkspace = useDesktopStore((state) => state.kernel.workspace);
-  const [taskEditor, setTaskEditor] = useState<{ workspace: string; source?: TaskDraftSource } | null>(null);
+  const [taskEditor, setTaskEditor] = useState<{ workspace: string; source?: TaskDraftSource; initialTaskId?: string } | null>(null);
   const openTaskEditor = useCallback((source?: TaskDraftSource) => {
     const current = useDesktopStore.getState();
     if (!session.current || !attachedWorkspace || kernelPhase !== "attached"
@@ -913,7 +917,24 @@ export function App() {
             {/* 본문 보기만 확대한다. 터미널은 자기 배율을 글자 크기로 쓰므로 이 칸 밖에 둔다. */}
             <div className="main-view" style={zoomStyle(bodyZoom)} data-zoom-scope={view}>
             {view === "home" && <Home actions={composerActions} onChooseFolder={() => window.akra.chooseFolder()} onOpenThread={openThread} />}
-            {view === "fleet" && <Fleet onOpenThread={openThread} />}
+            {view === "fleet" && <Fleet onOpenThread={openThread} workspace={defaultWorkspace} onWorkspace={setFleetWorkspace} onOpenItem={item => {
+              const kernel = useDesktopStore.getState().kernel;
+              if (kernel.phase !== "attached" || !kernel.workspace || kernel.workspace !== defaultWorkspace || !kernel.kernel || !kernel.attentionItems?.some(entry => entry.id === item.id)) {
+                toast("현재 응답 필요 항목을 다시 읽어 주세요."); return;
+              }
+              switch (item.subject.kind) {
+                case "thread": openThread(item.subject.id); return;
+                case "task": setTaskEditor({workspace: kernel.workspace, initialTaskId: item.subject.id}); return;
+                case "issue_decision": {
+                  const target = item.subject.issue ? { workspace: kernel.workspace, kernel: kernel.kernel, decisionId: item.subject.id, issue: item.subject.issue }
+                    : kernel.issueAttention.find(entry => entry.decisionId === item.subject.id);
+                  if (!target) { toast(`결정 ${item.subject.id}의 이슈 위치를 확인하지 못했습니다.`); return; }
+                  setIssueAttentionTarget(target); openPanel("issues"); return;
+                }
+                case "pull_request": setAttentionPr({workspace:kernel.workspace, number:item.subject.id}); openPanel("kernel"); return;
+                case "repository": setAttentionPr(null); openPanel("kernel"); return;
+              }
+            }} />}
             {view === "thread" && (
               <>
                 <WriterElsewhereBanner onReconnect={async () => session.current?.reopenThread()} onFork={forkOpenThread} />
@@ -978,7 +999,7 @@ export function App() {
                   onOpenThread={openThread}
                 />
               )}
-              {panel === "kernel" && <KernelPanel onRefresh={async () => session.current?.refreshKernel()}
+              {panel === "kernel" && <KernelPanel attentionPr={attentionPr?.workspace === kernelWorkspace ? attentionPr.number : null} onRefresh={async () => session.current?.refreshKernel()}
                 onSetParallelEnabled={async (enabled) => session.current?.setParallelEnabled(enabled)} onOpenThread={openThread}
                 onEditTasks={() => openTaskEditor()}
                 onRequestVerification={async (target) => session.current?.requestTaskVerification(target)}
@@ -1032,7 +1053,7 @@ export function App() {
         if (path) { showView("home"); useUiStore.setState({ homeCwd: path }); }
       }}/>}
       <ZoomNotice />
-      {taskEditor && session.current && <TaskEditor key={taskEditor.workspace}
+      {taskEditor && session.current && <TaskEditor key={taskEditor.workspace} initialTaskId={taskEditor.initialTaskId}
         workspace={taskEditor.workspace} source={taskEditor.source} controller={session.current.taskAuthoring}
         onClose={() => setTaskEditor(null)} onSaved={() => { void session.current?.refreshKernel(); }} />}
       <McpWriteApprovals onAnswer={async (id, approve) => session.current?.answerMcpWrite(id, approve)} />

@@ -25,9 +25,10 @@ const STATUS_LABEL = {
   cancelled: "취소", awaiting_user: "사용자 응답 대기", proposed: "제안",
 };
 
-export function TaskEditor({ workspace, source, controller, onClose, onSaved }: {
+export function TaskEditor({ workspace, source, initialTaskId, controller, onClose, onSaved }: {
   workspace: string;
   source?: TaskDraftSource;
+  initialTaskId?: string;
   controller: TaskAuthoringController;
   onClose(): void;
   onSaved(): void;
@@ -36,7 +37,7 @@ export function TaskEditor({ workspace, source, controller, onClose, onSaved }: 
   const alive = useRef(true);
   const saving = useRef(false);
   const [snapshot, setSnapshot] = useState<TaskListAnswer | null>(null);
-  const [taskId, setTaskId] = useState<string | null>(null);
+  const [taskId, setTaskId] = useState<string | null>(initialTaskId ?? null);
   const [lookupId, setLookupId] = useState("");
   const [fields, setFields] = useState<TaskFields>(() => draftFields(source));
   const [busy, setBusy] = useState(false);
@@ -52,14 +53,9 @@ export function TaskEditor({ workspace, source, controller, onClose, onSaved }: 
   useEffect(() => {
     alive.current = true;
     dialog.current?.showModal();
-    void controller.read(workspace).then((answer) => {
-      if (!alive.current) return;
-      setSnapshot(answer);
-    }).catch((failure: unknown) => {
-      if (alive.current) setError(failure instanceof Error ? failure.message : String(failure));
-    }).finally(() => { if (alive.current) setReading(false); });
+    void readTask(initialTaskId ?? null);
     return () => { alive.current = false; };
-  }, [controller, workspace]);
+  }, [controller, workspace, initialTaskId]);
 
   async function readTask(id: string | null): Promise<void> {
     setReading(true);

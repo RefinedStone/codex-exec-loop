@@ -267,7 +267,8 @@ function KernelBody({
   );
 }
 
-export function KernelPanel({ onRefresh, onSetParallelEnabled, onOpenThread, onEditTasks, onRequestVerification, onWaiveCriterion }: {
+export function KernelPanel({ attentionPr, onRefresh, onSetParallelEnabled, onOpenThread, onEditTasks, onRequestVerification, onWaiveCriterion }: {
+  attentionPr?: string | null;
   onRefresh(): Promise<void>;
   onSetParallelEnabled(enabled: boolean): Promise<void>;
   onOpenThread(threadId: string): void;
@@ -276,6 +277,7 @@ export function KernelPanel({ onRefresh, onSetParallelEnabled, onOpenThread, onE
   const kernel = useDesktopStore((state) => state.kernel);
   const folders = useDesktopStore((state) => state.folders);
   const [refreshing, setRefreshing] = useState(false);
+  const validation = kernel.phase === "attached" ? kernel.parallel?.supervisor?.pr_validation : null;
   const threadTitle = (threadId: string) =>
     folders.flatMap((folder) => folder.threads).find((thread) => thread.id === threadId)?.title ?? threadId;
   const refresh = () => {
@@ -298,6 +300,12 @@ export function KernelPanel({ onRefresh, onSetParallelEnabled, onOpenThread, onE
           {refreshing ? "읽는 중…" : "새로 고침"}
         </button>
       </div>
+      {attentionPr && <section className="work-section" aria-live="polite" data-testid="attention-pr-target">
+        <h3>PR #{attentionPr} 검증</h3>
+        {validation && String(validation.pull_request_number) === attentionPr
+          ? <p>{validation.state} · {validation.phase} · {validation.blocker ?? validation.reason}</p>
+          : <p>현재 이 PR의 검증 기록을 확인하지 못했습니다.</p>}
+      </section>}
       <KernelBody kernel={kernel} threadTitle={threadTitle} onSetParallelEnabled={onSetParallelEnabled} onOpenThread={onOpenThread} onRequestVerification={onRequestVerification} onWaiveCriterion={onWaiveCriterion} />
     </aside>
   );
