@@ -182,3 +182,32 @@ test("complete member validation runs an empty harness and refuses an unproven c
     return {status:0, stdout:"custom harness output\n"};
   }}), /Unsupported libtest inventory/);
 });
+
+test("root-local moves preserve their exact old prefix and explicit target semantics", () => {
+  const transfer = [{owner:"akra-ade",oldTestPrefix:"domain::automation::timeline::",
+    newTestPrefix:"application::timeline::"}];
+  const item = {...prepared[0], inventory:[
+    "domain::automation::state::kept", "application::timeline::one", "application::timeline::two",
+    "application::timeline::helper", "application::other::unrelated", "domain::other::unrelated",
+  ], ignored:["application::timeline::helper"]};
+  const groups = planContractFilters([item], ["domain::automation::timeline::"], transfer);
+  assert.equal(groups.length, 1);
+  assert.deepEqual(groups[0].names, ["application::timeline::one", "application::timeline::two"]);
+  assert.deepEqual(groups[0].args, ["application::timeline::", "--nocapture"]);
+  assert.throws(() => planContractFilters([item], ["domain::automation::"], transfer), /process-per-filter/);
+  assert.throws(() => planContractFilters([item],
+    ["domain::automation::timeline::", "application::timeline::"], transfer), /twice/);
+  assert.throws(() => planContractFilters([item], ["domain::automation::timeline::"], transfer, true), /no non-ignored/);
+  assert.equal(planContractFilters([item], ["application::timeline::"], transfer, true)[0].names.length, 2);
+});
+
+test("root-local relocation refuses a union that would add unrelated tests", () => {
+  const transfer = [{owner:"akra-ade",oldTestPrefix:"domain::automation::",
+    newTestPrefix:"application::timeline::"}];
+  const item = {...prepared[0], inventory:[
+    "domain::automation::selected::one", "application::timeline::selected::two",
+    "application::timeline::unrelated", "domain::automation::unrelated",
+  ], ignored:[]};
+  // Only part of the moved prefix belongs to this old contract.
+  assert.throws(() => planContractFilters([item], ["domain::automation::selected::"], transfer), /process-per-filter/);
+});

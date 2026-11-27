@@ -23,6 +23,9 @@ pub(crate) use issue_binding_pause::sample_issue_binding_pause_event;
 mod issue_feedback;
 pub use issue_feedback::{IssueClosureRecordOrigin, IssueFeedbackRecordAction};
 
+mod issue_scope;
+pub use issue_scope::issue_event_matches;
+
 mod issue_decision;
 pub use issue_decision::{
     IssueDecisionBasisRecord, IssueDecisionFactRecord, IssueDecisionGateRecord,
