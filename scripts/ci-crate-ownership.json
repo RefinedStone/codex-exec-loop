@@ -1157,6 +1157,71 @@
       "ignored": "preserve",
       "retainedRoot": "Execution orchestration, reservation/lease/authority checks, binding, and the existing integration capture tests",
       "addedTestPrefix": "service::capture::tests::"
+    },
+    {
+      "source": "src/domain/issue_automation/timeline.rs",
+      "destination": "src/application/service/issue_timeline.rs",
+      "additionalDestinations": [
+        "src/domain/kernel_event/issue_scope.rs"
+      ],
+      "owner": "akra-ade",
+      "kind": "production-and-unit-tests",
+      "oldTestPrefix": "domain::issue_automation::timeline::tests::",
+      "newTestPrefix": "application::service::issue_timeline::tests::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve",
+      "retained": [
+        "IssueTimelineProjection",
+        "IssueTimelineEntry",
+        "ISSUE_TIMELINE_LIMIT",
+        "ISSUE_TIMELINE_READ_LIMIT"
+      ],
+      "testOwnership": {
+        "moved": [
+          {
+            "oldName": "domain::issue_automation::timeline::tests::issue_timeline_matches_all_coordinates_in_regular_and_decision_events",
+            "newName": "application::service::issue_timeline::tests::issue_timeline_matches_all_coordinates_in_regular_and_decision_events",
+            "ignored": false,
+            "attributes": []
+          },
+          {
+            "oldName": "domain::issue_automation::timeline::tests::issue_timeline_merges_persisted_and_recent_records_before_taking_twenty",
+            "newName": "application::service::issue_timeline::tests::issue_timeline_merges_persisted_and_recent_records_before_taking_twenty",
+            "ignored": false,
+            "attributes": []
+          },
+          {
+            "oldName": "domain::issue_automation::timeline::tests::issue_timeline_twenty_records_and_duplicates_do_not_claim_older_history",
+            "newName": "application::service::issue_timeline::tests::issue_timeline_twenty_records_and_duplicates_do_not_claim_older_history",
+            "ignored": false,
+            "attributes": []
+          },
+          {
+            "oldName": "domain::issue_automation::timeline::tests::issue_timeline_conflicting_sequence_is_unavailable_even_across_issue_coordinates",
+            "newName": "application::service::issue_timeline::tests::issue_timeline_conflicting_sequence_is_unavailable_even_across_issue_coordinates",
+            "ignored": false,
+            "attributes": []
+          },
+          {
+            "oldName": "domain::issue_automation::timeline::tests::issue_timeline_summary_distinguishes_external_close_without_exposing_provider_metadata",
+            "newName": "application::service::issue_timeline::tests::issue_timeline_summary_distinguishes_external_close_without_exposing_provider_metadata",
+            "ignored": false,
+            "attributes": []
+          },
+          {
+            "oldName": "domain::issue_automation::timeline::tests::issue_timeline_execution_summary_keeps_execution_and_verification_counts_separate",
+            "newName": "application::service::issue_timeline::tests::issue_timeline_execution_summary_keeps_execution_and_verification_counts_separate",
+            "ignored": false,
+            "attributes": []
+          }
+        ],
+        "retained": []
+      }
     }
   ],
   "nativeCandidates": [

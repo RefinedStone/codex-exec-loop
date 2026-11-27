@@ -212,3 +212,51 @@ fn issue_timeline_execution_summary_keeps_execution_and_verification_counts_sepa
         "PR 검증을 진행 중입니다. 실행 2회 · 검증 7회",
     );
 }
+
+#[test]
+fn issue_timeline_replays_frozen_journal_with_the_same_event_tags_revisions_and_states() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/issue_automation_timeline_journal_v1.json"
+    ))
+    .unwrap();
+    let records = fixture
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|record| {
+            let event: KernelEvent = serde_json::from_value(record["event"].clone()).unwrap();
+            assert_eq!(serde_json::to_value(&event).unwrap(), record["event"]);
+            RecordedKernelEvent {
+                sequence: record["sequence"].as_i64().unwrap(),
+                recorded_at: record["recorded_at"].as_str().unwrap().into(),
+                event,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let restored = project_issue_timeline(&issue(), &records, std::iter::empty());
+    assert_eq!(
+        project_issue_timeline(&issue(), &records[..2], records.iter().skip(1)),
+        restored,
+        "replayed durable records and recent duplicates must produce the same timeline"
+    );
+    let IssueTimelineProjection::Ready { entries, has_older } = restored else {
+        panic!("the frozen journal remains readable");
+    };
+    assert!(!has_older);
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.sequence)
+            .collect::<Vec<_>>(),
+        [7, 8, 9]
+    );
+    assert_eq!(entries[0].kind, "issue_tracked");
+    assert_eq!(entries[1].kind, "issue_work_permit_revoked");
+    assert_eq!(entries[2].kind, "issue_execution_progressed");
+    assert_eq!(entries[1].summary, "기존 작업 허가를 철회했습니다.");
+    assert_eq!(
+        entries[2].summary,
+        "검증 결과를 다시 확인해야 합니다. 실행 2회 · 검증 7회"
+    );
+}

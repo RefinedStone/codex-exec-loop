@@ -1,8 +1,9 @@
 use anyhow::{Context, Result, bail};
 use rusqlite::params;
 
-use crate::domain::issue_automation::timeline::{ISSUE_TIMELINE_READ_LIMIT, issue_event_matches};
+use crate::domain::issue_automation::timeline::ISSUE_TIMELINE_READ_LIMIT;
 use crate::domain::issue_work::IssueReference;
+use crate::domain::kernel_event::issue_event_matches;
 use crate::domain::kernel_event::{IssueEventReference, KernelEvent, RecordedKernelEvent};
 
 use super::super::SqlitePlanningAuthorityAdapter;
