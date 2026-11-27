@@ -17,6 +17,91 @@ pub enum ContextPreference {
     Exclude,
 }
 
+/// Only coordinates and observed versions are retained. Never store document bodies,
+/// restored Vault text, titles or URLs (which can contain credentials).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContextManifestEntry {
+    pub kind: String,
+    pub key: String,
+    pub selected: bool,
+    pub reason: String,
+    pub observed_version: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContextManifest {
+    pub id: String,
+    pub scope_id: String,
+    pub entries: Vec<ContextManifestEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextManifestComparison {
+    pub manifest: ContextManifest,
+    pub previous_id: Option<String>,
+    /// A different selection/version was observed in the ledger; no provider freshness is claimed.
+    pub changed: bool,
+    pub unverified_count: usize,
+}
+
+impl ContextManifest {
+    pub fn capture(
+        scope_id: String,
+        mut entries: Vec<ContextManifestEntry>,
+    ) -> anyhow::Result<Self> {
+        use sha2::{Digest, Sha256};
+        anyhow::ensure!(entries.len() <= 256, "too many manifest entries");
+        entries.sort_by(|a, b| (&a.kind, &a.key).cmp(&(&b.kind, &b.key)));
+        anyhow::ensure!(
+            !entries
+                .windows(2)
+                .any(|pair| pair[0].kind == pair[1].kind && pair[0].key == pair[1].key),
+            "duplicate manifest entry"
+        );
+        let bytes = serde_json::to_vec(&(&scope_id, &entries))?;
+        anyhow::ensure!(bytes.len() <= 1024 * 1024, "manifest exceeds storage limit");
+        let id = format!("{:x}", Sha256::digest(bytes));
+        Ok(Self {
+            id,
+            scope_id,
+            entries,
+        })
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            *self == Self::capture(self.scope_id.clone(), self.entries.clone())?,
+            "manifest identity mismatch"
+        );
+        Ok(())
+    }
+
+    pub fn compare(self, previous: Option<&Self>) -> anyhow::Result<ContextManifestComparison> {
+        self.validate()?;
+        if let Some(previous) = previous {
+            previous.validate()?;
+            anyhow::ensure!(
+                previous.scope_id == self.scope_id,
+                "manifest scope mismatch"
+            );
+        }
+        let unverified_count = self
+            .entries
+            .iter()
+            .filter(|entry| entry.selected && entry.observed_version.is_none())
+            .count();
+        Ok(ContextManifestComparison {
+            changed: previous.is_some_and(|old| old.id != self.id),
+            previous_id: previous.map(|old| old.id.clone()),
+            manifest: self,
+            unverified_count,
+        })
+    }
+}
+
 /// 장부에 남기는 제목 힌트의 최대 길이이다.
 const TITLE_HINT_MAX_CHARS: usize = 120;
 

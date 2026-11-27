@@ -18,8 +18,9 @@ use crate::application::port::outbound::work_context_store_port::{
     WORK_CONTEXT_SCOPE_THREAD, WorkContextLink, WorkContextStorePort,
 };
 use crate::domain::work_context::{
-    ContextPreference, ExternalResourceRecognizer, ExternalResourceRef,
-    external_resource_recognizers, extract_external_resources, normalize_repository_path,
+    ContextManifest, ContextManifestComparison, ContextManifestEntry, ContextPreference,
+    ExternalResourceRecognizer, ExternalResourceRef, external_resource_recognizers,
+    extract_external_resources, normalize_repository_path,
 };
 
 /// 스레드 id 와 작업 id 는 장부의 키이다. app-server 의 id 는 짧은 UUID 이다.
@@ -343,6 +344,57 @@ fn attached_resource(
 }
 
 impl WorkContextPort for WorkContextService {
+    fn capture_manifest(
+        &self,
+        request: &ContextSelectionRequest,
+        previous_id: Option<&str>,
+    ) -> Result<ContextManifestComparison> {
+        use sha2::{Digest, Sha256};
+        let identity = self
+            .repository_identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("repository scopes are not available"))?;
+        let repository = identity.repository_identity(&request.cwd)?;
+        let entries = self.select_resources(request)?;
+        let paths: BTreeSet<_> = request
+            .paths
+            .iter()
+            .map(|path| normalize_repository_path(path))
+            .collect::<Result<_>>()?;
+        let scope_id = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&(&repository, &request.task_id, paths))?)
+        );
+        let manifest = ContextManifest::capture(
+            scope_id,
+            entries
+                .into_iter()
+                .map(|entry| ContextManifestEntry {
+                    kind: entry.resource.kind,
+                    key: entry.resource.key,
+                    selected: entry.selected,
+                    reason: entry.reason.to_owned(),
+                    observed_version: entry.resource.current_version,
+                })
+                .collect(),
+        )?;
+        let previous = previous_id
+            .map(|id| {
+                anyhow::ensure!(
+                    id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit()),
+                    "invalid manifest id"
+                );
+                self.store
+                    .load_manifest(&repository, id)?
+                    .ok_or_else(|| anyhow::anyhow!("manifest not found in this repository"))
+            })
+            .transpose()?;
+        let comparison = manifest.compare(previous.as_ref())?;
+        self.store
+            .save_manifest(&repository, &comparison.manifest)?;
+        Ok(comparison)
+    }
+
     fn select_resources(
         &self,
         request: &ContextSelectionRequest,

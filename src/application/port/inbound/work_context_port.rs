@@ -1,4 +1,4 @@
-use crate::domain::work_context::ContextPreference;
+use crate::domain::work_context::{ContextManifestComparison, ContextPreference};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
@@ -74,6 +74,15 @@ pub struct ContextSelectionEntry {
 }
 
 pub trait WorkContextPort: Send + Sync {
+    /// Capture the current ledger selection separately from discovery, reading or delivery.
+    fn capture_manifest(
+        &self,
+        _request: &ContextSelectionRequest,
+        _previous_id: Option<&str>,
+    ) -> Result<ContextManifestComparison> {
+        anyhow::bail!("context manifests are unavailable")
+    }
+
     fn select_resources(
         &self,
         request: &ContextSelectionRequest,
