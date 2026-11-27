@@ -564,6 +564,7 @@ export function App() {
       return session.current;
     };
     return {
+      candidate: (threadId) => session.current?.titleCandidate(threadId),
       rename: async (threadId, name) => live().renameThread(threadId, name),
       archive: async (threadId) => live().archiveThread(threadId),
       unarchive: async (threadId) => live().unarchiveThread(threadId),
