@@ -59,6 +59,22 @@ fn validate_id(value: &str) -> Result<()> {
 }
 
 impl IssueCommentCommandStorePort for SqliteIssueAutomationStoreAdapter {
+    fn recorded_requests(
+        &self,
+        workspace: &str,
+        issue: &IssueReference,
+    ) -> Result<Vec<IssueCommentCommandRecord>> {
+        validate_reference_scope(workspace, issue)?;
+        self.with_connection(workspace, |connection, _guard| {
+            let mut statement = connection.prepare("SELECT comment_id, author_id, kind FROM issue_comment_commands WHERE workspace_dir = ?1 AND issue_key = ?2 AND kind IN ('release','retriage','approve') ORDER BY comment_id LIMIT 100")?;
+            let mut rows = statement.query(params![workspace, issue_key(issue)?])?;
+            let mut records = Vec::new();
+            while let Some(row) = rows.next()? {
+                records.push(IssueCommentCommandRecord { issue: issue.clone(), comment_id: row.get(0)?, author_id: row.get(1)?, kind: parse_kind(row.get_ref(2)?.as_str()?)?, intervention_command_id: None });
+            }
+            Ok(records)
+        })
+    }
     fn issue_comment_command(
         &self,
         workspace: &str,
@@ -141,6 +157,27 @@ mod tests {
             intervention_command_id: (kind == IssueCommentCommandKind::Hold)
                 .then(|| "issue-comment:IC_1".into()),
         }
+    }
+
+    #[test]
+    fn request_list_excludes_hold_and_other_issues_without_losing_the_author() {
+        let fixture = Fixture::new("comment-request-detail");
+        let workspace = fixture.cwd();
+        let store = fixture.adapter();
+        let release = record(workspace, IssueCommentCommandKind::Release);
+        let mut held = record(workspace, IssueCommentCommandKind::Hold);
+        held.comment_id = "IC_hold".to_owned();
+        let mut elsewhere = record(workspace, IssueCommentCommandKind::Retriage);
+        elsewhere.issue.issue_id = "I_other".to_owned();
+        for entry in [&release, &held, &elsewhere] {
+            store
+                .record_issue_comment_command(workspace, entry)
+                .unwrap();
+        }
+        assert_eq!(
+            store.recorded_requests(workspace, &release.issue).unwrap(),
+            [release]
+        );
     }
 
     #[test]

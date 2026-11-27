@@ -78,6 +78,7 @@ const actions = () => ["hold_issue", "release_issue", "steer_issue", "take_over_
   return { command, enabled, reason: enabled ? null : "현재 작업 상태에서 사용할 수 없습니다." };
 });
 const detail = () => ({ type: "issue", status: "ready", revision, as_of_unix_ms: queriedAt, item: item(), open_decisions: structuredClone(openDecisions),
+  comment_requests: [{comment_id:"IC_request",author_id:"user-fixture",kind:"release"}],
   decision_history: structuredClone(history), control: { ...control }, actions: actions(), conversation: structuredClone(conversation) });
 const commandRequests = (type) => requests.flatMap((entry) => {
   const request = entry.method === "akra/kernel/command_confirmed" ? entry.params.request : entry.method === "akra/kernel/command" ? entry.params : null;
@@ -337,6 +338,11 @@ try {
 
   // 최신 이슈 상세의 제품 버튼이 전체 대상 좌표로 전용 창을 연다. 자동화 프로필은 native 복원을 차단한다.
   const originalWindowOpened = app.waitForEvent("window");
+  const recorded = panel.getByRole("region", { name: "기록된 댓글 요청" });
+  await recorded.getByText("/akra release", {exact:true}).waitFor();
+  assert.match(await recorded.innerText(), /user-fixture/);
+  assert.match(await recorded.innerText(), /IC_request/);
+  assert.equal(commandRequests("release_issue").length, 0, "displaying the request is not approval");
   await panel.getByTestId("issues-detail-original").click();
   const originalWindow = await originalWindowOpened;
   await originalWindow.locator('#root[data-phase="held"]').waitFor({ timeout: 10_000 });

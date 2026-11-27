@@ -110,6 +110,14 @@ impl IssueCommentCommandService {
         }
     }
 
+    /// Display evidence only: comment records are never authority for a decision or intervention.
+    pub(super) fn recorded_requests(
+        &self,
+        issue: &IssueReference,
+    ) -> Result<Vec<IssueCommentCommandRecord>> {
+        self.records.recorded_requests(&self.workspace, issue)
+    }
+
     /// 정책은 사용자 파일이 켜야 한다. 저장소 파일은 목록을 줄이거나 끄기만 한다 (plan 28 §4 원칙 5).
     fn trusted_actor_ids(&self) -> Vec<String> {
         let Ok(resolved) = self.policy.resolve(&self.workspace) else {

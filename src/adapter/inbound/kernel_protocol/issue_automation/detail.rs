@@ -36,6 +36,8 @@ pub enum IssueState {
 #[serde(deny_unknown_fields)]
 pub struct IssueDetailState {
     pub revision: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comment_requests: Vec<IssueCommentRequestView>,
     /// 이 응답을 조회한 서버 UTC 시각이다. 결정의 revision과 독립적이다.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub as_of_unix_ms: Option<u64>,
@@ -58,6 +60,14 @@ pub struct IssueDetailState {
     pub execution: Option<IssueExecutionDetailState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeline: Option<super::timeline::IssueTimelineState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IssueCommentRequestView {
+    pub comment_id: String,
+    pub author_id: String,
+    pub kind: crate::domain::issue_automation::comment_command::IssueCommentCommandKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -129,6 +139,7 @@ impl IssueState {
             Some(item) => Self::Ready(Box::new(IssueDetailState {
                 revision: detail.revision,
                 as_of_unix_ms: None,
+                comment_requests: detail.comment_requests.iter().map(|record| IssueCommentRequestView { comment_id: record.comment_id.clone(), author_id: record.author_id.clone(), kind: record.kind }).collect(),
                 item: item.into(),
                 open_decisions: item
                     .open_decisions

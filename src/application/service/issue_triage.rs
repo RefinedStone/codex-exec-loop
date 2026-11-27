@@ -355,6 +355,7 @@ impl IssueTriageService {
             Ok(())
         })?;
         Ok(IssueCollectionDetail {
+            comment_requests: Vec::new(),
             arbiter_waits: Vec::new(),
             timeline: None,
             revision: report.revision,

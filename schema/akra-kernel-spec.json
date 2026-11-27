@@ -3980,6 +3980,12 @@
                   "null"
                 ]
               },
+              "comment_requests": {
+                "items": {
+                  "$ref": "#/$defs/IssueCommentRequestView"
+                },
+                "type": "array"
+              },
               "control": {
                 "anyOf": [
                   {
@@ -8923,6 +8929,35 @@
         "observe"
       ],
       "type": "string"
+    },
+    "IssueCommentCommandKind": {
+      "enum": [
+        "hold",
+        "release",
+        "retriage",
+        "approve"
+      ],
+      "type": "string"
+    },
+    "IssueCommentRequestView": {
+      "additionalProperties": false,
+      "properties": {
+        "author_id": {
+          "type": "string"
+        },
+        "comment_id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/IssueCommentCommandKind"
+        }
+      },
+      "required": [
+        "comment_id",
+        "author_id",
+        "kind"
+      ],
+      "type": "object"
     },
     "IssueConfirmationBinding": {
       "additionalProperties": false,
@@ -13983,6 +14018,12 @@
                     "integer",
                     "null"
                   ]
+                },
+                "comment_requests": {
+                  "items": {
+                    "$ref": "#/$defs/IssueCommentRequestView"
+                  },
+                  "type": "array"
                 },
                 "control": {
                   "anyOf": [
