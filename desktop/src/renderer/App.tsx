@@ -14,6 +14,8 @@ import { BrowserPanel } from "./browser/BrowserPanel";
 import { ApprovalPrompt } from "./conversation/ApprovalPrompt";
 import { AreaBoundary } from "./views/AreaBoundary";
 import { appendQuote } from "./conversation/quote";
+import { currentFileTarget } from "./conversation/attachmentSource";
+import { targetKey } from "./conversation/fileAttachment";
 import { McpWriteApprovals } from "./conversation/McpWriteApprovals";
 import { pullRequestBadgeClass } from "./conversation/BranchCommits";
 import { Composer, type ComposerActions } from "./conversation/Composer";
@@ -666,7 +668,8 @@ export function App() {
   const quoteIntoDraft = useCallback((text: string) => {
     const threadId = useDesktopStore.getState().openThreadId;
     if (!threadId) return;
-    setDraft(threadId, appendQuote(useUiStore.getState().drafts[threadId] ?? "", text));
+    const target = currentFileTarget(), key = target ? targetKey(target) : threadId;
+    setDraft(key, appendQuote(useUiStore.getState().drafts[key] ?? "", text));
     requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('[data-testid="composer-input"]')?.focus());
   }, []);
 
@@ -866,6 +869,7 @@ export function App() {
   };
 
   const composerActions: ComposerActions = {
+    manifestRequest: gatewayRequest,
     runCommand: (id) => commandHandlers()[id]?.(),
     // `@` 파일 언급은 열린 대화의 폴더, 새 스레드 화면이면 고른 폴더에서 찾는다 (#2837).
     searchFiles: async (query) => {

@@ -1,0 +1,11 @@
+.file-attachments {
+  font-size: .875rem;
+  max-height: 34vh;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+.file-attachments summary { cursor: pointer; padding-block: .25rem; }
+.file-attachments fieldset { display: flex; flex-wrap: wrap; align-items: end; gap: .5rem; }
+.file-attachments label { display: inline-flex; align-items: center; gap: .25rem; }
+.file-attachments input[type="number"] { width: 4rem; }
+.file-attachments pre { white-space: pre-wrap; user-select: text; }

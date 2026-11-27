@@ -518,7 +518,7 @@ export class DesktopSession {
   }
 
   /** 메시지를 보낸다. 진행 중인 턴이 있으면 steer, 없으면 새 턴이다 (P3 §6.2). */
-  async sendMessage(text: string, images: readonly string[] = []): Promise<void> {
+  async sendMessage(text: string, images: readonly string[] = []): Promise<string | undefined> {
     this.assertWritable();
     const threadId = this.store.getOpenThreadId();
     this.assertSubscribed(threadId);
@@ -531,13 +531,13 @@ export class DesktopSession {
     const transcript = this.store.getTranscript();
     const activeTurn = isTurnInProgress(transcript) ? transcript?.turns.at(-1) : undefined;
     if (activeTurn) {
-      await this.client.request("turn/steer", { threadId, input, expectedTurnId: activeTurn.id });
+      return (await this.client.request<{ turnId: string }>("turn/steer", { threadId, input, expectedTurnId: activeTurn.id })).turnId;
     } else {
       const acknowledgedTurnId = this.acknowledgedTurnStarts.get(threadId);
       if (acknowledgedTurnId) {
-        await this.client.request("turn/steer", { threadId, input, expectedTurnId: acknowledgedTurnId });
+        return (await this.client.request<{ turnId: string }>("turn/steer", { threadId, input, expectedTurnId: acknowledgedTurnId })).turnId;
       } else {
-        await this.startTextTurn(threadId, trimmed, images);
+        return (await this.startTextTurn(threadId, trimmed, images)).turn?.id;
       }
     }
   }
