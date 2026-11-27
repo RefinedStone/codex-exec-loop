@@ -53,6 +53,19 @@ pub(crate) enum InlineShellCommandAvailabilityReason {
     ParallelTransitionInFlight,
     ParallelModeDisabled,
     NoActiveParallelAgents,
+    // Gateway 의 커널에 붙은 TUI 에서 그 화면의 조회나 명령이 커널 프로토콜에 아직 없다 (plan 18 Q-M5-1).
+    KernelProtocolMissing,
+    // Gateway 의 커널에 붙은 TUI 는 아직 읽기만 한다 (plan 18 K6-2a). 대화와 명령은 다음 조각이다.
+    KernelClientReadsOnly,
+}
+
+impl InlineShellCommandAvailabilityReason {
+    pub(crate) const fn is_gateway_kernel_client_lock(self) -> bool {
+        matches!(
+            self,
+            Self::KernelProtocolMissing | Self::KernelClientReadsOnly
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +94,7 @@ pub(crate) struct InlineShellCommandCapabilityContext {
     pub(crate) parallel_mode_enabled: bool,
     pub(crate) parallel_transition_in_flight: bool,
     pub(crate) active_parallel_agent_count: usize,
+    pub(crate) gateway_kernel_client: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,6 +142,7 @@ impl Default for InlineShellCommandCapabilitySet {
             parallel_mode_enabled: false,
             parallel_transition_in_flight: false,
             active_parallel_agent_count: 0,
+            gateway_kernel_client: false,
         })
     }
 }
@@ -142,6 +157,11 @@ fn inline_shell_command_availability(
         StartupChecksRunning, StartupDiagnosticsNeedAttention,
     };
 
+    if context.gateway_kernel_client
+        && let Some(reason) = gateway_kernel_client_lock_reason(command)
+    {
+        return Locked(reason);
+    }
     match command {
         InlineShellCommand::Parallel | InlineShellCommand::Peek
             if context.parallel_transition_in_flight =>
@@ -162,6 +182,39 @@ fn inline_shell_command_availability(
             }
         }
         _ => Ready,
+    }
+}
+
+/*
+ * Gateway 의 커널에 붙은 TUI 가 잠그는 명령이다 (plan 18 Q-M5-1 의 답). 화면의 코드는 남긴다. 화면이 쓰는 조회나
+ * 명령을 프로토콜에 더하면 그 화면부터 하나씩 연다. 세션 목록, 진단, 화면 설정, 도움말은 이 TUI 안의 값이라 연다.
+ */
+fn gateway_kernel_client_lock_reason(
+    command: InlineShellCommand,
+) -> Option<InlineShellCommandAvailabilityReason> {
+    use InlineShellCommandAvailabilityReason::{KernelClientReadsOnly, KernelProtocolMissing};
+    match command {
+        InlineShellCommand::Work
+        | InlineShellCommand::Parallel
+        | InlineShellCommand::Peek
+        | InlineShellCommand::Reviews
+        | InlineShellCommand::Queue
+        | InlineShellCommand::Directions
+        | InlineShellCommand::Doctor
+        | InlineShellCommand::PlanningInit
+        | InlineShellCommand::Reset => Some(KernelProtocolMissing),
+        InlineShellCommand::Turns | InlineShellCommand::Stop | InlineShellCommand::NewDraft => {
+            Some(KernelClientReadsOnly)
+        }
+        InlineShellCommand::Diagnostics
+        | InlineShellCommand::Activity
+        | InlineShellCommand::Sessions
+        | InlineShellCommand::Model
+        | InlineShellCommand::View
+        | InlineShellCommand::Language
+        | InlineShellCommand::Think
+        | InlineShellCommand::Copy
+        | InlineShellCommand::Help => None,
     }
 }
 

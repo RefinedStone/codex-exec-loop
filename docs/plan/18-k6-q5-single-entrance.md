@@ -2,7 +2,7 @@
 
 ## 문서 상태
 
-- 상태: **구현 중**. Q5-1, Q5-2a (2026-11-17), Q5-2b (2026-11-18), Q5-2c (2026-11-26), Q5-2d (2026-11-27, #2796), Q5-3 (2026-11-27, #2797), K6-1 (2026-11-27, #2798)을 구현했다 (§7). 나머지 조각은 제안이다. 현재 제품 동작의 기준은
+- 상태: **구현 중**. Q5-1, Q5-2a (2026-11-17), Q5-2b (2026-11-18), Q5-2c (2026-11-26), Q5-2d (2026-11-27, #2796), Q5-3 (2026-11-27, #2797), K6-1 (2026-11-27, #2798), K6-2a (2026-11-27, #2799 의 첫 조각)을 구현했다 (§7). 나머지 조각은 제안이다. 현재 제품 동작의 기준은
   `docs/reference/` 이다.
 - 상위 문서: [18 Akra 커널 아키텍처](18-akra-kernel-architecture.md) §5.4, §5.8, §5.9, §6 의 K6. 결정 KP-03, KP-04,
   KP-06. [19 Akra 커널 성질 목표](19-akra-kernel-quality-goals.md) §3.2, §5.3, §6 의 Q5, 성질 P4.
@@ -195,7 +195,8 @@ struct ThreadSessions {
 | Q5-2d (구현 2026-11-27, §7) | 승인 검토 저장 실패를 알릴 턴을 session 마다 둔다. 정지가 뒤의 session 의 턴도 대상으로 적는다 | 유지 (기본값 1). 정지의 기록만 값 1 에서도 다르다 (§7) | core 시험 둘, 커널 시뮬레이션 |
 | Q5-3 (구현 2026-11-27, §7) | 자동 후속 차선. 큐 프롬프트를 자리가 날 때 낸다. 시뮬레이션에 값 2 를 넣는다 | 확장 (값 2 이상에서만 다르다) | 시뮬레이션의 새 불변식: 자동 후속을 이어 가는 thread 는 하나이다 |
 | K6-1 (구현 2026-11-27, §7) | TUI 의 대화를 app-server 중계로 읽는 client. 화면은 바꾸지 않는다 | 유지 (Gateway 가 없으면 지금과 같다) | 가짜 Gateway 시험. 모델 턴은 없다 |
-| K6-2 | TUI 가 `akra/kernel/*` 로 붙는다. 잠금을 잡지 않는다. 하네스 화면은 Q-M5-1 의 답대로 한다 | 전환 | 터미널 검증 계약 (`docs/validation/terminal-ui-testing-methodology.md`) |
+| K6-2a (구현 2026-11-27, §7) | Gateway 의 커널이 저장소를 쥐면 TUI 가 잠금 없이 그 커널에 붙어 값을 읽는다. 하네스 화면과 대화·명령을 이유와 함께 잠근다 | 확장 (전에는 끝났다) | 가짜 wire 시험, TestBackend 화면 |
+| K6-2 의 나머지 | 대화(중계)와 명령(`submit_prompt`, `set_auto_follow_max_turns`, `stop_all` 등)을 커널 client 에 잇는다. Gateway 가 없으면 TUI 가 띄운다. TUI 가 늘 커널 client 로 연다 | 전환 | 터미널 검증 계약 (`docs/validation/terminal-ui-testing-methodology.md`) |
 | K6-3 | 직접 경로와 잠금의 `tui` 종류를 지운다 | 유지 | 입구 경계 시험 |
 | Q5-4 | 병렬 제어부를 같은 체계로 | K4-9b 의 답에 따른다 | K4-9b 문서 |
 | Q5-5 | 루프를 한 겹으로 | 유지 | 시뮬레이션 |
@@ -432,3 +433,37 @@ app-server 는 턴을 thread 마다 하나씩 동시 턴 수까지 받는다 (I1
   TUI 프로세스의 환경 변수는 upstream 에 가지 않는다 (데몬 커널과 같다).
 - TUI 의 PTY 시험은 시작과 종료만 본다. 수동 프롬프트와 스트림은 relay 통합 시험이 본다. 화면에서 실패·복구 문구를
   보는 PTY 시험은 없다.
+
+### K6-2a (2026-11-27, #2799 의 첫 조각)
+
+K6-2 는 PR 하나로 끝나지 않는다. TUI 는 `NativeClientPort` 하나로 core 를 읽고 쓰므로, 그 port 를 커널 프로토콜로
+구현하는 client 를 먼저 두고 기능을 하나씩 옮긴다. 이 조각은 읽기만 한다.
+
+- 시작: 저장소 잠금을 다른 프로세스가 쥐었고 그 주인이 TUI 가 아니면 (`RepositoryKernelLockHeld.owner`), Gateway 에
+  `sessions` 조회를 보낸다 (transient attach). 답이 오면 Gateway 가 이 저장소의 커널을 돌린다. TUI 는 잠금을 잡지
+  않고 `GatewayKernelClientRuntime` 으로 연다 (`production::attach_native_tui_to_gateway_kernel`). 답이 없으면 지금처럼
+  잠금 오류로 끝난다. 잠금이 비어 있으면 지금처럼 자기 커널로 연다.
+- client: 스레드 하나가 Gateway 에 붙어 있는다 (`akra/kernel/attach`, client 이름 `akra-tui`, transient 아님). `sessions`,
+  `auto_follow`, `thread_activity` 를 읽고 그 이벤트를 따라간다. `resync` 면 다시 읽는다. 연결이 끊기면 세션 목록에
+  이유를 보이고 1초 뒤 다시 붙는다. 값은 TUI 가 이미 그리는 core 의 투영으로 바꾼다 (`SessionCatalogChanged`,
+  `ThreadActivityChanged`, `conversation_runtime.auto_follow`). 시작 점검은 자기 app-server 없이 Ready 이다
+  (attachment `gateway kernel client`).
+- 잠금 (Q-M5-1 의 답): 프로토콜에 조회나 명령이 없는 화면(`:work`, `:parallel`, `:peek`, `:reviews`, `:queue`,
+  `:directions`, `:doctor`, `:planning`, `:reset`)은 `KernelProtocolMissing` ("not in the kernel protocol yet; use Akra
+  Desktop or the admin web")으로 잠근다. 화면의 코드는 그대로이다. 프로토콜에 명령은 있지만 이 조각이 아직 잇지 않은
+  것(`:turns`, `:stop`, `:new`, 프롬프트, 세션 열기와 이름 바꾸기)은 `KernelClientReadsOnly` ("read-only Gateway kernel
+  client")로 거절한다. 팔레트는 LOCKED 와 이유를 보이고, 직접 친 명령은 상태 줄과 대화 기록에 이유를 남긴다.
+
+확인: 가짜 wire 시험 (붙은 뒤 세 값을 읽고, 다른 이벤트는 넘기고, `resync` 에 다시 읽는다). client 시험 둘 (값이 세션
+목록·thread 요약·자동 후속 값이 된다, 시작 점검은 Ready 이고 끊김은 세션 목록에 보인다). 잠금 표 시험. 시작 판정 시험
+(TUI 가 쥔 잠금과 Gateway 가 없는 경우는 지금처럼 오류). TestBackend 화면 시험: 팔레트의 LOCKED 이유, `:queue` 의 거절
+상태 줄, 프롬프트 거절, 커널의 세션 목록 (`[running]`). 모델 턴은 없다.
+
+남긴 것:
+
+- 대화: 세션을 열고 스트림을 읽는 길 (K6-1 의 중계를 커널 client 쪽에서 쓴다), 프롬프트 (`submit_prompt`).
+- 명령: `set_auto_follow_max_turns`, `pause_auto_follow`, `stop_all`, `decide_approval`, `rename_session`.
+- Gateway 가 없을 때 TUI 가 Gateway 를 띄우고, 잠금이 비어 있어도 커널 client 로 여는 전환. 그 뒤 TUI 가 끝난 다음의
+  Gateway 종료 규칙(§6)을 다시 본다.
+- 실제 Gateway 와 PTY 로 도는 시험. 이 조각은 가짜 wire 와 TestBackend 로만 확인했다.
+- 프로토콜의 승인 요약에는 method 와 종류가 없다. 세션 목록은 승인이 기다린다는 것만 그린다.

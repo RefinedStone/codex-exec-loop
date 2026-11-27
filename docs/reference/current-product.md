@@ -1111,6 +1111,14 @@ Akra Desktop (`desktop/`) runs from source as a development build; it has no pac
   `the Akra Gateway relay did not open; start the Gateway (Akra Desktop or akra-gateway) and retry`;
   the next call reconnects and shows `reconnected to the Akra Gateway after the previous relay closed`.
   A TUI that starts without a Gateway runs its own app-server as before.
+- When the Gateway already runs the kernel of the repository, a TUI that starts there attaches to that
+  kernel instead of exiting (plan 18 K6-2a). It does not take the repository kernel lock. It reads the
+  session list, thread activity, and auto-follow settings through `akra/kernel/*` and follows their
+  events. This first slice reads only: screens whose queries or commands are not in the kernel protocol
+  (`:work`, `:parallel`, `:peek`, `:reviews`, `:queue`, `:directions`, `:doctor`, `:planning`, `:reset`)
+  are LOCKED with `not in the kernel protocol yet; use Akra Desktop or the admin web`, and prompts,
+  opening or renaming a session, `:turns`, `:stop`, and `:new` show `read-only Gateway kernel client`.
+  A lost Gateway connection shows in the session list and the client reconnects every second.
 - One Gateway runs per user: a second instance exits with `another akra-gateway is already running`.
   Child processes are contained (Windows job objects) and end with the Gateway.
 - `AKRA_GATEWAY_RECORD=1` records each session's text frames as JSONL under the user-private
@@ -1240,6 +1248,8 @@ The Gateway records the external documents that a thread mentions, without a mod
 - One Akra TUI runs per repository, including its linked worktrees. The TUI takes the repository
   kernel lock `$AKRA_HOME/projects/<namespace>/runtime/kernel.lock` before it opens the screen; a
   second TUI prints `another Akra kernel already runs for repository …` with the holder pid and exits.
+  When the holder is the Gateway and it answers for this repository, the TUI attaches to its kernel
+  instead (see the Gateway section above).
   If the lock file cannot be opened at all, the TUI warns and starts without the lock.
 - Planning detail authoring is manual; the `llm-assisted` editor path is disabled.
 - Real-terminal evidence is still required for primitive-sensitive fullscreen TUI changes and affected

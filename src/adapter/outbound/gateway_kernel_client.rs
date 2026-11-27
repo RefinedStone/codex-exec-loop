@@ -197,6 +197,129 @@ pub(crate) async fn request_over_socket<S: AsyncRead + AsyncWrite + Unpin>(
     }
 }
 
+/// The current values a kernel client keeps: the query answers and the events that carry the same value.
+const WATCHED_VALUES: [&str; 3] = ["sessions", "auto_follow", "thread_activity"];
+
+/*
+ * A client that stays attached (plan 18 K6-2). It reads the watched values once, then forwards every
+ * event that carries one of them. A `resync` reads them again. Each value is a JSON object with its
+ * `type`. The function returns when the Gateway closes the connection or `forward` returns false.
+ */
+pub(crate) async fn watch_kernel_values<S: AsyncRead + AsyncWrite + Unpin>(
+    socket: &mut WebSocketStream<S>,
+    workspace: &str,
+    client_name: &str,
+    mut forward: impl FnMut(Value) -> bool,
+) -> Result<()> {
+    send(
+        socket,
+        1,
+        "akra/kernel/attach",
+        json!({"workspace": workspace, "client_name": client_name}),
+    )
+    .await?;
+    let mut recorded = false;
+    answer(response(socket, 1, &mut recorded).await?)?;
+    let mut id = 1;
+    let mut read_all = true;
+    loop {
+        if std::mem::take(&mut read_all) {
+            for value in WATCHED_VALUES {
+                id += 1;
+                send(
+                    socket,
+                    id,
+                    "akra/kernel/query",
+                    json!({"query": {"type": value}}),
+                )
+                .await?;
+            }
+        }
+        let message = next_json(socket).await?;
+        let value = if message.get("method").is_none() {
+            answer(message)?
+        } else if message.get("method").and_then(Value::as_str) == Some("akra/kernel/event") {
+            message
+                .pointer("/params/event")
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            continue;
+        };
+        match value.get("type").and_then(Value::as_str) {
+            Some("resync") => read_all = true,
+            Some(kind) if WATCHED_VALUES.contains(&kind) => {
+                if !forward(value) {
+                    return Ok(());
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// An update of a client that stays attached to the Gateway kernel.
+pub(crate) enum KernelValueUpdate {
+    /// A watched value, from a query answer or an event. It is a JSON object with its `type`.
+    Value(Value),
+    /// The connection ended. The watcher attaches again after a short delay.
+    Disconnected(String),
+}
+
+const RECONNECT_DELAY: Duration = Duration::from_secs(1);
+
+/*
+ * Starts the thread of a client that stays attached to the Gateway kernel of `workspace` (plan 18 K6-2).
+ * The thread reconnects after a lost connection and ends when nobody receives its updates.
+ */
+pub(crate) fn spawn_kernel_value_watcher(
+    workspace: String,
+    client_name: &'static str,
+    updates: std::sync::mpsc::Sender<KernelValueUpdate>,
+) {
+    std::thread::Builder::new()
+        .name("akra-kernel-value-watcher".to_string())
+        .spawn(move || {
+            loop {
+                let result = watch_kernel_values_once(&workspace, client_name, |value| {
+                    updates.send(KernelValueUpdate::Value(value)).is_ok()
+                });
+                let reason = match result {
+                    Ok(()) => "the Gateway closed the connection".to_string(),
+                    Err(error) => format!("{error:#}"),
+                };
+                if updates
+                    .send(KernelValueUpdate::Disconnected(reason))
+                    .is_err()
+                {
+                    return;
+                }
+                std::thread::sleep(RECONNECT_DELAY);
+            }
+        })
+        .expect("the kernel value watcher thread should start");
+}
+
+/// Connects to the Gateway of this user and runs [`watch_kernel_values`] once.
+fn watch_kernel_values_once(
+    workspace: &str,
+    client_name: &str,
+    forward: impl FnMut(Value) -> bool,
+) -> Result<()> {
+    let endpoint = crate::gateway_endpoint::client_endpoint()?;
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(async {
+            let stream = tokio::time::timeout(CONNECT_TIMEOUT, connect(&endpoint))
+                .await
+                .context("the Gateway did not accept the connection in time")??;
+            let (mut socket, _) =
+                tokio_tungstenite::client_async("ws://localhost/rpc", stream).await?;
+            watch_kernel_values(&mut socket, workspace, client_name, forward).await
+        })
+}
+
 async fn send<S: AsyncRead + AsyncWrite + Unpin>(
     socket: &mut WebSocketStream<S>,
     id: i64,
@@ -378,6 +501,71 @@ mod tests {
             false,
         )
         .await
+    }
+
+    async fn notify(server: &mut Wire, event: Value) {
+        let message =
+            json!({"jsonrpc":"2.0","method":"akra/kernel/event","params":{"event":event}});
+        server
+            .send(Message::text(message.to_string()))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_watching_client_reads_the_values_then_follows_their_events_and_resyncs() {
+        let (mut client, mut server) = wire().await;
+        let serving = async {
+            let attach = next_json(&mut server).await.unwrap();
+            assert_eq!(attach["params"]["client_name"], "akra-tui");
+            assert_eq!(attach["params"].get("transient"), None);
+            server
+                .send(Message::text(
+                    json!({"jsonrpc":"2.0","id":attach["id"],"result":{}}).to_string(),
+                ))
+                .await
+                .unwrap();
+            for round in 0..2 {
+                for expected in WATCHED_VALUES {
+                    let request = next_json(&mut server).await.unwrap();
+                    assert_eq!(request["params"]["query"]["type"], expected);
+                    let result = json!({"type": expected, "round": round});
+                    let reply = json!({"jsonrpc":"2.0","id":request["id"],"result":result});
+                    server.send(Message::text(reply.to_string())).await.unwrap();
+                }
+                // Events of other values pass by; a watched value is forwarded.
+                notify(&mut server, json!({"type":"planning"})).await;
+                notify(&mut server, json!({"type":"thread_activity","threads":[]})).await;
+                if round == 0 {
+                    notify(&mut server, json!({"type":"resync"})).await;
+                }
+            }
+        };
+        let mut seen = Vec::new();
+        let watching = watch_kernel_values(&mut client, "/workspace", "akra-tui", |value| {
+            seen.push(value);
+            seen.len() < 8
+        });
+        let (result, ()) = tokio::join!(watching, serving);
+        result.unwrap();
+        let types: Vec<_> = seen
+            .iter()
+            .map(|value| value["type"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            types,
+            [
+                "sessions",
+                "auto_follow",
+                "thread_activity",
+                "thread_activity",
+                "sessions",
+                "auto_follow",
+                "thread_activity",
+                "thread_activity"
+            ]
+        );
+        assert_eq!(seen[4]["round"], 1, "resync reads the values again");
     }
 
     #[tokio::test]

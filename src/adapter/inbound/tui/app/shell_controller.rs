@@ -66,6 +66,7 @@ impl NativeTuiApp {
                 parallel_mode_enabled,
                 parallel_transition_in_flight,
                 active_parallel_agent_count,
+                gateway_kernel_client: self.runtime.client_runtime.is_gateway_kernel_client(),
             },
         )
     }
@@ -93,6 +94,28 @@ impl NativeTuiApp {
             control_plane.control_effect_in_flight,
             active_parallel_agent_count,
         )
+    }
+    /// Gateway 의 커널에 붙은 TUI 는 아직 읽기만 한다 (plan 18 K6-2a). 대화와 명령을 거절하고 이유를 보인다.
+    pub(super) fn refuse_in_gateway_kernel_client(&mut self) -> bool {
+        if !self.runtime.client_runtime.is_gateway_kernel_client() {
+            return false;
+        }
+        let reason = self.shell.tui_language.inline_command_availability_reason(
+            InlineShellCommandAvailabilityReason::KernelClientReadsOnly,
+        );
+        self.show_gateway_kernel_client_refusal(reason.to_string());
+        true
+    }
+    fn show_gateway_kernel_client_refusal(&mut self, text: String) {
+        // The status line is hidden on the empty welcome frame, so the reason also goes to the transcript.
+        if let ConversationState::Ready(conversation) =
+            &mut self.conversation.lifecycle.conversation_state
+        {
+            conversation.append_status_message(text.clone());
+        }
+        self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
+            status_text: text,
+        });
     }
     pub(super) fn submission_blocked_status(&self, prompt_origin: PromptOrigin) -> String {
         // Manual prompts can point the operator to diagnostics; auto-follow
@@ -206,6 +229,23 @@ impl NativeTuiApp {
     ) {
         // Inline commands are executed by semantic command, not raw text, so the
         // same path is used for palette acceptance and typed slash commands.
+        let availability = self
+            .current_inline_shell_command_capabilities()
+            .availability(command_input.command());
+        // A typed command reaches here without the palette check. The Gateway kernel client refuses
+        // the screens it locks (plan 18 K6-2); other locks keep their own command-specific messages.
+        if availability
+            .reason()
+            .is_some_and(|reason| reason.is_gateway_kernel_client_lock())
+        {
+            let status_text = self
+                .shell
+                .tui_language
+                .inline_command_palette_unavailable_status(command_input.command(), availability);
+            self.show_gateway_kernel_client_refusal(status_text);
+            self.clear_input_buffer();
+            return;
+        }
         match command_input.command() {
             InlineShellCommand::Diagnostics => self.show_startup_overlay(),
             InlineShellCommand::Work => self.show_work_center_overlay(),

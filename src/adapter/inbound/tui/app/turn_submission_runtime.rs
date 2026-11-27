@@ -51,6 +51,9 @@ impl NativeTuiApp {
             self.execute_inline_shell_command_input(command);
             return;
         }
+        if self.refuse_in_gateway_kernel_client() {
+            return;
+        }
         if self.conversation.pending_turn_steer.is_some() {
             self.dispatch_conversation_input(ConversationInputEvent::StatusMessageShown {
                 status_text: self

@@ -42,6 +42,10 @@ pub(crate) trait NativeClientPort: Send {
     fn parallel_mode_enabled(&self) -> bool;
     fn parallel_control_plane_projection(&self) -> ParallelModeControlPlanePresentationProjection;
     fn parallel_epoch_snapshot(&self) -> ParallelModeControlPlaneEpochSnapshot;
+    /// 이 클라이언트는 Gateway 의 커널에 붙어 그 값을 읽는다 (plan 18 K6-2). 커널을 프로세스 안에 쥐지 않는다.
+    fn is_gateway_kernel_client(&self) -> bool {
+        false
+    }
     // 시험 전용이다. 평가 요청의 epoch 는 호스트가 직접 붙인다 (plan 18 K1-4).
     #[cfg(test)]
     fn current_parallel_epoch_id_for_workspace(&self, workspace_directory: &str) -> Option<u64>;
