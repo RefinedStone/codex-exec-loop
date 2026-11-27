@@ -216,3 +216,82 @@ fn jira_connection_fence_sent_claim_and_receipt_survive_adapter_restart() {
     let state = current(&fixture.adapter(), &issue).state;
     assert_eq!(state.comment_owner.unwrap().comment_id, "1000");
 }
+
+#[test]
+fn definitive_jira_rejection_survives_restart_and_counts_the_sent_attempt() {
+    let fixture = Fixture::new("jira-feedback-rejection");
+    let issue = setup(&fixture);
+    let adapter = fixture.adapter();
+    save_desired(&adapter, &issue, "Shared status");
+    let before = current(&adapter, &issue);
+    let valid = intent(&before);
+    let recorded = recorded(&adapter, &valid);
+    assert!(
+        adapter
+            .complete(
+                &issue,
+                &valid.intent_id,
+                recorded.revision,
+                &IssueFeedbackCompletion::JiraRejected(JiraFeedbackRejection::Forbidden)
+            )
+            .is_err()
+    );
+    let sent = sent(&adapter, &recorded);
+    let rejected = adapter
+        .complete(
+            &issue,
+            &valid.intent_id,
+            sent.revision,
+            &IssueFeedbackCompletion::JiraRejected(JiraFeedbackRejection::Forbidden),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(rejected.state, IssueFeedbackIntentState::Abandoned);
+    assert_eq!(
+        rejected.jira_rejection,
+        Some(JiraFeedbackRejection::Forbidden)
+    );
+    assert_eq!(current(&adapter, &issue).publication_attempts, 1);
+    assert!(adapter.pending(fixture.cwd()).unwrap().is_empty());
+    assert!(adapter.pending_events(fixture.cwd()).unwrap().is_empty());
+    drop(adapter);
+    let restarted = fixture.adapter();
+    assert_eq!(current(&restarted, &issue).publication_attempts, 1);
+    assert!(restarted.pending(fixture.cwd()).unwrap().is_empty());
+    assert!(
+        matches!(restarted.record(current(&restarted, &issue).fence(), &valid).unwrap(),
+        IssueFeedbackRecordResult::Existing(previous) if previous == rejected)
+    );
+    let mut same = valid.clone();
+    same.intent_id = "jira-next-id".into();
+    if let IssueFeedbackOperation::CreateComment {
+        body, body_sha256, ..
+    } = &mut same.operation
+    {
+        *body = body.replace(
+            &feedback_marker(&valid.intent_id),
+            &feedback_marker(&same.intent_id),
+        );
+        *body_sha256 = feedback_body_hash(body);
+    }
+    assert!(matches!(
+        restarted
+            .record(current(&restarted, &issue).fence(), &same)
+            .unwrap(),
+        IssueFeedbackRecordResult::Blocked
+    ));
+    assert_eq!(current(&restarted, &issue).publication_attempts, 1);
+    let mut updated = same.clone();
+    updated.desired_revision += 1;
+    assert!(!rejected.blocks_jira_retry(&updated));
+    assert!(
+        restarted
+            .complete(
+                &issue,
+                &valid.intent_id,
+                rejected.revision,
+                &IssueFeedbackCompletion::JiraRejected(JiraFeedbackRejection::NotFound)
+            )
+            .is_err()
+    );
+}

@@ -213,3 +213,81 @@ fn no_content_is_not_a_json_null_or_an_arbitrary_success_status() {
         Err(ProviderCredentialError::Unavailable)
     );
 }
+
+/// A fake HTTP response crosses exactly the same status gate as native transport.
+struct StatusHttp(u16);
+impl HttpTransport for StatusHttp {
+    fn read(
+        &self,
+        request: HttpRequest,
+        _: &str,
+        _: &SecretToken,
+        cancelled: &AtomicBool,
+        deadline: Instant,
+    ) -> CredentialResult<HttpResponse> {
+        ensure_live(cancelled, deadline)?;
+        let _guard = request
+            .send_authorization
+            .as_ref()
+            .map(|a| a.begin_send())
+            .transpose()?;
+        if let Some(reason) = jira_feedback_rejection(
+            self.0,
+            request.report_jira_feedback_rejection,
+            request.send_authorization.is_some(),
+        ) {
+            return Ok(HttpResponse::JiraRejected(reason));
+        }
+        check_response_status(self.0, request.expected, request.preserve_client_errors)?;
+        Ok(HttpResponse::NoContent)
+    }
+}
+#[test]
+fn jira_feedback_http_status_preserves_only_definitive_authorized_rejections() {
+    let (_, _, token) = fixture();
+    let lease = lease(token);
+    let request = JiraIssueFeedbackWriteRequest::Transition {
+        issue_id: "100".into(),
+        transition_id: "31".into(),
+    };
+    for (status, reason) in [
+        (400, JiraFeedbackRejection::BadRequest),
+        (401, JiraFeedbackRejection::Unauthorized),
+        (403, JiraFeedbackRejection::Forbidden),
+        (404, JiraFeedbackRejection::NotFound),
+    ] {
+        let adapter = ProviderHttpAdapter {
+            transport: Arc::new(StatusHttp(status)),
+        };
+        let result = JiraIssueFeedbackApiPort::write(
+            &adapter,
+            &lease,
+            &request,
+            authorization(true),
+            &AtomicBool::new(false),
+            Instant::now() + REQUEST_TIMEOUT,
+        )
+        .unwrap();
+        assert!(
+            matches!(result, JiraIssueFeedbackWriteResponse::Rejected(actual) if actual == reason)
+        );
+        assert!(jira_feedback_rejection(status, false, true).is_none());
+        assert!(jira_feedback_rejection(status, true, false).is_none());
+    }
+    for status in [408, 409, 429, 500, 502, 503, 504] {
+        let adapter = ProviderHttpAdapter {
+            transport: Arc::new(StatusHttp(status)),
+        };
+        assert!(
+            JiraIssueFeedbackApiPort::write(
+                &adapter,
+                &lease,
+                &request,
+                authorization(true),
+                &AtomicBool::new(false),
+                Instant::now() + REQUEST_TIMEOUT
+            )
+            .is_err()
+        );
+    }
+}

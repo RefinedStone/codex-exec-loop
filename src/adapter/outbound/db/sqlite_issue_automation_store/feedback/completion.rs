@@ -87,6 +87,23 @@ fn next_record(
             next.state = IssueFeedbackIntentState::NeedsConfirmation;
             next.contradictory_response |= *contradictory;
         }
+        IssueFeedbackCompletion::JiraRejected(reason) => {
+            if previous.jira_rejection == Some(*reason)
+                && previous.state == IssueFeedbackIntentState::Abandoned
+            {
+                return Ok(next);
+            }
+            if previous.state != IssueFeedbackIntentState::Sent
+                || previous.intent.issue.provider != crate::domain::issue_work::IssueProvider::Jira
+                || previous.acknowledged_comment_id.is_some()
+                || previous.closure_acknowledged
+                || previous.contradictory_response
+            {
+                bail!("only an unacknowledged sent Jira feedback can be definitively rejected");
+            }
+            next.state = IssueFeedbackIntentState::Abandoned;
+            next.jira_rejection = Some(*reason);
+        }
         IssueFeedbackCompletion::Abandoned => {
             if previous.state == IssueFeedbackIntentState::Abandoned {
                 return Ok(next);

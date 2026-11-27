@@ -250,6 +250,33 @@ pub(super) fn update(
     Ok(())
 }
 
+fn rejected_equivalent_in_transaction(
+    connection: &Connection,
+    intent: &IssueFeedbackIntent,
+) -> Result<bool> {
+    if intent.issue.provider != crate::domain::issue_work::IssueProvider::Jira {
+        return Ok(false);
+    }
+    let issue = &intent.issue;
+    let mut statement = connection.prepare(&format!(
+        "SELECT {COLUMNS} FROM issue_feedback_intents
+         WHERE provider=?1 AND server_id=?2 AND repository_id=?3 AND issue_id=?4
+           AND status='abandoned' AND json_extract(record, '$.jira_rejection') IS NOT NULL"
+    ))?;
+    let mut rows = statement.query(params![
+        enum_name(&issue.provider)?,
+        issue.server_id,
+        issue.repository_id,
+        issue.issue_id,
+    ])?;
+    while let Some(row) = rows.next()? {
+        if hydrate(row)?.record.blocks_jira_retry(intent) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 pub(super) fn record(
     adapter: &SqliteIssueAutomationStoreAdapter,
     expected: IssueFeedbackFence,
@@ -269,7 +296,9 @@ pub(super) fn record(
                     state::read(tx, &intent.issue)?;
                     return Ok(IssueFeedbackRecordResult::Existing(existing));
                 }
-                if !unresolved_in_transaction(tx, &intent.issue)?.is_empty() {
+                if !unresolved_in_transaction(tx, &intent.issue)?.is_empty()
+                    || rejected_equivalent_in_transaction(tx, intent)?
+                {
                     return Ok(IssueFeedbackRecordResult::Blocked);
                 }
                 let Some(mut current) = state::snapshot_in_transaction(tx, &intent.issue)? else {
@@ -286,6 +315,7 @@ pub(super) fn record(
                     acknowledged_comment_id: None,
                     contradictory_response: false,
                     closure_acknowledged: false,
+                    jira_rejection: None,
                 };
                 state::bump(tx, &mut current.state)?;
                 insert(tx, &record, expected)?;

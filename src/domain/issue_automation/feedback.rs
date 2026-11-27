@@ -466,6 +466,28 @@ fn validate_label(label: &IssueSourceLabel) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// A definitive HTTP response to the authorized Jira feedback mutation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JiraFeedbackRejection {
+    BadRequest,
+    Unauthorized,
+    Forbidden,
+    NotFound,
+}
+
+impl JiraFeedbackRejection {
+    pub fn from_http_status(status: u16) -> Option<Self> {
+        match status {
+            400 => Some(Self::BadRequest),
+            401 => Some(Self::Unauthorized),
+            403 => Some(Self::Forbidden),
+            404 => Some(Self::NotFound),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IssueFeedbackIntentState {
@@ -612,8 +634,49 @@ pub struct IssueFeedbackIntentRecord {
     /// Close readback cannot distinguish an unsent intent from a human using the same account.
     #[serde(default)]
     pub closure_acknowledged: bool,
+    /// Terminal non-effect with explicit remote rejection evidence. Abandoned without
+    /// this field is an unsent intent; keep the existing SQLite terminal status.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jira_rejection: Option<JiraFeedbackRejection>,
 }
 impl IssueFeedbackIntentRecord {
+    /// A new random ID does not authorize repeating a definitively rejected write.
+    pub fn blocks_jira_retry(&self, next: &IssueFeedbackIntent) -> bool {
+        let previous = &self.intent;
+        if self.jira_rejection.is_none()
+            || previous.issue != next.issue
+            || previous.actor_id != next.actor_id
+            || previous.connection != next.connection
+            || previous.automation_policy_version != next.automation_policy_version
+            || previous.disclosure_policy_version != next.disclosure_policy_version
+        {
+            return false;
+        }
+        match (&previous.operation, &next.operation) {
+            (
+                IssueFeedbackOperation::CreateComment {
+                    content_sha256: a, ..
+                },
+                IssueFeedbackOperation::CreateComment {
+                    content_sha256: b, ..
+                },
+            ) => previous.desired_revision == next.desired_revision && a == b,
+            (
+                IssueFeedbackOperation::UpdateComment {
+                    owner: a,
+                    content_sha256: ah,
+                    ..
+                },
+                IssueFeedbackOperation::UpdateComment {
+                    owner: b,
+                    content_sha256: bh,
+                    ..
+                },
+            ) => previous.desired_revision == next.desired_revision && a == b && ah == bh,
+            _ => previous.operation == next.operation,
+        }
+    }
+
     pub fn validate(&self) -> Result<(), &'static str> {
         self.intent.validate()?;
         if self.revision == 0 || self.revision > i64::MAX as u64 {
@@ -651,6 +714,16 @@ impl IssueFeedbackIntentRecord {
             {
                 return Err("close confirmation requires a durable acknowledgement");
             }
+        }
+        if self.jira_rejection.is_some()
+            && (self.intent.issue.provider != IssueProvider::Jira
+                || self.state != IssueFeedbackIntentState::Abandoned
+                || self.receipt.is_some()
+                || self.acknowledged_comment_id.is_some()
+                || self.closure_acknowledged
+                || self.contradictory_response)
+        {
+            return Err("invalid Jira feedback rejection evidence");
         }
         if (self.state == IssueFeedbackIntentState::Confirmed) != self.receipt.is_some()
             || (self.contradictory_response

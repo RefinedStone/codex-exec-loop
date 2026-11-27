@@ -82,6 +82,15 @@ impl IssueFeedbackService {
         };
         lease.verify_identity()?;
         let record = match answer {
+            IssueFeedbackWriteResult::JiraRejected(reason) => {
+                // A proved rejection is terminal, not an unknown write; do not reconcile or resend.
+                return self.store.complete(
+                    &intent.issue,
+                    &intent.intent_id,
+                    sent.revision,
+                    &IssueFeedbackCompletion::JiraRejected(reason),
+                );
+            }
             IssueFeedbackWriteResult::Contradictory => return self.unconfirmed(&sent, true, None),
             IssueFeedbackWriteResult::Acknowledged { comment_id } => {
                 if intent.operation.is_comment() != comment_id.is_some() {

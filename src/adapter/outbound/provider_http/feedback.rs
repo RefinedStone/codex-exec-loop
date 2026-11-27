@@ -171,6 +171,7 @@ impl JiraIssueFeedbackApiPort for ProviderHttpAdapter {
                 expected,
                 send_authorization: Some(send_authorization),
                 preserve_client_errors: true,
+                report_jira_feedback_rejection: true,
                 query: vec![],
                 body: Some(body),
                 limit: RESPONSE_LIMIT,
@@ -182,6 +183,9 @@ impl JiraIssueFeedbackApiPort for ProviderHttpAdapter {
             deadline,
         )?;
         match (expected, response) {
+            (_, HttpResponse::JiraRejected(reason)) => {
+                Ok(JiraIssueFeedbackWriteResponse::Rejected(reason))
+            }
             (ExpectedResponse::Json(_), HttpResponse::Json(value)) => {
                 reject_reflected_credentials(&value, &lease.token, &authorization)?;
                 Ok(JiraIssueFeedbackWriteResponse::Comment(

@@ -84,11 +84,10 @@ impl IssueFeedbackStorePort for FakeStore {
             anyhow::ensure!(record.intent == *intent, "immutable feedback intent");
             return Ok(IssueFeedbackRecordResult::Existing(record.clone()));
         }
-        if data
-            .records
-            .iter()
-            .any(|r| r.intent.issue.same_remote_issue(&intent.issue) && r.state.is_unresolved())
-        {
+        if data.records.iter().any(|r| {
+            (r.intent.issue.same_remote_issue(&intent.issue) && r.state.is_unresolved())
+                || r.blocks_jira_retry(intent)
+        }) {
             return Ok(IssueFeedbackRecordResult::Blocked);
         }
         if data.snapshot.fence() != expected {
@@ -102,6 +101,7 @@ impl IssueFeedbackStorePort for FakeStore {
             acknowledged_comment_id: None,
             contradictory_response: false,
             closure_acknowledged: false,
+            jira_rejection: None,
         };
         data.records.push(record.clone());
         data.snapshot.state.revision += 1;
@@ -183,6 +183,14 @@ impl IssueFeedbackStorePort for FakeStore {
                 );
                 next.closure_acknowledged = true;
                 next.state = IssueFeedbackIntentState::NeedsConfirmation;
+            }
+            IssueFeedbackCompletion::JiraRejected(reason) => {
+                anyhow::ensure!(
+                    next.state == IssueFeedbackIntentState::Sent,
+                    "only sent can be rejected"
+                );
+                next.state = IssueFeedbackIntentState::Abandoned;
+                next.jira_rejection = Some(*reason);
             }
             IssueFeedbackCompletion::Abandoned => {
                 anyhow::ensure!(

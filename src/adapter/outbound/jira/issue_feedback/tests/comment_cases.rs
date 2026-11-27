@@ -224,3 +224,45 @@ fn unsupported_owned_adf_and_unbounded_property_metadata_are_not_silently_normal
         assert_eq!(fixture.api.writes.load(Ordering::SeqCst), 1);
     }
 }
+
+#[test]
+fn explicit_jira_http_rejection_is_distinct_from_transport_or_local_errors() {
+    for reason in [
+        JiraFeedbackRejection::BadRequest,
+        JiraFeedbackRejection::Unauthorized,
+        JiraFeedbackRejection::Forbidden,
+        JiraFeedbackRejection::NotFound,
+    ] {
+        for transition in [false, true] {
+            let fixture = Fixture::new();
+            let intent = if transition {
+                fixture.close_intent()
+            } else {
+                fixture.intent("rejected", "Shared status")
+            };
+            *fixture.api.rejection.lock().unwrap() = Some(reason);
+            assert_eq!(
+                fixture.adapter.write(&intent).unwrap(),
+                IssueFeedbackWriteResult::JiraRejected(reason)
+            );
+            assert_eq!(fixture.api.writes.load(Ordering::SeqCst), 1);
+            let remote = fixture.api.remote.lock().unwrap();
+            assert!(remote.comments.is_empty() && remote.history.is_empty());
+        }
+    }
+    for error in [
+        ProviderCredentialError::Unavailable,
+        ProviderCredentialError::OutcomeUnknown,
+        ProviderCredentialError::InvalidRequest,
+        ProviderCredentialError::NotFound,
+        ProviderCredentialError::Unauthorized,
+    ] {
+        let fixture = Fixture::new();
+        let intent = fixture.intent("unknown", "Shared status");
+        *fixture.api.write_error.lock().unwrap() = Some(error);
+        assert_eq!(
+            fixture.adapter.write(&intent).unwrap(),
+            IssueFeedbackWriteResult::Unconfirmed
+        );
+    }
+}

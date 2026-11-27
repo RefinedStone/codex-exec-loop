@@ -107,6 +107,8 @@ pub enum IssueFeedbackCompletion {
     },
     /// Recorded에서만 가능하다. Sent/NeedsConfirmation을 자동 폐기하면 안 된다.
     Abandoned,
+    /// Explicit response to the sole admitted Jira send, never inferred from a timeout.
+    JiraRejected(crate::domain::issue_automation::feedback::JiraFeedbackRejection),
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IssueFeedbackGrantResult {

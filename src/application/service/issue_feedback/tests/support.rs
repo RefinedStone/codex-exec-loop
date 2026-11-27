@@ -248,6 +248,7 @@ pub(crate) fn pending_record(issue: IssueReference) -> IssueFeedbackIntentRecord
         acknowledged_comment_id: None,
         contradictory_response: false,
         closure_acknowledged: false,
+        jira_rejection: None,
     }
 }
 pub(crate) fn pending_publication(mut owner: IssueReference) -> IssuePublishIntentRecord {

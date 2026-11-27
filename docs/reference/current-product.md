@@ -1459,3 +1459,7 @@ The Gateway records the external documents that a thread mentions, without a mod
 ### Desktop provisional thread titles (#2913, initial slice)
 
 Unnamed threads use a single, bounded preview title in the list and conversation. A fresh local thread receives an in-memory provisional title after its first accepted meaningful text input. Explicit provider names take precedence; manual rename, archive, and reconnect invalidate pending fallback updates. This is not model-generated naming: it makes no auxiliary request or name-set write, does not persist the fallback independently, and does not yet implement the shared disclosure policy or multi-window generation ownership. The isolated provider and durable metadata contract remain proposed in #2913/#2914.
+
+### Jira feedback rejection (#2863)
+
+Authorized Jira feedback writes distinguish direct HTTP 400, 401, 403 and 404 responses from unknown outcomes (timeouts, lost connections, 5xx, local credential errors). A definitive rejection is recorded as a terminal non-effect in the existing abandoned journal state with typed `jira_rejection` evidence, and counts as a sent publication attempt. Neither the same immutable intent nor an equivalent automatically regenerated intent can send again under the same owner, credential/policy binding, and operation basis; no reconciliation or human-confirmation wait is created. Unsent abandoned records lack that evidence. Existing records remain readable; older binaries do not understand the new optional field on rejected records. No error body or credential is stored.
