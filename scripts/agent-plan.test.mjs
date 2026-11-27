@@ -278,7 +278,11 @@ test("CLI actions and saved configurations cannot be silently mixed", () => {
 });
 
 test("POSIX changed wrappers forward literal argv and environment to the planner", (context) => {
-  if (spawnSync("bash", ["--version"], { stdio: "ignore" }).error) { context.skip("bash unavailable"); return; }
+  // PowerShell can resolve bare bash to WSL; use the Bash shipped with this Git.
+  const bash = process.platform === "win32"
+    ? resolve(execFileSync("git", ["--exec-path"], { encoding: "utf8" }).trim(), "..", "..", "..", "bin", "bash.exe")
+    : "bash";
+  if (spawnSync(bash, ["--version"], { stdio: "ignore" }).error) { context.skip("bash unavailable"); return; }
   const fixture = createPlanFixture();
   try {
     writeFixtureFile(fixture.cwd, "scripts/agent-plan.mjs",
@@ -287,12 +291,12 @@ test("POSIX changed wrappers forward literal argv and environment to the planner
     for (const file of ["check_native_pr.sh", "check_windows_portable.sh"]) {
       copyFileSync(join(scriptRoot, file), join(fixture.cwd, "scripts", file));
       const args = ["--base", "branch $(literal) value"];
-      const output = execFileSync("bash", [join(fixture.cwd, "scripts", file), "--changed", ...args], { encoding: "utf8", env });
+      const output = execFileSync(bash, [join(fixture.cwd, "scripts", file), "--changed", ...args], { encoding: "utf8", env });
       const recorded = JSON.parse(output.trim());
       assert.deepEqual(recorded.args, ["--run", ...(file === "check_windows_portable.sh" ? ["--target", "x86_64-pc-windows-msvc"] : []), ...args]);
       assert.equal(recorded.target, env.CARGO_TARGET_DIR);
       assert.equal(recorded.incremental, "1");
-      const invalid = spawnSync("bash", [join(fixture.cwd, "scripts", file), "--full", "--base", "value"], { encoding: "utf8", env });
+      const invalid = spawnSync(bash, [join(fixture.cwd, "scripts", file), "--full", "--base", "value"], { encoding: "utf8", env });
       assert.equal(invalid.status, 2);
     }
   } finally { fixture.cleanup(); }
