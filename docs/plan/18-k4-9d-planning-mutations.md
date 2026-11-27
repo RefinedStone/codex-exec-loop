@@ -465,7 +465,8 @@ revision 의 거절과 그 기록, 실패의 원인), admin 의 router 시험 (�
   (`stored_draft_promote_command`), 실행기가 저장된 초안을 올린다 (`promote_operator_draft`), admin 이 메모리를 새
   revision 으로 옮기고 화면을 다시 읽는다 (`draft_promotion_outcome`).
 - 입구: `KernelRoutedPlanningAdmin` 이 파일과 승격을 커널 명령으로 보낸다. 같은 파일의
-  `KernelRoutedParallelAgentProfiles` 가 admin 의 프로필 저장을 보낸다 (읽기는 직접 한다). 파일이 admin 의 작업
+  `KernelRoutedParallelAgentProfiles` 가 admin 의 프로필 저장을 보낸다. 읽기는 직접 하지만 저장과 같은 대표
+  checkout 에서 읽는다 (PR 리뷰 반영). 파일이 admin 의 작업
   공간이 아닌 폴더에 있으면 알림이 그 폴더를 말한다 ("... in `<폴더>`").
 - 처리기: 파일과 승격 route 의 거절은 409 와 글, 그 밖의 실패는 500 과 원인의 글이다. 파일과 프로필의 폼은 controls
   화면과 알림으로 답하고, 승격의 폼은 초안 화면과 알림으로 답한다.
@@ -502,6 +503,4 @@ Windows 에서 쓸 수 없다 (전과 같다). 그 시험은 Windows 에서 돌�
 - 적용의 답의 revision 은 authority 저장의 값이다. 저장소가 result output 을 가지는 작업 공간에서는 그 뒤의 쓰기가
   없다. 파일만 있는 작업 공간의 쓰기는 revision 을 올리지 않는다.
 - 파일과 승격 route 의 409 는 router 시험이 없다. 조립 시험이 거절의 타입을 본다.
-- admin 의 controls 화면은 프로필을 admin 의 작업 공간에서 읽는다. 다른 worktree 에서 연 admin 은 저장한 값을 다시
-  보지 못한다.
 - 9d-7 의 프롬프트 기록 정리 (위).

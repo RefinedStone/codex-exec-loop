@@ -312,8 +312,12 @@ impl KernelRoutedParallelAgentProfiles {
 }
 
 impl ParallelAgentProfilePort for KernelRoutedParallelAgentProfiles {
+    // 저장과 같은 곳(커널의 대표 checkout)에서 읽는다. 다른 worktree 에서 연 admin 도 저장한 값을 다시 본다.
     fn load_config(&self, workspace_dir: &str) -> Result<ParallelAgentProfileConfig, String> {
-        self.direct.load_config(workspace_dir)
+        match super::production::repository_kernel_target(workspace_dir) {
+            Ok(target) => self.direct.load_config(&target.workspace_root),
+            Err(_) => self.direct.load_config(workspace_dir),
+        }
     }
 
     fn save_config(
@@ -749,10 +753,9 @@ mod tests {
         assert!(output.status.success(), "git {args:?}: {output:?}");
     }
 
+    // A primary checkout and a linked worktree of the same repository. The root is removed on drop.
     #[cfg(not(windows))]
-    #[test]
-    fn an_export_from_another_worktree_writes_into_the_primary_checkout() {
-        // plan 18 K4-9d-4: the executor uses the primary checkout of the kernel, not the folder of the admin.
+    fn linked_worktree() -> (Workspace, std::path::PathBuf, std::path::PathBuf) {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let root = crate::test_utils::platform_safe_temp_dir().join(format!(
             "kernel-routed-admin-linked-{}-{}",
@@ -789,6 +792,14 @@ mod tests {
                 &linked.display().to_string(),
             ],
         );
+        (root, primary, linked)
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn an_export_from_another_worktree_writes_into_the_primary_checkout() {
+        // plan 18 K4-9d-4: the executor uses the primary checkout of the kernel, not the folder of the admin.
+        let (_root, primary, linked) = linked_worktree();
         let admin =
             super::super::production::build_admin_application(linked.display().to_string()).facade;
 
@@ -896,6 +907,31 @@ mod tests {
             .unwrap_err();
         let refusal = PlanningAdminMutationRefusal::find_in(&stale).expect("a refusal");
         assert_eq!(refusal.reason, ReasonCode::PlanningRevisionStale);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn profiles_saved_from_another_worktree_are_read_back_from_the_primary_checkout() {
+        // The admin of a linked worktree reads the profiles where the kernel saved them, so a second save keeps the first.
+        let (_root, primary, linked) = linked_worktree();
+        let linked = linked.display().to_string();
+        let profiles = super::super::production::build_admin_application(linked.clone())
+            .parallel_agent_profile_port;
+        let mut config = profiles.load_config(&linked).unwrap();
+        config.profiles.truncate(2);
+        config.profiles[0].display_name = "First edit".to_string();
+        profiles.save_config(&linked, &config).unwrap();
+
+        let mut reloaded = profiles.load_config(&linked).unwrap();
+        assert_eq!(reloaded.profiles[0].display_name, "First edit");
+        reloaded.profiles[1].display_name = "Second edit".to_string();
+        profiles.save_config(&linked, &reloaded).unwrap();
+
+        let saved = profiles.load_config(&linked).unwrap();
+        assert_eq!(saved.profiles.len(), 2);
+        assert_eq!(saved.profiles[0].display_name, "First edit");
+        assert_eq!(saved.profiles[1].display_name, "Second edit");
+        assert!(primary.join(".akra/parallel-agent-profiles.json").is_file());
     }
 
     // The profile file is written beside the repository. It is unavailable on Windows.
