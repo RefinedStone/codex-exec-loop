@@ -17,6 +17,12 @@ pub trait IssueCommentCommandSourcePort: Send + Sync {
 }
 
 pub trait IssueCommentCommandStorePort: Send + Sync {
+    /// Bounded read of the immutable command records for this exact issue. Does not fetch comment bodies.
+    fn recorded_requests(
+        &self,
+        workspace: &str,
+        issue: &IssueReference,
+    ) -> Result<Vec<IssueCommentCommandRecord>>;
     fn issue_comment_command(
         &self,
         workspace: &str,

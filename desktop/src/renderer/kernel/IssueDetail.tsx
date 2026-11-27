@@ -107,6 +107,13 @@ function SelectedIssueDetail({ selectedIssue, detail, loading, stale, error, bus
           </header>
           {current && <>
             <IssueExecutionTracking execution={current.execution} feedback={current.feedback} timeline={current.timeline} onOpenUrl={onOpenUrl} />
+            {Boolean(current.comment_requests?.length) && <section aria-label="기록된 댓글 요청" className="issues-detail-section">
+              <h3>기록된 댓글 요청</h3>
+              <p>이 이슈에서 기록한 요청입니다 (최대 100건). 댓글은 승인 영수증이 아니며 자동으로 적용하지 않습니다.</p>
+              <ul>{current.comment_requests?.map(record => <li key={record.comment_id}>
+                <code>/akra {record.kind}</code> · 작성자 {record.author_id} · 댓글 {record.comment_id}
+              </li>)}</ul>
+            </section>}
             <IssueDecisionCards decisions={current.open_decisions ?? []} history={current.decision_history} asOfUnixMs={current.as_of_unix_ms} busy={busy || loading} onAnswer={onAnswer} drafts={drafts.decisions} onDraftChange={(key, draft) => {
               setDrafts((previous) => {
                 if (!previous.decisions.has(key)) return previous;

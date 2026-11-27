@@ -366,6 +366,9 @@ impl IssueCollectionService {
         if let (Some(interactions), Some(item)) = (&self.interactions, &detail.item) {
             detail.interaction = Some(interactions.project(item)?);
         }
+        if let (Some(commands), Some(_)) = (&self.comment_commands, &detail.item) {
+            detail.comment_requests = commands.recorded_requests(reference)?;
+        }
         if let (Some(coordinator), Some(_)) = (&self.coordinator, &detail.item) {
             detail.feedback = coordinator.feedback_detail(reference)?;
         }

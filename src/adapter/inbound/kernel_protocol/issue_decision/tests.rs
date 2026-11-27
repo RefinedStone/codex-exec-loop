@@ -200,6 +200,7 @@ fn issue_detail_exposes_only_open_shared_requests_at_the_committed_catalog_revis
     closed_record.state = IssueDecisionState::Withdrawn;
     let closed = IssueDecisionRequest::hydrate(closed_record).unwrap();
     let detail = IssueCollectionDetail {
+        comment_requests: Vec::new(),
         arbiter_waits: Vec::new(),
         timeline: None,
         revision: 41,
@@ -566,6 +567,7 @@ fn arbiter_wait_is_projected_only_for_the_exact_open_decision_without_changing_i
         reason: IssueArbiterWaitReason::LowConfidence,
     };
     let detail = IssueCollectionDetail {
+        comment_requests: Vec::new(),
         arbiter_waits: vec![wait],
         timeline: None,
         revision: 42,

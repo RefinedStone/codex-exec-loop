@@ -8,7 +8,7 @@ use crate::domain::issue_work::IssueReference;
 /// 댓글 하나로 만든 개입의 command_id 접두사이다. 같은 댓글은 같은 개입 intent 를 다시 쓴다.
 pub const ISSUE_COMMENT_COMMAND_PREFIX: &str = "issue-comment:";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum IssueCommentCommandKind {
     Hold,

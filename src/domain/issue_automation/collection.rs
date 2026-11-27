@@ -244,6 +244,7 @@ pub struct IssueTriageProjection {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssueCollectionDetail {
+    pub comment_requests: Vec<super::comment_command::IssueCommentCommandRecord>,
     pub revision: u64,
     /// 같은 catalog snapshot의 현재 Open/Arbiter 대기다. 알림 ACK와 독립적이다.
     pub arbiter_waits: Vec<super::arbiter::IssueArbiterWaitEntry>,

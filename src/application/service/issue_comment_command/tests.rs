@@ -96,6 +96,13 @@ struct Records {
     fail_next_record: AtomicBool,
 }
 impl IssueCommentCommandStorePort for Records {
+    fn recorded_requests(
+        &self,
+        workspace: &str,
+        issue: &IssueReference,
+    ) -> Result<Vec<IssueCommentCommandRecord>> {
+        self.inner.recorded_requests(workspace, issue)
+    }
     fn issue_comment_command(
         &self,
         workspace: &str,
