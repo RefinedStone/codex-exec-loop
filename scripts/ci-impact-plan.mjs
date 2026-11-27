@@ -257,7 +257,15 @@ function graph(metadata, inv, own, label, reasons) {
   // Validate the entire resolved graph, including dependency nodes, before using it.
   for (const node of nodes.values()) {
     for (const edge of node.deps) {
-      if (!object(edge) || !nodes.has(edge.pkg) || !Array.isArray(edge.dep_kinds) || edge.dep_kinds.length === 0) fail("transitive-resolve-incomplete");
+      if (!object(edge) || !nodes.has(edge.pkg) || !Array.isArray(edge.dep_kinds) || edge.dep_kinds.length === 0) {
+        fail("transitive-resolve-incomplete");
+        continue;
+      }
+      // A non-member may consume a patched workspace crate. The member-only
+      // reverse graph cannot prove that consumer closure, so retain the full gate.
+      if (!inv.memberIds.has(node.id) && inv.memberIds.has(edge.pkg)) {
+        fail("external-resolve-consumes-workspace-member:" + inv.memberIds.get(edge.pkg));
+      }
     }
   }
   const adjacency = new Map([...inv.members.keys()].map((key) => [key, new Set()]));
