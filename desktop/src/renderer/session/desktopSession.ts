@@ -144,9 +144,10 @@ function definitiveForkRejection(error: unknown): error is JsonRpcError {
 }
 
 /** `thread/fork` 응답의 새 대화이다. id 가 없거나 원본과 같으면 null 이다. */
-function forkedThreadOf(response: ThreadForkResponse | undefined, sourceThreadId: string): Thread | null {
+function forkedThreadOf(response: ThreadForkResponse | undefined, sourceThreadId: string, sourceCwd: string): Thread | null {
   const forked = response?.thread;
-  return typeof forked?.id === "string" && forked.id.length > 0 && forked.id !== sourceThreadId ? forked : null;
+  return typeof forked?.id === "string" && forked.id.length > 0 && forked.id !== sourceThreadId
+    && forked.forkedFromId === sourceThreadId && forked.cwd === sourceCwd ? forked : null;
 }
 
 export function groupThreadsByCwd(threads: readonly Thread[]): WorkspaceFolder[] {
@@ -238,6 +239,7 @@ export class DesktopSession {
   /** initialize 가 thread/list 를 읽는 동안 받은 진행 상태 변경이다 (스레드 id → 진행 중). */
   private statusChangesWhileListing: Map<string, boolean> | null = null;
   private connected = false;
+  private forkConnectionEpoch = 0;
   private providerVersionScope = "";
   /**
    * 원격 세션에서 사용자가 보내기를 허락했는지이다 (plan 25 G2, "세션 한 번 허용", D-19). 허락 전에는 읽기만
@@ -346,6 +348,7 @@ export class DesktopSession {
         this.providerVersionScope = "";
         this.store.setConnection(state);
         this.connected = state.phase === "connected";
+        this.forkConnectionEpoch++;
         if (!this.connected) this.provisionalTitles.clear();
         this.compaction.connectionChanged(this.connected);
         if (this.connected) {
@@ -367,6 +370,7 @@ export class DesktopSession {
   }
 
   stop(): void {
+    this.forkConnectionEpoch++;
     this.compaction.dispose();
     this.nextTurnSettings.dispose();
     this.nextTurnQueue.dispose();
@@ -703,13 +707,24 @@ export class DesktopSession {
   private async runFork(sourceThreadId: string, claimSelection: (threadId: string) => boolean, approvedSnapshot: string): Promise<ForkThreadOutcome> {
     if (this.readOnly) return { kind: "refused", reason: "원격 호스트의 대화는 분기하지 않습니다." };
     if (!this.connected) return { kind: "refused", reason: "Gateway 에 연결되어 있지 않습니다." };
+    const connectionEpoch = this.forkConnectionEpoch;
+    const sameConnection = () => this.connected && connectionEpoch === this.forkConnectionEpoch;
+    const connectionChanged = { kind: "refused", reason: "분기 요청 전 Gateway 연결이 바뀌었습니다." } as const;
     let lastTurnId: string;
+    let sourceCwd: string;
     try {
-      const blocked = forkBlockReason(await this.readThread(sourceThreadId), this.store.getTranscript());
+      const source = await this.readThread(sourceThreadId);
+      if (!sameConnection()) return connectionChanged;
+      if (source.id !== sourceThreadId || typeof source.cwd !== "string" || !source.cwd) {
+        return { kind: "refused", reason: "분기 원본의 ID와 작업 폴더를 확인할 수 없습니다." };
+      }
+      sourceCwd = source.cwd;
+      const blocked = forkBlockReason(source, this.store.getTranscript());
       if (blocked) return { kind: "refused", reason: blocked };
       const page = await this.client.request<ThreadTurnsListResponse>("thread/turns/list", {
         threadId: sourceThreadId, limit: FORK_BOUNDARY_PAGE_SIZE, sortDirection: "desc", itemsView: "notLoaded",
       });
+      if (!sameConnection()) return connectionChanged;
       const boundary = page.data.find((turn) => turn.status !== "inProgress");
       if (!boundary) return { kind: "refused", reason: FORK_NO_FINISHED_TURN };
       lastTurnId = boundary.id;
@@ -726,9 +741,9 @@ export class DesktopSession {
     } catch {
       return { kind: "refused", reason: "분기 결과를 안전하게 기록할 수 없어 요청을 보내지 않았습니다." };
     }
-    if (!this.connected) {
+    if (!sameConnection() || this.removedThreadIds.has(sourceThreadId)) {
       this.forkOutcomes.resolve(sourceThreadId, attemptId);
-      return { kind: "refused", reason: "분기 요청 전 Gateway 연결이 끊겼습니다." };
+      return !sameConnection() ? connectionChanged : { kind: "refused", reason: "분기 원본이 보관되거나 삭제되었습니다." };
     }
     const params: ThreadForkParams = { threadId: sourceThreadId, lastTurnId, excludeTurns: true, ephemeral: false };
     const request = this.client.request<ThreadForkResponse>("thread/fork", params);
@@ -748,21 +763,22 @@ export class DesktopSession {
     if (response === FORK_TIMED_OUT) {
       // 늦게 온 성공은 목록에만 넣는다. 그동안 사용자가 본 화면을 덮지 않는다.
       void request.then((late) => {
-        const forked = forkedThreadOf(late, sourceThreadId);
+        if (!sameConnection()) return;
+        const forked = forkedThreadOf(late, sourceThreadId, sourceCwd);
         if (forked) {
-          this.listFork(forked);
           this.forkOutcomes.resolve(sourceThreadId, attemptId);
-          this.releaseUnopenedFork(forked.id);
+          if (this.listFork(forked)) this.releaseUnopenedFork(forked.id);
         }
       }, error => {
         if (definitiveForkRejection(error)) this.forkOutcomes.resolve(sourceThreadId, attemptId);
       });
       return this.forkOutcomeLost();
     }
-    const forked = forkedThreadOf(response, sourceThreadId);
+    if (!sameConnection()) return this.forkOutcomeLost();
+    const forked = forkedThreadOf(response, sourceThreadId, sourceCwd);
     if (!forked) return this.forkOutcomeLost();
-    this.listFork(forked);
     this.forkOutcomes.resolve(sourceThreadId, attemptId);
+    if (!this.listFork(forked)) return { kind: "created", threadId: forked.id };
     if (this.store.getOpenThreadId() === sourceThreadId && claimSelection(forked.id)) {
       this.leaveOpenThread(forked.id);
       this.batcher.clear();
@@ -781,9 +797,11 @@ export class DesktopSession {
   }
 
   /** `thread/started` 알림이 먼저 왔어도 목록에는 한 번만 들어간다. */
-  private listFork(forked: Thread): void {
+  private listFork(forked: Thread): boolean {
+    if (this.removedThreadIds.has(forked.id)) return false;
     this.addedThreads.set(forked.id, forked);
     this.store.mergeFolders(groupThreadsByCwd([forked]));
+    return true;
   }
 
   /** 사용자가 열지 않은 포크는 fork 가 건 구독을 끝낸다. */

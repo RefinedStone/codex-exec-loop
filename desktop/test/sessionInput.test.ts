@@ -1005,6 +1005,54 @@ describe("forking a conversation (#2625)", () => {
     await sending;
   });
 
+  it.each([{ forkedFromId: "other" }, { forkedFromId: null }, { cwd: "/different" }])(
+    "keeps uncertain outcomes when fork metadata disagrees with the confirmed source: %j",
+    async (extra) => {
+      const h = await openLocked();
+      const claim = vi.fn(() => true);
+      const forking = h.session.forkThread("locked", claim);
+      await answerBoundary(h, [turn("t1")]);
+      h.replyTo("thread/fork", { thread: thread("child", { forkedFromId: "locked", ...extra }) });
+      await expect(forking).resolves.toMatchObject({ kind: "unknown" });
+      expect(h.session.forkOutcomeUnknown("locked")).toBe(true);
+      expect(claim).not.toHaveBeenCalled();
+      expect(h.state.openThreadId).toBe("locked");
+      expect(h.state.folders?.flatMap(folder => folder.threads).some(item => item.id === "child")).not.toBe(true);
+      h.session.stop();
+    },
+  );
+
+  it("does not send a preflight result across a connection change during admission", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const journal = new ForkOutcomeJournal(undefined, async (_name, enter) => { await gate; return enter(); });
+    const h = await openLocked(journal);
+    const forking = h.session.forkThread("locked", () => false);
+    await answerBoundary(h, [turn("t1")]);
+    h.emitState("disconnected");
+    h.emitState("connected");
+    release();
+    await expect(forking).resolves.toMatchObject({ kind: "refused" });
+    expect(h.sent.some(message => message.method === "thread/fork")).toBe(false);
+    expect(h.session.forkOutcomeUnknown("locked")).toBe(false);
+    h.session.stop();
+  });
+
+  it("does not resurrect an archived fork when its creation response arrives late", async () => {
+    const h = await openLocked();
+    const claim = vi.fn(() => true);
+    const forking = h.session.forkThread("locked", claim);
+    await answerBoundary(h, [turn("t1")]);
+    h.receive({ jsonrpc: "2.0", method: "thread/started", params: { thread: thread("child", { forkedFromId: "locked" }) } });
+    h.receive({ jsonrpc: "2.0", method: "thread/archived", params: { threadId: "child" } });
+    h.replyTo("thread/fork", { thread: thread("child", { forkedFromId: "locked" }) });
+    await expect(forking).resolves.toEqual({ kind: "created", threadId: "child" });
+    expect(claim).not.toHaveBeenCalled();
+    expect(h.state.folders?.flatMap(folder => folder.threads).some(item => item.id === "child")).not.toBe(true);
+    expect(h.session.forkOutcomeUnknown("locked")).toBe(false);
+    h.session.stop();
+  });
+
   it("sends one fork for repeated clicks on the same source", async () => {
     const h = await openLocked();
     const first = h.session.forkThread("locked", () => true);
