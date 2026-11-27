@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { TunnelRuntimeService } from "akra-tunnel-core/tunnel";
@@ -27,8 +28,18 @@ async function clientJson(binary: string, args: string[]) {
   return JSON.parse(stdout);
 }
 
+/** tunnel-client keeps its health URL files under its own XDG-style state root, also on Windows. */
+export function tunnelClientStateRoot(env = process.env, home = homedir()): string {
+  return join(env.XDG_STATE_HOME?.trim() || join(home, ".local", "state"), "tunnel-client");
+}
+
+function isInside(root: string, path: string): boolean {
+  const child = relative(root, resolve(path));
+  return Boolean(child) && !child.startsWith("..") && !isAbsolute(child);
+}
+
 /** The launcher uses these two read-only tunnel-client commands for its status. */
-export async function tunnelConnection(home: string, run = clientJson): Promise<TunnelConnection> {
+export async function tunnelConnection(home: string, run = clientJson, stateRoot = tunnelClientStateRoot()): Promise<TunnelConnection> {
   try {
     const binary = join(home, "bin", process.platform === "win32" ? "tunnel-client.exe" : "tunnel-client");
     const config = JSON.parse(await readFile(join(home, "config.json"), "utf8"));
@@ -40,8 +51,7 @@ export async function tunnelConnection(home: string, run = clientJson): Promise<
     const urlFile = status.health_url_file ?? status.process?.health?.url_file ?? status.process?.health_url_file;
     const pid = status.process?.pid;
     if (typeof urlFile !== "string" || !isAbsolute(urlFile) || !Number.isSafeInteger(pid) || pid <= 0) return "unknown";
-    const pathFromHome = relative(home, resolve(urlFile));
-    if (!pathFromHome || pathFromHome.startsWith("..") || isAbsolute(pathFromHome)) return "unknown";
+    if (![home, stateRoot].some((root) => isInside(root, urlFile))) return "unknown";
     const health = await run(binary, ["health", "--url-file", urlFile, "--require-control-plane-poll", "--pid", String(pid), "--json"]);
     const poll = health?.control_plane_poll;
     if (poll?.ok !== true || typeof poll.value !== "number" || !Number.isFinite(poll.value)) return "unknown";
