@@ -1305,7 +1305,9 @@ The Gateway records the external documents that a thread mentions, without a mod
   otherwise it is only added to the sidebar and the subscription that `thread/fork` made is ended. Repeated clicks
   share one request. When the connection drops during the request, or no response comes within 20 seconds
   (`FORK_RESPONSE_TIMEOUT_MS`), the result is unknown: Desktop does not retry, tells the user to look for a fork in
-  the sidebar, and asks before a new fork. A success that comes after the 20 seconds only adds the fork to the
+  the sidebar, and asks before a new fork. An opaque per-source attempt marker is persisted before the RPC,
+  so restarting the renderer does not lose the warning. If the marker cannot be written, the request is refused.
+  A success that comes after the 20 seconds only adds the fork to the
   sidebar; it does not change the screen. Desktop does not look up fork candidates with `thread/list`, because
   `thread/list` does not return `forkedFromId`. A fork is a conversation copy, not a Git worktree: it uses the same working folder,
   so two conversations that edit files at the same time can conflict. The fork shows this warning and an

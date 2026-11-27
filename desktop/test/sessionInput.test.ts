@@ -150,6 +150,7 @@ function harness(readOnly = false, scheduler: (callback: () => void) => void = (
       state.folders = removeWorkspaceThread(state.folders ?? [], threadId);
     },
     getOpenThreadId: () => state.openThreadId ?? null,
+    getWorkspaceThread: (threadId) => (state.folders ?? []).flatMap(folder => folder.threads).find(thread => thread.id === threadId),
     getActiveThreadIds: () => state.activeThreadIds ?? [],
     getTranscript: () => state.transcript ?? null,
     setKernel: (kernel) => Object.assign(state, { kernel }),
@@ -1092,9 +1093,10 @@ describe("forking a conversation (#2625)", () => {
       expect(retry).not.toBe(forking);
       await answerBoundary(h, [turn("t1")], settle);
       expect(h.sent.filter((message) => message.method === "thread/fork")).toHaveLength(2);
-      expect(h.session.forkOutcomeUnknown("locked")).toBe(false);
+      expect(h.session.forkOutcomeUnknown("locked")).toBe(true);
       h.replyTo("thread/fork", { thread: thread("child-2", { forkedFromId: "locked" }) });
       await expect(retry).resolves.toEqual({ kind: "created", threadId: "child-2" });
+      expect(h.session.forkOutcomeUnknown("locked")).toBe(false);
     } finally {
       vi.useRealTimers();
     }

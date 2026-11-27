@@ -403,6 +403,7 @@ export type SessionStore = Pick<
   | "setChatConversation"
 > & {
   getOpenThreadId(): string | null;
+  getWorkspaceThread(threadId: string): WorkspaceThread | undefined;
   getActiveThreadIds(): readonly string[];
   getTranscript(): Transcript | null;
   getKernel(): KernelView;
@@ -438,6 +439,7 @@ export function desktopSessionStore(store: DesktopStore = useDesktopStore): Sess
     setChatConversation: state.setChatConversation,
     getKernel: () => store.getState().kernel,
     getOpenThreadId: () => store.getState().openThreadId,
+    getWorkspaceThread: (threadId) => store.getState().folders.flatMap(folder => folder.threads).find(thread => thread.id === threadId),
     getActiveThreadIds: () => store.getState().activeThreadIds,
     getTranscript: () => store.getState().transcript,
   };
