@@ -28,7 +28,7 @@ use crate::{git_execution_guard, git_subprocess, subprocess};
 mod conversation_worktree;
 
 /// git 폴더 안의 이 파일이나 폴더가 있으면 그 작업이 끝나지 않았다.
-const IN_PROGRESS_MARKERS: &[(&str, &str)] = &[
+pub(super) const IN_PROGRESS_MARKERS: &[(&str, &str)] = &[
     ("rebase-merge", "rebase"),
     ("rebase-apply", "rebase"),
     ("MERGE_HEAD", "merge"),

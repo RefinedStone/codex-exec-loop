@@ -233,6 +233,8 @@ mod tests {
             Ok(GitGraphRefsState {
                 repository: true,
                 refs_digest: Some(repository_dir.to_string()),
+                operation_in_progress: None,
+                conflicted_files: 0,
             })
         }
 
@@ -332,7 +334,12 @@ mod tests {
         let refs = answer(GIT_REFS_METHOD, json!({ "cwd": "/repo" }));
         assert_eq!(
             refs["result"],
-            json!({ "repository": true, "refsDigest": "/repo" })
+            json!({
+                "repository": true,
+                "refsDigest": "/repo",
+                "operationInProgress": null,
+                "conflictedFiles": 0
+            })
         );
 
         let found = answer(
