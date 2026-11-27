@@ -25,7 +25,7 @@ export class IsolatedWorkspaceStarter {
 
   constructor(private readonly request: GatewayRequest, private readonly newId: () => string = () => crypto.randomUUID()) {}
 
-  async start(cwd: string, open: (workspace: PreparedWorkspace) => Promise<string>): Promise<string> {
+  async start(cwd: string, open: (workspace: PreparedWorkspace, markStartRequested: () => void) => Promise<string>): Promise<string> {
     if (this.busy) throw new Error("격리 공간 요청이 진행 중입니다.");
     this.busy = true;
     try {
@@ -55,8 +55,9 @@ export class IsolatedWorkspaceStarter {
       }
       if (record.state !== "prepared") throw new Error(`격리 공간 준비 미완료: ${record.reason ?? record.state}`);
       attempt.prepared = record;
-      attempt.startRequested = true;
-      const threadId = await open(record);
+      const preparedAttempt = attempt;
+      // The caller marks dispatch after its last cancellation/write-permission check.
+      const threadId = await open(record, () => { preparedAttempt.startRequested = true; });
       this.attempts.delete(cwd);
       return threadId;
     } finally {

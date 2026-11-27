@@ -400,6 +400,36 @@ describe("sending input", () => {
     expect(sent.at(-1)).toMatchObject({ method: "turn/interrupt", params: { threadId: "t1", turnId: "turn-1" } });
   });
 
+  it("retries isolated creation after navigation cancels before thread/start", async () => {
+    const h = harness();
+    const cwd = "/work/example-app";
+    const head = "a".repeat(40);
+    const getting = h.nextRequest("akra/conversationWorkspace/get");
+    const first = h.session.startIsolatedThread(cwd);
+    h.replyTo("akra/git/graph", { repository: true, stale: false, head, refs: [], rows: [] });
+    const query = await getting;
+    const workspace = { requestId: query.params!.requestId, repositoryDir: cwd, workspaceDir: cwd + "-worktree",
+      branch: "akra-work", baseCommit: head, state: "prepared", reason: null };
+    await h.session.openThread("other-thread");
+    h.replyTo("akra/conversationWorkspace/get", workspace);
+    await expect(first).rejects.toThrow("대화 위치가 바뀌었습니다");
+    expect(h.sent.filter(message => message.method === "thread/start")).toHaveLength(0);
+
+    const starting = h.nextRequest("thread/start");
+    const retry = h.session.startIsolatedThread(cwd);
+    expect(h.sent.at(-1)).toMatchObject({ method: "akra/conversationWorkspace/get", params: query.params });
+    h.replyTo("akra/conversationWorkspace/get", workspace);
+    await starting;
+    h.replyTo("thread/start", { thread: { id: "isolated-thread", cwd: workspace.workspaceDir, gitInfo: { branch: workspace.branch },
+      name: null, preview: "", status: { type: "idle" }, turns: [], updatedAt: 1 } });
+    await expect(retry).resolves.toBe("isolated-thread");
+    expect(h.state.openThreadId).toBe("isolated-thread");
+    expect(h.sent.filter(message => message.method === "akra/git/graph")).toHaveLength(1);
+    expect(h.sent.filter(message => message.method === "akra/conversationWorkspace/prepare")).toHaveLength(0);
+    expect(h.sent.filter(message => message.method === "thread/start")).toHaveLength(1);
+    h.session.stop();
+  });
+
   it("starts a thread in a folder and opens it", async () => {
     const { session, sent, state, reply } = harness();
     const pending = session.startThread("/work/example-app");
