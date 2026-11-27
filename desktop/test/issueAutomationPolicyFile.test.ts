@@ -64,12 +64,9 @@ describe("issue automation policy file opening", () => {
 
   it.each([
     { platform: "linux" as const, environment: { AKRA_HOME: "/private/akra", HOME: "/ignored" }, target: "/private/akra/issue-automation.toml" },
-    { platform: "linux" as const, environment: { AKRA_HOME: "", HOME: "/users/operator" }, target: "/users/operator/.akra/issue-automation.toml" },
     { platform: "linux" as const, environment: { USERPROFILE: "/ignored", HOME: "/users/operator" }, target: "/users/operator/.akra/issue-automation.toml" },
     { platform: "win32" as const, environment: { AKRA_HOME: "E:\\private-akra", USERPROFILE: "C:\\ignored", HOME: "D:\\ignored" }, target: "E:\\private-akra\\issue-automation.toml" },
     { platform: "win32" as const, environment: { USERPROFILE: "C:\\Users\\operator", HOME: "D:\\ignored" }, target: "C:\\Users\\operator\\.akra\\issue-automation.toml" },
-    { platform: "win32" as const, environment: { AKRA_HOME: "", USERPROFILE: "", HOME: "D:\\home" }, target: "D:\\home\\.akra\\issue-automation.toml" },
-    { platform: "win32" as const, environment: { HOME: "D:\\home" }, target: "D:\\home\\.akra\\issue-automation.toml" },
   ])("matches Rust user-home selection: $target", async ({ platform, environment, target }) => {
     const f = fixture({ platform, environment });
     f.entries.set(f.paths.dirname(target), "directory");
@@ -82,9 +79,14 @@ describe("issue automation policy file opening", () => {
 
   it.each([
     { platform: "linux" as const, environment: {} },
+    { platform: "linux" as const, environment: { AKRA_HOME: "", HOME: "/users/operator" } },
+    { platform: "win32" as const, environment: { AKRA_HOME: "", USERPROFILE: "", HOME: "D:\\home" } },
+    { platform: "win32" as const, environment: { HOME: "D:\\home" } },
     { platform: "linux" as const, environment: { AKRA_HOME: "relative", HOME: "/valid-home" } },
     { platform: "linux" as const, environment: { AKRA_HOME: "file:///private/akra", HOME: "/valid-home" } },
     { platform: "linux" as const, environment: { HOME: "relative" } },
+    { platform: "linux" as const, environment: { HOME: "/users/./operator" } },
+    { platform: "win32" as const, environment: { USERPROFILE: "C:/Users/./operator" } },
     { platform: "win32" as const, environment: { USERPROFILE: "relative", HOME: "D:\\valid-home" } },
     { platform: "win32" as const, environment: { AKRA_HOME: "C:relative", USERPROFILE: "C:\\Users\\operator" } },
   ])("does not replace an invalid or missing user-home choice with another home: %#", async ({ platform, environment }) => {

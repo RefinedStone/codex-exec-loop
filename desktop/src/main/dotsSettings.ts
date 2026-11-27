@@ -3,13 +3,16 @@
 // Desktop 은 이 파일을 만들고 지운다. Gateway 는 시작 때 한 번만 읽으므로, 바꾼 뒤에는 Gateway 를 다시
 // 시작해야 적용된다. 경로 규칙은 Rust 쪽과 같아야 한다.
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, posix, win32 } from "node:path";
+import { resolveAkraHome } from "./gatewayEndpoint";
 
 /** `$AKRA_HOME/dots/cloud-enabled`. `AKRA_HOME` 이 없으면 `~/.akra` 이다 (Gateway 의 akra_home_dir 과 같다). */
-export function dotsCloudFlagPath(env: NodeJS.ProcessEnv = process.env, home: () => string = homedir): string {
-  const akraHome = env.AKRA_HOME && env.AKRA_HOME.length > 0 ? env.AKRA_HOME : join(home(), ".akra");
-  return join(akraHome, "dots", "cloud-enabled");
+export function dotsCloudFlagPath(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const paths = platform === "win32" ? win32 : posix;
+  return paths.join(resolveAkraHome(platform, env), "dots", "cloud-enabled");
 }
 
 export function isDotsCloudEnabled(path: string = dotsCloudFlagPath()): boolean {
