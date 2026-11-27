@@ -2487,6 +2487,7 @@ button.issues-title:hover {
 .conversation-menu button:focus-visible {
 }
 
+.mention-list button {
   font-family: var(--font-mono, monospace);
   font-size: var(--text-s);
 }

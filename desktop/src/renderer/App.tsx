@@ -42,7 +42,7 @@ import { SettingsDialog } from "./views/SettingsDialog";
 import { useAppSettings } from "./views/useAppSettings";
 import { useZoom, useZoomFactor, zoomStyle } from "./views/useZoom";
 import { panelZoomScope, type ZoomScope } from "../shared/zoom";
-import { CommandPalette, Fleet, Home, ShortcutsDialog, Toasts, useShortcuts, ZoomNotice } from "./views/Views";
+import { commandHandlers, CommandPalette, Fleet, Home, ShortcutsDialog, Toasts, useShortcuts, ZoomNotice } from "./views/Views";
 import { DelegationPanel } from "./work/DelegationPanel";
 import { PrReviewResult, type PrReviewMode, type StoredPrReview } from "./work/PrReviewResult";
 import { delegationActions } from "./work/delegationGateway";
@@ -857,6 +857,7 @@ export function App() {
   };
 
   const composerActions: ComposerActions = {
+    runCommand: (id) => commandHandlers()[id]?.(),
     // `@` 파일 언급은 열린 대화의 폴더, 새 스레드 화면이면 고른 폴더에서 찾는다 (#2837).
     searchFiles: async (query) => {
       const cwd = view === "home" ? useUiStore.getState().homeCwd : openCwd;

@@ -11,6 +11,7 @@ import { _electron as electron } from "playwright-core";
 const desktopDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const electronPath = createRequire(import.meta.url)("electron");
 const fake = await import(pathToFileURL(join(desktopDir, "test/fake-gateway/fakeGateway.ts")).href);
+const { PALETTE_ORDER } = await import(pathToFileURL(join(desktopDir, "src/shared/commands.ts")).href);
 
 const failures = [];
 const check = (name, ok, detail = "") => {
@@ -19,10 +20,12 @@ const check = (name, ok, detail = "") => {
 };
 
 const searches = [];
+const modelCalls = [];
 const userData = mkdtempSync(join(tmpdir(), "akra-e2e-file-mention-"));
 const endpoint = fake.uniqueTestEndpoint();
 const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING], {
   appServer(method, params) {
+    if (method === "turn/start" || method === "turn/steer") modelCalls.push({ method, params });
     if (method !== "fuzzyFileSearch") return undefined;
     searches.push(params);
     const files = ["src/main.ts", "src/main.test.ts"].filter((path) => path.includes(params.query))
@@ -72,6 +75,67 @@ try {
   await page.getByTestId("composer-queue").click();
   await page.waitForTimeout(400);
   check("reserving the draft clears the candidates", (await input.inputValue()) === "" && (await page.getByTestId("mention-list").count()) === 0, await input.inputValue());
+
+
+  // 앞의 예약 시험이 보낸 가짜 턴은 제외하고, 명령을 고르는 동안의 전송을 센다.
+  const modelCallsBeforeCommands = modelCalls.length;
+  // 같은 명령 표의 후보를 키보드/클릭으로 실행한다. 명령 선택은 모델 전송이 아니다.
+  await input.fill("/");
+  const slashList = page.getByTestId("slash-command-list");
+  await slashList.waitFor();
+  check("/ shows shared app commands", (await slashList.getByRole("option").count()) === PALETTE_ORDER.length);
+  await page.keyboard.press("ArrowDown");
+  const selectionVisible = await slashList.evaluate((list) => {
+    const selected = list.querySelector("button.selected");
+    const other = list.querySelector("button:not(.selected)");
+    return selected && other && getComputedStyle(selected).backgroundColor !== getComputedStyle(other).backgroundColor;
+  });
+  check("the selected candidate has a visible background", selectionVisible);
+
+  if (process.env.AKRA_E2E_ARTIFACT_DIR) await page.screenshot({ path: join(process.env.AKRA_E2E_ARTIFACT_DIR, "slash-commands.png") });
+  await input.fill("/sett");
+  await slashList.getByRole("button", { name: "/settings 설정" }).waitFor();
+  await page.keyboard.press("Enter");
+  await page.getByTestId("settings").waitFor();
+  check("Enter runs the app command and clears only the command draft", (await input.inputValue()) === "");
+  await page.getByTestId("settings").getByTitle("닫기").click();
+  await input.fill("/settings");
+  await slashList.waitFor();
+  await page.keyboard.press("Escape");
+  check("Escape preserves the draft and dismisses commands", (await input.inputValue()) === "/settings" && (await slashList.count()) === 0);
+
+  await input.fill("/review");
+  await slashList.waitFor();
+  await page.keyboard.press("Shift+Enter");
+  check("Shift+Enter writes a newline without running a command", (await input.inputValue()) === "/review\n" && (await slashList.count()) === 0);
+  await input.fill("/usr/local");
+  check("absolute paths stay ordinary input", (await slashList.count()) === 0);
+  await input.fill("read /settings");
+  check("slashes in prose stay ordinary input", (await slashList.count()) === 0);
+  await input.fill("/settings");
+  await slashList.waitFor();
+  await input.evaluate((element) => {
+    element.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 229, bubbles: true }));
+  });
+  check("IME confirmation cannot run a command", (await input.inputValue()) === "/settings" && (await page.getByTestId("settings").count()) === 0);
+  await page.keyboard.press("Home");
+  await page.waitForTimeout(50);
+  check("moving the caret away dismisses commands", (await slashList.count()) === 0);
+  await page.keyboard.press("End");
+  await slashList.waitFor();
+  await slashList.getByRole("button", { name: "/settings 설정" }).click();
+  await page.getByTestId("settings").waitFor();
+  check("click runs the shared command", (await input.inputValue()) === "");
+  await page.getByTestId("settings").getByTitle("닫기").click();
+
+  await input.fill("/theme");
+  await slashList.waitFor();
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+n" : "Control+n");
+  await page.getByTestId("home").waitFor();
+  await page.getByTestId("composer-input").waitFor();
+  check("command candidates do not follow navigation to home", (await slashList.count()) === 0);
+  check("slash interactions made no model requests", modelCalls.length === modelCallsBeforeCommands, JSON.stringify(modelCalls.slice(modelCallsBeforeCommands)));
+
 } catch (error) {
   check(`flow finished without error (${String(error).split("\n")[0]})`, false);
 } finally {
