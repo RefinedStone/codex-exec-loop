@@ -7,6 +7,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { discardCommands, editorUrl, executeGitFilePlan, NO_HELPER_PROGRAMS, parseNumstat, parsePorcelainStatus, planGitFileAction, readGitFileDiff, readGitStatus, resolveGitFile, resolveInside, runGitFileAction } from "../src/main/gitStatus";
 import { isConflictStatus, stageState } from "../src/shared/gitChange";
+import { parseGitDiff } from "../src/renderer/conversation/diff";
 
 describe("git status parsing", () => {
   it("reads the branch, renames, untracked folders and plain changes", () => {
@@ -63,6 +64,33 @@ describe("git file actions", () => {
     }
     return { root, git, write, text, statuses };
   };
+
+  it("keeps parser paths stable when Git uses mnemonic prefixes", async () => {
+    const { root, git, write } = repository({ "a.txt": "base\n" });
+    git("config", "diff.mnemonicPrefix", "true");
+    write("a.txt", "staged\n");
+    git("add", "a.txt");
+    write("a.txt", "working\n");
+    for (const source of [undefined, "head_worktree", "head_index", "index_worktree"] as const) {
+      const diff = await readGitFileDiff(root, "a.txt", false, source);
+      if (diff.kind !== "gitDiff") throw new Error("expected text patch");
+      const file = parseGitDiff(diff.text).find((entry) => entry.path === "a.txt" || entry.movePath === "a.txt");
+      expect(file?.lines.length).toBeGreaterThan(0);
+      expect(diff.text).toContain("diff --git a/a.txt b/a.txt");
+    }
+  });
+
+  it("overrides disabled and custom Git prefixes for file comparisons", async () => {
+    const { root, git, write } = repository({ "a.txt": "base\n" });
+    git("config", "diff.noprefix", "true");
+    git("config", "diff.srcPrefix", "old/");
+    git("config", "diff.dstPrefix", "new/");
+    write("a.txt", "working\n");
+    const diff = await readGitFileDiff(root, "a.txt", false, "head_worktree");
+    if (diff.kind !== "gitDiff") throw new Error("expected text patch");
+    expect(parseGitDiff(diff.text)[0]?.path).toBe("a.txt");
+    expect(diff.text).toContain("diff --git a/a.txt b/a.txt");
+  });
 
   it("distinguishes staged, unstaged and combined diff snapshots", async () => {
     const { root, git, write } = repository({ "a.txt": "base\n" });
