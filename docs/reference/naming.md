@@ -86,3 +86,5 @@
 - 변수가 없으면 Unix HOME 또는 Windows USERPROFILE의 .akra를 사용한다. Windows USERPROFILE이 없는 특수 실행 환경에서는 기존 HOME/LocalAppData 두 fallback의 서로 다른 저장소를 자동 선택하지 않고, 사용자가 기존 프로필의 절대 AKRA_HOME을 지정하도록 한다. 기존 OS-account 기준 보안 조정 경로 및 Windows 사용자 SID pipe 이름 자체는 변경하지 않는다. 테스트 전용 AKRA_GATEWAY_ENDPOINT의 명시적 우회 계약은 유지한다.
 - Windows Electron 45.2.3의 폐기 가능한 appData에서 실제 safeStorage/DPAPI 암호문, 지속 쿠키, 설정을 생성하고 제품의 keepCredentialIdentity와 prepareUserData로 구 profile을 새 이름에 옮겼다. 세 개의 독립 Electron 프로세스(seed/upgrade/reopen)에서 복호화 및 쿠키·설정 보존을 확인했다. 명령: desktop에서 node test/e2e/userdata-dpapi.mjs. 실사용 계정 자격 증명 또는 실제 외부 서비스는 이용하지 않았다.
 - macOS/Linux 키체인 시험은 별도의 폐기 가능한 OS 계정이 필요하므로 아직 수행하지 않았다. 실제 이전 binary 다운그레이드, 이미 옛 이름으로 열린 프로세스와의 동시 사용은 여전히 별도 검증이다. 이전/새 폴더를 자동으로 병합하거나 사용자 데이터를 덮어쓰지 않는다.
+
+- 이 변경은 로컬 profile root 해석의 일치까지만 보장한다. Windows named pipe는 SID에 묶여 있으므로 유효한 다른 AKRA_HOME으로 실행한 클라이언트도 이미 실행 중인 같은 SID의 Gateway에 붙을 수 있다. 로컬 설정 경로가 올바르다는 사실은 접속한 Gateway가 그 프로필을 소유한다는 증거가 아니다. 서로 다른 프로필을 동시에 사용하지 말고, 전환할 때 기존 Gateway를 정상 종료한 뒤 원하는 절대 경로로 재시작한다. #2588 종료 전에 프로필 식별자 일치 계약 또는 다른 프로필 접속 거절과 실제 두 프로필 회귀를 별도로 검증해야 한다. 기존 SID pipe/보안 저장소 이름을 이번 변경에서 바꾸지 않는다.
