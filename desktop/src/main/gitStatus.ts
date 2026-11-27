@@ -16,6 +16,8 @@ const GIT_TIMEOUT_MS = 15_000;
 const STATUS_OUTPUT_LIMIT = 4 << 20;
 /** 파일 하나의 diff 한도이다. 넘으면 앞부분만 보여 준다. */
 const FILE_DIFF_LIMIT = 1 << 20;
+/** Keep paths compatible with the renderer regardless of the repository diff configuration. */
+const DIFF_PATH_OPTIONS = ["--src-prefix=a/", "--dst-prefix=b/", "--no-relative"];
 
 export interface GitOutput {
   stdout: string;
@@ -489,7 +491,7 @@ export async function readGitFileDiff(cwdInput: unknown, path: unknown, untracke
   // An unborn repository has no HEAD. Git's cached diff compares the index with the empty tree.
   const head = await runGit(cwd, ["rev-parse", "--verify", "-q", "HEAD"], 4096);
   const base = head.code === 0 ? ["HEAD"] : ["--cached"];
-  const output = await runGit(cwd, ["diff", ...base, "--no-color", "--no-ext-diff", "--no-textconv", "--", pathspec], FILE_DIFF_LIMIT);
+  const output = await runGit(cwd, ["diff", ...base, "--no-color", "--no-ext-diff", "--no-textconv", ...DIFF_PATH_OPTIONS, "--", pathspec], FILE_DIFF_LIMIT);
   if (output.code !== 0) {
     throw new Error(failureMessage(output, "git diff 가 실패했습니다."));
   }
@@ -520,7 +522,7 @@ async function readSourceDiff(file: RepositoryFile, sourceInput: unknown): Promi
     }
     const args = source === "head_index" ? ["--cached", ...(before.headOid ? [before.headOid] : [])]
       : source === "head_worktree" ? [before.headOid!] : [];
-    const result = await runGit(file.root, ["diff", ...args, "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--", file.pathspec,
+    const result = await runGit(file.root, ["diff", ...args, "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", ...DIFF_PATH_OPTIONS, "--", file.pathspec,
       ...(comparisonOriginal ? [comparisonOriginal.pathspec] : [])], FILE_DIFF_LIMIT);
     if (result.code !== 0 || result.timedOut) throw new Error(failureMessage(result, "git diff 가 실패했습니다."));
     return { kind: "gitDiff", text: result.stdout, truncated: result.truncated };
