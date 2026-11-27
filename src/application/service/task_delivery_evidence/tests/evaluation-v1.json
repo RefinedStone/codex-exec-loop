@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "correct-output-host-evidence",
+      "expected_output": "answer=42",
+      "evidence": "host",
+      "events": [
+        {"kind":"advance","ms":100},
+        {"kind":"tool","call_id":"read","output":"input=21"},
+        {"kind":"usage","sequence":1,"last":60,"total":60},
+        {"kind":"usage","sequence":1,"last":60,"total":60},
+        {"kind":"advance","ms":25},
+        {"kind":"tool","call_id":"write","output":"answer=42"},
+        {"kind":"usage","sequence":2,"last":20,"total":80}
+      ],
+      "expected":{"task_success":true,"valid_evidence":1,"waivers":0,"delivery_allowed":true,"elapsed_ms":125,"tool_calls":2,"observed_tokens":80,"usage_gaps":[]}
+    },
+    {
+      "id": "correct-output-human-waiver",
+      "expected_output": "screen=ready",
+      "evidence": "human_waiver",
+      "events": [
+        {"kind":"advance","ms":250},
+        {"kind":"tool","call_id":"render","output":"screen=ready"}
+      ],
+      "expected":{"task_success":true,"valid_evidence":0,"waivers":1,"delivery_allowed":true,"elapsed_ms":250,"tool_calls":1,"observed_tokens":null,"usage_gaps":["usage_not_observed"]}
+    },
+    {
+      "id": "incorrect-output-host-evidence",
+      "expected_output": "answer=42",
+      "evidence": "host",
+      "events": [
+        {"kind":"advance","ms":60},
+        {"kind":"tool","call_id":"write","output":"answer=41"},
+        {"kind":"usage","sequence":3,"last":12,"total":20}
+      ],
+      "expected":{"task_success":false,"valid_evidence":1,"waivers":0,"delivery_allowed":true,"elapsed_ms":60,"tool_calls":1,"observed_tokens":12,"usage_gaps":["prefix_not_observed"]}
+    },
+    {
+      "id": "correct-output-stale-evidence",
+      "expected_output": "answer=42",
+      "evidence": "stale_host",
+      "events": [
+        {"kind":"advance","ms":180},
+        {"kind":"tool","call_id":"write","output":"answer=42"},
+        {"kind":"usage","sequence":1,"last":40,"total":40},
+        {"kind":"usage","sequence":2,"last":10,"total":50}
+      ],
+      "expected":{"task_success":true,"valid_evidence":0,"waivers":0,"delivery_allowed":false,"elapsed_ms":180,"tool_calls":1,"observed_tokens":50,"usage_gaps":[]}
+    }
+  ]
+}

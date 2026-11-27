@@ -2257,6 +2257,7 @@ pub(super) fn persisted_error_summary(error: &anyhow::Error) -> String {
 mod tests {
     #[cfg(unix)]
     mod binding_admission;
+    mod conformance;
     #[cfg(unix)]
     mod worker_evidence;
     #[cfg(unix)]
@@ -4773,7 +4774,6 @@ mod tests {
         fs::set_permissions(path, permissions).expect("fake codex should be executable");
     }
 
-    #[cfg(unix)]
     fn fake_codex_script() -> &'static str {
         r#"#!/usr/bin/env python3
 import json
@@ -4815,7 +4815,7 @@ def should_fail_once(expected):
 
 def thread_record(thread_id, params=None):
     params = params or {}
-    cwd = params.get("cwd") or "/repo"
+    cwd = params.get("cwd") or os.environ.get("AKRA_CONFORMANCE_CWD") or "/repo"
     name = "Fake " + thread_id
     return {
         "id": thread_id,
@@ -4848,7 +4848,7 @@ def runtime_envelope(params, default_model):
     return {
         "approvalPolicy": params.get("approvalPolicy") or "on-request",
         "approvalsReviewer": params.get("approvalsReviewer") or "user",
-        "cwd": params.get("cwd") or "/repo",
+        "cwd": params.get("cwd") or os.environ.get("AKRA_CONFORMANCE_CWD") or "/repo",
         "model": params.get("model") or default_model,
         "modelProvider": "openai",
         "reasoningEffort": "medium",
@@ -5047,7 +5047,20 @@ for line in sys.stdin:
                     },
                 },
             })
-        if scenario == "terminal_retry_completed":
+        if scenario == "conformance_usage_retry":
+            counter = {"cachedInputTokens":0,"inputTokens":60,"outputTokens":0,"reasoningOutputTokens":0,"totalTokens":60}
+            for _ in range(2):
+                send({"method":"thread/tokenUsage/updated","params":{"threadId":thread_id,"turnId":turn_id,"tokenUsage":{"last":counter,"total":counter,"modelContextWindow":1000}}})
+        if scenario in ["conformance_approval", "conformance_cancel_race"]:
+            send({"id":"conformance-approval","method":"item/commandExecution/requestApproval","params":{
+                "threadId":thread_id,"turnId":turn_id,"itemId":"command-1","startedAtMs":1,"command":"fixture only","availableDecisions":["accept","decline"]}})
+            # The peer cannot complete before the approval is accepted or cancelled.
+            answer = json.loads(sys.stdin.readline())
+            log_request(answer)
+            expected = "decline" if scenario == "conformance_cancel_race" else "accept"
+            if answer.get("id") != "conformance-approval" or answer.get("result",{}).get("decision") != expected:
+                sys.exit(3)
+        if scenario in ["terminal_retry_completed", "conformance_usage_retry"]:
             send({
                 "method": "error",
                 "params": {
