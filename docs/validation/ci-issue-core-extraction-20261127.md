@@ -43,3 +43,11 @@ Windows x86_64, Rust 1.95.0, default features, test profile, CARGO_INCREMENTAL=1
 - 원본 기준선: #2867 / docs/validation/ci-local-build-baseline-2026-11-27.md.
 - #2904~#2907은 동일 소유권 plan을 실행 경로에 연결한다. 알 수 없는 입력이나 불완전한 root 계약은 전체 검증을 유지한다.
 - #2911에서 최종 조합 SHA의 전체 검증과 원격 CI 성능을 판단한다. 이 PR은 전체 CI 성능 인수 또는 이슈 종료를 선언하지 않는다.
+
+## Port re-export guard regression (2026-11-27)
+
+The first issue-core CI run exposed an architecture guard that only searched each root Port file for an inline trait declaration. The two extracted Port shims correctly re-exported their real public crate traits, but the guard rejected them. The verification extraction exposed the same problem in two additional shims. Evidence: [issue-core CI job](https://github.com/RefinedStone/codex-exec-loop/actions/runs/45956401035/job/140364982858) and [verification CI job](https://github.com/RefinedStone/codex-exec-loop/actions/runs/45957694809/job/140370017716).
+
+The guard now resolves only four explicitly registered transfers through the actual public module chain and public trait in the destination crate. It rejects private, conditional, missing, aliased, forged, ambiguous, or non-trait destinations. Other outbound Port checks retain their original policy. No production behavior or test exclusion was changed.
+
+Validation on Windows with Rust 1.95: compiled the real architecture test source against the existing matching proc-macro2, quote, and syn test dependencies (without rebuilding the root libtest), then ran all five `outbound_port_` tests: **5 passed, 0 failed, 0 ignored**. Four are new positive/negative regression tests; the existing repository-wide naming contract also passed. Compile wall time was 3.266 seconds; test process wall time was 0.247 seconds. This targeted check is not a full architecture-suite or CI-duration result. Raw output remains under `artifacts/ci-port-guard-foundation/`.
