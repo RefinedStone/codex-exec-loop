@@ -1040,7 +1040,7 @@ export class DesktopSession {
         return;
       }
       // thread/list 는 분기 계보를 생략할 수 있다. 재연결/재시작 뒤 실제로 연 대화의 서버 응답으로 복원한다.
-      if (opened.thread.id === threadId && opened.thread.forkedFromId) {
+      if (opened.thread.id === threadId && opened.thread.forkedFromId && !this.removedThreadIds.has(threadId)) {
         this.store.mergeFolders(groupThreadsByCwd([opened.thread]));
       }
       this.writerElsewhereThreadId = opened.writerElsewhere ? threadId : null;

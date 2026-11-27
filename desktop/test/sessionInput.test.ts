@@ -923,6 +923,38 @@ describe("forking a conversation (#2625)", () => {
     h.session.stop();
   });
 
+  it.each([
+    ["resume", "thread/archived"],
+    ["resume", "thread/deleted"],
+    ["writer-elsewhere", "thread/archived"],
+    ["writer-elsewhere", "thread/deleted"],
+    ["read-only", "thread/archived"],
+    ["read-only", "thread/deleted"],
+  ])("keeps a fork removed when opening through %s receives %s before its response", async (mode, method) => {
+    const h = harness(mode === "read-only");
+    const listed = { id: "child", title: "Child", updatedAt: 2, branch: null, failed: false };
+    const other = { ...listed, id: "other", title: "Other" };
+    h.state.folders = [{ cwd: "/w", threads: [listed, other] }];
+    h.emitState("connected");
+    const opening = h.session.openThread("child");
+    await flush();
+    if (mode === "writer-elsewhere") {
+      h.receive({ jsonrpc: "2.0", id: lastId(h.sent, "thread/resume"), error: { code: -32603, message: "thread child already has an active writer" } });
+      await flush();
+    }
+    h.receive({ jsonrpc: "2.0", method, params: { threadId: "child" } });
+    expect(h.state.folders?.[0]?.threads).toEqual([other]);
+    // Removing the sidebar entry does not navigate away or invalidate the pending open.
+    expect(h.state.openThreadId).toBe("child");
+    h.replyTo(mode === "resume" ? "thread/resume" : "thread/read", {
+      thread: thread("child", { forkedFromId: "source", turns: [turn("inherited")] }),
+    });
+    await opening;
+    expect(h.state.folders?.[0]?.threads).toEqual([other]);
+    expect(h.sent.some((request) => request.method === "thread/fork" || request.method?.startsWith("turn/"))).toBe(false);
+    h.session.stop();
+  });
+
   it("does not recover lineage from a thread-open response after navigating away", async () => {
     const h = harness();
     h.state.folders = [{ cwd: "/w", threads: [{ id: "child", title: "Child", updatedAt: 1, branch: null, failed: false }] }];
