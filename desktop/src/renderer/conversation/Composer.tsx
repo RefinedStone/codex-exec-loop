@@ -215,6 +215,7 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
   // `/` 명령은 초안 전체가 명령일 때만 연다. 경로나 문장 속의 `/` 는 일반 입력이다.
   const [slash, setSlash] = useState<{ text: string; commands: CommandSpec[]; cursor: number } | null>(null);
   const slashAt = useRef<string | null>(null);
+  const dismissedSlash = useRef<string | null>(null);
   const slashList = useRef<HTMLUListElement>(null);
   const visibleSlash = !disabled && slash?.text === draft ? slash : null;
   useEffect(() => {
@@ -222,6 +223,7 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
   }, [visibleSlash?.cursor]);
   const closeSlash = () => setSlash(null);
   const updateSlash = (text: string, start: number, end: number) => {
+    dismissedSlash.current = null;
     const query = actions.runCommand ? slashCommandQuery(text, start, end) : null;
     slashAt.current = query;
     const commands = query === null ? [] : matchingSlashCommands(query);
@@ -254,6 +256,7 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
   };
   /** 초안을 코드로 비운다. 열린 후보와 진행 중인 찾기도 버린다. */
   const clearDraft = () => {
+    dismissedSlash.current = null;
     closeSlash();
     slashAt.current = null;
     closeMention();
@@ -306,6 +309,7 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
+        dismissedSlash.current = visibleSlash.text;
         closeSlash();
         return;
       }
@@ -409,6 +413,11 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
               if (slashCommandQuery(value, selectionStart, selectionEnd) !== slashAt.current) updateSlash(value, selectionStart, selectionEnd);
             }}
             onKeyDown={onKeyDown}
+            onFocus={(event) => {
+              const { value, selectionStart, selectionEnd } = event.currentTarget;
+              // 단순 포커스 이탈은 후보를 복원한다. Escape로 닫은 같은 초안은 그대로 둔다.
+              if (dismissedSlash.current !== value) updateSlash(value, selectionStart, selectionEnd);
+            }}
             onBlur={closeSlash}
             aria-controls={visibleSlash ? "composer-slash-commands" : undefined}
             aria-activedescendant={visibleSlash ? `slash-command-${visibleSlash.commands[visibleSlash.cursor]!.id}` : undefined}
