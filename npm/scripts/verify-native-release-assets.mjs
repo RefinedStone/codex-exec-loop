@@ -187,6 +187,21 @@ function verifyBundleRecords(fileDigests, metadataBodies, contract) {
       throw new Error(`Release bundle is missing required file: ${requiredPath}`);
     }
   }
+  // A self-consistent manifest can still omit mandatory license files. Refuse
+  // incomplete release payloads before extraction, npm staging or publication.
+  const emptyDigest = createHash("sha256").update(Buffer.alloc(0)).digest("hex");
+  if (!fileDigests.has("LICENSE") || fileDigests.get("LICENSE") === emptyDigest) {
+    throw new Error("Project license must be a nonempty regular file: LICENSE");
+  }
+  for (const notice of ["Galmuri-OFL.txt", "PixiJS-MIT.txt", "rust-crates.txt", "README.md"]) {
+    const relativePath = "THIRD_PARTY_NOTICES/" + notice;
+    if (!fileDigests.has(relativePath)) {
+      throw new Error("Required third-party notice is missing: " + relativePath);
+    }
+    if (fileDigests.get(relativePath) === emptyDigest) {
+      throw new Error("Required third-party notice must be a nonempty regular file: " + relativePath);
+    }
+  }
   parseVersionMetadata(metadataBodies.get("VERSION.txt") ?? Buffer.alloc(0), contract);
   const manifest = parseBundleManifest(
     metadataBodies.get("SHA256SUMS.txt") ?? Buffer.alloc(0),

@@ -122,6 +122,12 @@ jobs:
             --target "${{ matrix.target }}" \
             --profile release
 
+      - name: Smoke test the verified native launcher in an isolated profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          node npm/scripts/smoke-native-release.mjs "$(dirname "${{ steps.package.outputs.archive }}")" "${GITHUB_REF_NAME}" "${{ matrix.target }}" release
+
       - name: Upload release payload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
