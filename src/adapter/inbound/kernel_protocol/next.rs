@@ -91,6 +91,8 @@ pub fn reason_next(reason: ReasonCode) -> Vec<NextStep> {
         ReasonCode::PreparationActive => vec![Step::short_wait(), Step::Resend],
         // 커널이 세션 목록을 읽은 뒤에 정했다. 같은 thread 를 다시 보내면 같은 결과이다 (#2804).
         ReasonCode::UnknownThread => vec![Step::AskUser],
+        // app-server 의 목록 읽기가 실패했다. 곧 다시 보내면 다시 읽는다.
+        ReasonCode::SessionListUnavailable => vec![Step::short_wait(), Step::Resend],
         // 다른 저장소의 커널로 보낼지는 사람이 정한다. 같은 커널에 다시 보내면 같은 거절이다.
         ReasonCode::ForeignWorkspace => vec![Step::AskUser],
         // 병렬 모드를 끄는 명령은 아직 프로토콜에 없다 (K4-9b). 끌지는 사람이 정한다.

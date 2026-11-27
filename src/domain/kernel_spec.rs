@@ -222,6 +222,8 @@ spec_names! {
             "Another prompt is being prepared. Send again with a new idempotency key after that preparation ends.";
         UnknownThread => "unknown_thread",
             "The thread is not in the session list. The kernel read the list from the app-server before it decided, so the prompt ends its operation as `failed`. Check the thread id.";
+        SessionListUnavailable => "session_list_unavailable",
+            "The kernel did not know the thread and could not read the session list from the app-server, so the prompt ends its operation as `failed`. `detail` of the `command_completed` record gives the cause. Send again with a new idempotency key shortly.";
         ForeignWorkspace => "foreign_workspace",
             "The thread runs in a directory outside the workspace of this kernel client. The kernel makes no planning task for it. Send the prompt through the kernel of the thread's repository.";
         ParallelMode => "parallel_mode",
@@ -472,6 +474,7 @@ impl KernelCommandKind {
                     Reason::Busy,
                     Reason::PreparationActive,
                     Reason::UnknownThread,
+                    Reason::SessionListUnavailable,
                     Reason::ForeignWorkspace,
                     Reason::ParallelMode,
                     Reason::ParallelModeUnknown,
@@ -886,6 +889,7 @@ mod tests {
                 "busy",
                 "preparation_active",
                 "unknown_thread",
+                "session_list_unavailable",
                 "foreign_workspace",
                 "parallel_mode",
                 "parallel_mode_unknown",

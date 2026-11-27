@@ -46,6 +46,8 @@ pub enum ThreadPromptAdmission {
     },
     // core 가 모르는 thread 이다. 보는 thread, 일이 남은 thread, 읽은 세션 목록 어디에도 없다.
     RejectedUnknownThread,
+    // 모르는 thread 이고, 세션 목록을 app-server 에서 읽지 못했다 (#2804). 그 thread 가 있는지 모른다.
+    RejectedSessionListUnavailable,
     // 세션 목록이 적은 thread 의 작업 디렉터리가 이 작업 공간과 그 병렬 pool 밖이다 (#2303). 다른 저장소의 thread 는 그 저장소의
     // 커널이 준비하고 제출한다.
     RejectedForeignWorkspace,
@@ -64,6 +66,7 @@ impl ThreadPromptAdmission {
             Self::RejectedBusy => Some(ReasonCode::Busy),
             Self::RejectedPreparationActive { .. } => Some(ReasonCode::PreparationActive),
             Self::RejectedUnknownThread => Some(ReasonCode::UnknownThread),
+            Self::RejectedSessionListUnavailable => Some(ReasonCode::SessionListUnavailable),
             Self::RejectedForeignWorkspace => Some(ReasonCode::ForeignWorkspace),
             Self::RejectedParallelMode => Some(ReasonCode::ParallelMode),
             Self::RejectedParallelModeUnknown => Some(ReasonCode::ParallelModeUnknown),
