@@ -1330,6 +1330,121 @@
   opacity: 0.7;
 }
 
+/* 상태 띠는 끝나지 않은 git 작업, 충돌, 브랜치 없는 HEAD 를 한 줄로 쓴다 (plan 27 §7.4). 왼쪽 띠와 굵은 글로도 보인다. */
+.git-status-strip {
+  padding: 4px 12px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--line);
+  box-shadow: inset 3px 0 0 var(--warn);
+  color: var(--warn);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 좁은 패널에는 가운데 칸만 있다. 최대화하면 왼쪽에 ref 목록이 온다 (plan 27 §7.2). */
+.git-graph-columns {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.git-graph-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.git-ref-list {
+  flex: none;
+  width: 220px;
+  padding: 4px 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--line);
+}
+
+.git-ref-list h3 {
+  margin: 8px 12px 2px;
+  color: var(--text-3);
+  font-size: var(--text-s);
+}
+
+.work-panel button.git-ref-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 2px 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.work-panel button.git-ref-item:hover {
+  background: var(--bg-hover);
+}
+
+.work-panel button.git-ref-item.selected {
+  background: var(--bg-active);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.git-ref-item-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-ref-item-head {
+  flex: none;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* "커밋하지 않은 변경" 줄은 그래프의 맨 위이다. 점선 고리와 기울인 글로 커밋 줄과 구분한다. */
+.work-panel button.git-uncommitted {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-bottom: 1px dashed var(--line-strong);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-2);
+  font-style: italic;
+  text-align: left;
+  cursor: pointer;
+}
+
+.work-panel button.git-uncommitted::before {
+  content: "";
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border: 1.5px dashed currentColor;
+  border-radius: 50%;
+}
+
+/* 열린 계획의 결과 자리이다: 점선 라벨과 점선 고리 (plan 27 §7.4 의 2). */
+.git-ref-planned {
+  border: 1px dashed var(--accent);
+  color: var(--accent);
+}
+
+.git-node-planned {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 2 2;
+}
+
 /* 설치된 스킬 패널 (#2383) */
 /* 경로의 끝(런타임 폴더와 스킬 이름)이 행을 구분한다. 자르지 않고 줄을 바꾼다. */
 .skill-path {

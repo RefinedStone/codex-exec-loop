@@ -148,12 +148,19 @@ export interface CommitActionsProps {
   /** 지금 실행하면 안 되는 이유이다 (이 스레드의 턴이 실행 중이다). 계획은 볼 수 있다. */
   busyReason: string | null;
   log: GitOperationLog;
+  /** 보이는 계획이 바뀌면 부른다. 계획이 닫히면 `null` 이다. 그래프가 결과를 점선으로 그린다. */
+  onPreview(plan: GitOperationPlan | null): void;
 }
 
 /** 고른 커밋의 작업 단추와 계획이다. 커밋이 바뀌면 부모가 `key` 로 새로 만든다. */
-export function CommitActionsView({ request, cwd, commit, refs, head, worktrees, busyReason, log }: CommitActionsProps) {
+export function CommitActionsView({ request, cwd, commit, refs, head, worktrees, busyReason, log, onPreview }: CommitActionsProps) {
   const actions = useMemo(() => commitActions(commit, refs, head, worktrees), [commit, refs, head, worktrees]);
   const [state, setState] = useState<PlanState>({ phase: "idle" });
+  const previewed = state.phase === "planned" ? state.plan : null;
+  useEffect(() => {
+    onPreview(previewed);
+    return () => onPreview(null);
+  }, [previewed, onPreview]);
   // 계획을 읽는 사이에 다른 작업을 고르면 앞의 답을 버린다.
   const asked = useRef(0);
 
