@@ -44,6 +44,16 @@ pub(crate) fn validate_windows_shared_private_directory(path: &Path, opened: &Fi
     )
 }
 
+/// Identity-only comparison for Telegram config ancestor directories. The caller must
+/// separately anchor/reopen the path and preserve its owner/group/DACL snapshot.
+/// Never use this for config files, private stores, or owned temporary children.
+pub(crate) fn validate_windows_ancestor_directory_identity(
+    expected: WindowsFileIdentitySnapshot,
+    current: &File,
+) -> Result<()> {
+    validate_windows_shared_directory_snapshots(expected, windows_file_identity_snapshot(current)?)
+}
+
 fn validate_windows_shared_directory_with_security(
     path: &Path,
     opened: &File,

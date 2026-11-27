@@ -1840,6 +1840,156 @@ fn telegram_config_windows_rejects_parent_junctions() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[cfg(windows)]
+struct WindowsTelegramConfigFixture {
+    root: std::path::PathBuf,
+    config_directory: std::path::PathBuf,
+    path: std::path::PathBuf,
+}
+
+#[cfg(windows)]
+impl WindowsTelegramConfigFixture {
+    fn new() -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "akra-telegram-config-ancestor-{:032x}",
+            rand::random::<u128>()
+        ));
+        let config_directory = root.join("config");
+        fs::create_dir_all(&config_directory).expect("config directory should create");
+        let path = config_directory.join("telegram.env");
+        fs::write(&path, "AKRA_TELEGRAM_BOT_TOKEN=fixture-secret\n")
+            .expect("config fixture should write");
+        secure_windows_telegram_config(&path);
+        Self {
+            root,
+            config_directory,
+            path,
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WindowsTelegramConfigFixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn telegram_config_windows_allows_unrelated_ancestor_children_during_read() {
+    let fixture = WindowsTelegramConfigFixture::new();
+    let body =
+        super::config::read_windows_telegram_environment_file_after_read(&fixture.path, || {
+            // Mutate only this test's shared ancestor, not the real OS Temp directory.
+            let unrelated = fixture.root.join("unrelated-sibling");
+            fs::create_dir(&unrelated).expect("unrelated child should create");
+            fs::write(unrelated.join("child"), "unrelated").expect("unrelated file should write");
+            fs::remove_dir_all(&unrelated).expect("unrelated child should remove");
+            let direct_sibling = fixture.config_directory.join("unrelated-file");
+            fs::write(&direct_sibling, "unrelated").expect("direct sibling should write");
+            fs::remove_file(&direct_sibling).expect("direct sibling should remove");
+        })
+        .expect("unrelated directory children must not invalidate the anchored config read");
+    assert_eq!(body, "AKRA_TELEGRAM_BOT_TOKEN=fixture-secret\n");
+}
+
+#[cfg(windows)]
+#[test]
+fn telegram_config_windows_rejects_ancestor_dacl_changes_during_read() {
+    for change_immediate_parent in [false, true] {
+        let fixture = WindowsTelegramConfigFixture::new();
+        let changed_directory = if change_immediate_parent {
+            &fixture.config_directory
+        } else {
+            &fixture.root
+        };
+        let error =
+            super::config::read_windows_telegram_environment_file_after_read(&fixture.path, || {
+                let output = std::process::Command::new("icacls")
+                    .arg(changed_directory)
+                    .args(["/grant", "*S-1-1-0:(R)"])
+                    .output()
+                    .expect("icacls should launch");
+                assert!(
+                    output.status.success(),
+                    "ancestor DACL fixture should change"
+                );
+            })
+            .expect_err("an ancestor permission change must invalidate the config read");
+        assert!(format!("{error:#}").contains("parent security changed"));
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn telegram_config_windows_rejects_anchored_parent_replacement() {
+    let fixture = WindowsTelegramConfigFixture::new();
+    let error =
+        super::config::validate_windows_telegram_config_parents_after_change(&fixture.path, || {
+            fs::rename(
+                &fixture.config_directory,
+                fixture.root.join("original-config"),
+            )
+            .expect("anchored parent should move");
+            fs::create_dir(&fixture.config_directory).expect("replacement parent should create");
+        })
+        .expect_err("a replacement directory must not satisfy the original anchor");
+    assert!(format!("{error:#}").contains("same non-reparse object"));
+}
+
+#[cfg(windows)]
+#[test]
+fn telegram_config_windows_rejects_anchored_parent_junction_replacement() {
+    let fixture = WindowsTelegramConfigFixture::new();
+    let error =
+        super::config::validate_windows_telegram_config_parents_after_change(&fixture.path, || {
+            let original = fixture.root.join("original-config");
+            fs::rename(&fixture.config_directory, &original).expect("anchored parent should move");
+            let output = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&fixture.config_directory)
+                .arg(&original)
+                .output()
+                .expect("mklink should launch");
+            assert!(
+                output.status.success(),
+                "replacement junction should create"
+            );
+        })
+        .expect_err("a junction must not satisfy the original directory anchor");
+    assert!(format!("{error:#}").contains("reparse"));
+    fs::remove_dir(&fixture.config_directory).expect("junction should remove without traversal");
+}
+
+#[cfg(windows)]
+#[test]
+fn telegram_config_windows_keeps_final_file_version_and_acl_checks_strict() {
+    for change_acl in [false, true] {
+        let fixture = WindowsTelegramConfigFixture::new();
+        let error =
+            super::config::read_windows_telegram_environment_file_after_read(&fixture.path, || {
+                if change_acl {
+                    let output = std::process::Command::new("icacls")
+                        .arg(&fixture.path)
+                        .args(["/grant", "*S-1-1-0:(R)"])
+                        .output()
+                        .expect("icacls should launch");
+                    assert!(output.status.success(), "config DACL fixture should change");
+                } else {
+                    // Keep the byte length unchanged: version metadata must still detect it.
+                    fs::write(&fixture.path, "AKRA_TELEGRAM_BOT_TOKEN=changed-secret\n")
+                        .expect("config content should change");
+                }
+            })
+            .expect_err("final config mutation must still fail closed");
+        assert!(
+            format!("{error:#}").contains("Windows Telegram config changed")
+                || format!("{error:#}").contains("Windows Telegram config security changed")
+        );
+    }
+}
+
 // Poll-loop tests keep the bot alive across transport and per-message failures.
 #[test]
 fn run_poll_cycle_keeps_loop_alive_after_poll_error() {
