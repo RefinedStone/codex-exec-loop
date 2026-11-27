@@ -102,6 +102,7 @@ impl TempGitRepo {
         fs::canonicalize(&self.repo_root).unwrap_or_else(|_| self.repo_root.clone())
     }
     fn new(prefix: &str) -> Self {
+        let _timer = crate::test_utils::NativeTestTimer::new("temp_git_repo_new");
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock should be monotonic")
