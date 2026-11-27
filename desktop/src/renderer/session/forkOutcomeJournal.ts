@@ -26,9 +26,12 @@ function defaultAdmissionLock<T>(name: string, enter: () => T): Promise<T> {
   } } }).window;
   // In supported renderers Web Locks serializes the read/check/write admission
   // among windows sharing the origin. Other profiles or external clients are
-  // not covered. Without Web Locks the immediate recheck is best effort.
-  const locks = browser?.navigator?.locks;
-  return locks ? locks.request(name, enter) : Promise.resolve().then(enter);
+  // not covered. Do not claim cross-window admission without this capability.
+  // Node-only harnesses have no browser and run the synchronous admission locally.
+  if (!browser) return Promise.resolve().then(enter);
+  const locks = browser.navigator?.locks;
+  if (!locks) return Promise.reject(new Error("fork outcome admission lock unavailable"));
+  return locks.request(name, enter);
 }
 
 export class ForkOutcomeJournal {
