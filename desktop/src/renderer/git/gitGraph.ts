@@ -225,6 +225,7 @@ export interface GitWorktreeProgress {
   /** `merge`, `rebase`, `cherry-pick`, `revert`, `bisect` 이다. */
   operation: string | null;
   conflictedFiles: number;
+  rewrittenRemote?: string;
 }
 
 /** `akra/git/refs` 의 답이다. 저장소가 아니면 지문이 `null` 이다. 옛 Gateway 는 끝나지 않은 일을 주지 않는다. */
@@ -233,7 +234,7 @@ export async function fetchRefsState(request: GatewayRequest, cwd: string): Prom
   const conflicted = state?.conflictedFiles;
   return {
     refsDigest: text(state?.refsDigest) ?? null,
-    progress: { operation: text(state?.operationInProgress) ?? null, conflictedFiles: Number.isInteger(conflicted) && (conflicted as number) > 0 ? (conflicted as number) : 0 },
+    progress: { ...(typeof state?.rewrittenRemote === "string" ? {rewrittenRemote:state.rewrittenRemote}:{}), operation: text(state?.operationInProgress) ?? null, conflictedFiles: Number.isInteger(conflicted) && (conflicted as number) > 0 ? (conflicted as number) : 0 },
   };
 }
 
@@ -243,6 +244,7 @@ export async function fetchRefsState(request: GatewayRequest, cwd: string): Prom
  */
 export function unfinishedWork(progress: GitWorktreeProgress | null, refs: readonly GitRef[], head: string | null): string[] {
   const parts: string[] = [];
+  if(progress?.rewrittenRemote) parts.push(`원격 base가 다시 쓰였습니다: ${progress.rewrittenRemote}`);
   if (progress?.operation) parts.push(`${progress.operation} 진행 중`);
   if (progress && progress.conflictedFiles > 0) parts.push(`충돌 파일 ${progress.conflictedFiles}개`);
   if (head && !refs.some((ref) => ref.head)) parts.push(`HEAD 분리 (${shortSha(head)})`);

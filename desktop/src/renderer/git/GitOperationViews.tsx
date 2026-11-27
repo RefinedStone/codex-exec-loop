@@ -3,6 +3,7 @@
 // 계획을 준다. 끝난 작업은 알림과 작업 기록에서 되돌린다.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { GroupPlanControls } from "./GroupPlanControls";
 import { CommitPlanButtons } from "./CommitPlanButtons";
 import type { GatewayRequest } from "../work/notionHub";
 import { fullTime, type GitRef, type GitWorktree } from "./gitGraph";
@@ -96,6 +97,7 @@ export function useGitOperationLog(request: GatewayRequest, cwd: string | null, 
 export function OperationLogView({ request, log, cwd, busyReason }: { request: GatewayRequest; log: GitOperationLog; cwd: string; busyReason: string | null }) {
   const { records, notice, working } = log;
   const [resolving, setResolving] = useState(false);
+  const [publicationNote,setPublicationNote]=useState("");
   const [resolutionError, setResolutionError] = useState("");
   const blocked = resolving || working || busyReason !== null;
   const resolve = async (opId: string, action: "continue" | "skip" | "abort") => {
@@ -120,6 +122,7 @@ export function OperationLogView({ request, log, cwd, busyReason }: { request: G
           </button>
         </div>
       )}
+      {publicationNote && <p role="status">{publicationNote}</p>}
       {resolutionError && <p role="alert">{resolutionError}</p>}
       {records.length > 0 && (
         <details className="git-operation-log" data-testid="git-operation-log">
@@ -133,7 +136,8 @@ export function OperationLogView({ request, log, cwd, busyReason }: { request: G
                 <span className="muted">
                   {recordStatus(record)} · {fullTime(record.startedAt)}
                 </span>
-                {record.operation.kind === "cherry_pick" && record.worktree === cwd && (record.status === "paused" || record.status === "started") && ([ ["continue", "계속"], ["skip", "건너뛰기"], ["abort", "전체 중단"] ] as const).map(([action, label]) => <button type="button" key={action} disabled={blocked} onClick={() => void resolve(record.opId, action)}>{label}</button>)}
+                {record.operation.kind==="realign" && record.operation.publish && record.status==="done" && !record.undoneBy && record.worktree===cwd && <button disabled={blocked} onClick={async()=>{setResolving(true);try{setPublicationNote(await window.akra.gitOperator(cwd,"group-publish",record.opId));}catch(e){setPublicationNote("로컬은 완료됨. 원격 결과를 확인하십시오: "+errorText(e));}finally{setResolving(false);}}}>이 묶음의 원격 단계 확인</button>}
+                {(record.operation.kind === "cherry_pick" || record.operation.kind === "realign") && record.worktree === cwd && (record.status === "paused" || record.status === "started") && ([ ["continue", "계속"], ["skip", "건너뛰기"], ["abort", "전체 중단"] ] as const).map(([action, label]) => <button type="button" key={action} disabled={blocked} onClick={() => void resolve(record.opId, action)}>{label}</button>)}
                 {canUndo(record, cwd) && (
                   <button type="button" disabled={blocked} title={busyReason ?? undefined} onClick={() => log.undo(record.opId)}>
                     되돌리기
@@ -210,6 +214,7 @@ export function CommitActionsView({ picks, request, cwd, commit, refs, head, wor
   if (nothing) return null;
   return (
     <div className="git-actions">
+      {actions.reset && <GroupPlanControls cwd={cwd} branch={actions.reset.branch} base={commit} picks={picks} disabled={running || log.working} plan={plan} />}
       <CommitPlanButtons picks={picks} actions={actions} running={running} commit={commit} plan={plan} />
       {state.phase === "planning" && <p className="muted">{state.title}: 계획을 읽는 중…</p>}
       {state.phase === "failed" && (
@@ -236,7 +241,7 @@ export function CommitActionsView({ picks, request, cwd, commit, refs, head, wor
           </ul>
           <div className="git-action-buttons">
             <button type="button" className="primary" disabled={state.running || log.working || busyReason !== null || state.plan.blockers.length > 0} onClick={() => run(state.plan)} data-testid="git-plan-run">
-              {state.running ? "실행 중…" : "실행"}
+              {state.running ? "실행 중…" : state.plan.operation.kind==="realign" ? "확인: 로컬 묶음 실행" : "실행"}
             </button>
             <button type="button" disabled={state.running} onClick={() => setState({ phase: "idle" })} data-testid="git-plan-cancel">
               취소

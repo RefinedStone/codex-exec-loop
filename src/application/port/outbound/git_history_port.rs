@@ -27,6 +27,7 @@ pub struct GitWorktreeProgress {
     pub operation: Option<String>,
     /// 충돌이 풀리지 않은 파일 수이다.
     pub conflicted_files: usize,
+    pub rewritten_remote: Option<String>,
 }
 
 pub trait GitHistoryPort: Send + Sync {

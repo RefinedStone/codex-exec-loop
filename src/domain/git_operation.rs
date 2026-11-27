@@ -29,6 +29,12 @@ const OPERATION_ID_TIME_FORMAT: &str = "%Y%m%dT%H%M%SZ";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum GitOperation {
+    Realign {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        publish: Option<GroupDestination>,
+        base: String,
+        commits: Vec<String>,
+    },
     CherryPick {
         commits: Vec<String>,
     },
@@ -49,6 +55,13 @@ pub enum GitOperation {
     CheckoutCommit {
         target: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupDestination {
+    pub url: String,
+    pub branch: String,
+    pub sha: String,
 }
 
 /// HEAD 나 브랜치의 자리이다.
@@ -200,11 +213,14 @@ impl GitOperationRecord {
     /// 이 작업을 되돌리는 작업이다.
     pub fn inverse(&self) -> GitOperation {
         match (&self.operation, &self.before.branch) {
-            (GitOperation::Reset { .. } | GitOperation::CherryPick { .. }, _) => {
-                GitOperation::Reset {
-                    target: self.before.commit.clone(),
-                }
-            }
+            (
+                GitOperation::Reset { .. }
+                | GitOperation::CherryPick { .. }
+                | GitOperation::Realign { .. },
+                _,
+            ) => GitOperation::Reset {
+                target: self.before.commit.clone(),
+            },
             (GitOperation::MoveBranch { branch, .. }, _) => GitOperation::MoveBranch {
                 branch: branch.clone(),
                 target: self.before.commit.clone(),
@@ -231,9 +247,9 @@ impl GitOperationRecord {
         branch_commit: Option<&str>,
     ) -> bool {
         match &self.operation {
-            GitOperation::Reset { .. } | GitOperation::CherryPick { .. } => {
-                head == Some(&self.after)
-            }
+            GitOperation::Reset { .. }
+            | GitOperation::CherryPick { .. }
+            | GitOperation::Realign { .. } => head == Some(&self.after),
             GitOperation::MoveBranch { .. } => branch_commit == Some(self.after.commit.as_str()),
             // 체크아웃한 브랜치에 커밋을 더해도 되돌릴 수 있다. 돌아가도 잃는 것이 없다.
             GitOperation::CheckoutBranch { .. } => {

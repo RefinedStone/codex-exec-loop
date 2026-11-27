@@ -9,7 +9,10 @@ export const GIT_OPERATIONS_METHOD = "akra/git/operations";
 export const GIT_UNDO_METHOD = "akra/git/undo";
 
 /** 작업 하나이다. 커밋은 전체 sha 이다. */
+export interface GroupDestination { readonly url:string; readonly branch:string; readonly sha:string }
+export function groupDestination(value:unknown):GroupDestination|undefined {if(!value || typeof value!=="object" || !("url" in value) || !("branch" in value) || !("sha" in value) || typeof value.url!=="string" || typeof value.branch!=="string" || typeof value.sha!=="string")return undefined;return {url:value.url,branch:value.branch,sha:value.sha};}
 export type GitOperation =
+  | {kind:"realign";base:string;commits:readonly string[];publish?:GroupDestination}
   | { kind: "cherry_pick"; commits: readonly string[] }
   | { kind: "reset"; target: string }
   | { kind: "move_branch"; branch: string; target: string }
@@ -89,6 +92,7 @@ function operationFrom(value: unknown): GitOperation | null {
   const item = (value ?? {}) as Record<string, unknown>;
   const target = text(item.target);
   const branch = text(item.branch);
+  if(item.kind==="realign" && typeof item.base==="string" && Array.isArray(item.commits) && item.commits.every((c):c is string=>typeof c==="string")){ const publish=groupDestination(item.publish);return {kind:"realign",base:item.base,commits:item.commits,...(publish?{publish}:{})};}
   if (item.kind === "cherry_pick" && Array.isArray(item.commits) && item.commits.every((c): c is string => typeof c === "string")) return { kind: "cherry_pick", commits: item.commits };
   if (item.kind === "reset" && target) return { kind: "reset", target };
   if (item.kind === "move_branch" && branch && target) return { kind: "move_branch", branch, target };
@@ -111,7 +115,7 @@ export function planFrom(result: unknown): GitOperationPlan {
   const impact = plan.impact as Record<string, unknown> | null | undefined;
   return {
     operation,
-    ...(operation.kind === "cherry_pick" ? { pickLines: readPickPreviews(plan.picks) } : {}),
+    ...((operation.kind === "cherry_pick" || operation.kind === "realign") ? { pickLines: readPickPreviews(plan.picks ?? []) } : {}),
     expectation: plan.expectation ?? null,
     branch: text(plan.branch),
     before: positionFrom(plan.before),
@@ -226,6 +230,7 @@ export function commitActions(commit: string, refs: readonly GitRef[], head: str
 /** 작업을 한 줄로 쓴다: "작업: 무엇 → 어디". 이름 뒤에 조사를 붙이지 않는다. 이름의 끝 글자를 알 수 없다. */
 export function operationTitle(operation: GitOperation, branch: string | null): string {
   switch (operation.kind) {
+    case "realign": return `base 다시 맞추기: ${branch??"현재 브랜치"} → ${shortSha(operation.base)}`;
     case "cherry_pick": return `cherry-pick: 커밋 ${operation.commits.length}개`;
     case "reset":
       return `reset: ${branch ?? "현재 브랜치"} → ${shortSha(operation.target)}`;
@@ -241,6 +246,7 @@ export function operationTitle(operation: GitOperation, branch: string | null): 
 /** 계획의 영향을 문장들로 쓴다. 브랜치를 옮기지 않는 작업은 자리의 변화만 쓴다. */
 export function planSummary(plan: GitOperationPlan): string[] {
   const lines: string[] = [...(plan.pickLines ?? [])];
+  if(plan.operation.kind==="realign"){lines.unshift(`로컬 reset: ${plan.before?.commit??"?"} → ${plan.operation.base}`);lines.push(plan.operation.publish ? `원격 단계: ${plan.operation.publish.url} ${plan.operation.publish.branch} lease ${plan.operation.publish.sha} (로컬 완료 후 별도 확인)` : "원격 단계 제외 · 로컬만 변경합니다.");}
   if (plan.before && plan.after) {
     const place = (position: GitHeadPosition) => (plan.branch === null && position.branch ? `${position.branch} (${shortSha(position.commit)})` : shortSha(position.commit));
     lines.push(`${plan.branch ?? "HEAD"}: ${place(plan.before)} → ${place(plan.after)}`);

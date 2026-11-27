@@ -115,6 +115,7 @@ impl GitGraphPort for GitGraphService {
             None => GitWorktreeProgress::default(),
         };
         Ok(GitGraphRefsState {
+            rewritten_remote: progress.rewritten_remote,
             repository: refs.is_some(),
             refs_digest: refs.as_ref().map(refs_digest),
             operation_in_progress: progress.operation,
@@ -477,6 +478,7 @@ mod tests {
     fn the_refs_state_carries_the_unfinished_work_of_the_worktree() {
         let mut history = FakeHistory::linear(2);
         history.progress = GitWorktreeProgress {
+            rewritten_remote: None,
             operation: Some("rebase".to_string()),
             conflicted_files: 2,
         };

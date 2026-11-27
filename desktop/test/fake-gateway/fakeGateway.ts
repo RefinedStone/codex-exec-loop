@@ -474,7 +474,7 @@ export async function startFakeGateway(
       }[message.method];
       if (gitAnswer) {
         const params = (message as { params?: Record<string, unknown> }).params ?? {};
-        socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: gitAnswer(params) }));
+        void Promise.resolve().then(()=>gitAnswer(params)).then(result=>{if(socket.readyState===socket.OPEN)socket.send(JSON.stringify({jsonrpc:"2.0",id:message.id,result}));},error=>{if(socket.readyState===socket.OPEN)socket.send(JSON.stringify({jsonrpc:"2.0",id:message.id,error:{code:-32000,message:String(error)}}));});
         return;
       }
       if (options.mcpHub && message.method.startsWith("akra/mcp/")) {

@@ -164,7 +164,10 @@ impl GitOperationPort for GitOperationService {
                 "the repository changed after this operation, so the undo would discard that change",
             ));
         }
-        let is_sequence = matches!(record.operation, GitOperation::CherryPick { .. });
+        let is_sequence = matches!(
+            record.operation,
+            GitOperation::CherryPick { .. } | GitOperation::Realign { .. }
+        );
         if is_sequence {
             observed.plan.branch = None;
         } // An undo must restore the original set of refs.
@@ -262,6 +265,25 @@ impl GitOperationService {
         }
         self.block_running_turn(&refs, repository_dir, &mut plan);
         match &operation {
+            GitOperation::Realign {
+                base,
+                commits,
+                publish,
+            } => {
+                if let Some(dest) = publish
+                    && (dest.url.len() > 2048
+                        || !is_git_commit_id(&dest.sha)
+                        || head.branch.as_deref() != Some(dest.branch.as_str()))
+                {
+                    bail!("invalid reviewed group publication destination");
+                }
+                self.plan_reset(repository_dir, &head, &condition, base, &mut plan)?;
+                if plan.blockers.is_empty() && !commits.is_empty() {
+                    plan.picks = self
+                        .workspace
+                        .preview_picks(repository_dir, base, commits)?;
+                }
+            }
             GitOperation::CherryPick { commits } => {
                 plan.before = Some(head.clone());
                 plan.branch = head.branch.clone();
@@ -481,7 +503,12 @@ impl GitOperationService {
         plan: GitOperationPlan,
         undo_of: Option<String>,
     ) -> Result<GitOperationOutcome> {
-        if plan.blockers.is_empty() && matches!(plan.operation, GitOperation::CherryPick { .. }) {
+        if plan.blockers.is_empty()
+            && matches!(
+                plan.operation,
+                GitOperation::CherryPick { .. } | GitOperation::Realign { .. }
+            )
+        {
             return self.start_sequence(repository_dir, plan);
         }
         let (Some(before), Some(after), true) = (
@@ -541,7 +568,9 @@ impl GitOperationService {
                 .create_ref(repository_dir, backup_ref, &record.before.commit)?;
         }
         match &record.operation {
-            GitOperation::CherryPick { .. } => bail!("cherry-pick requires sequence execution"),
+            GitOperation::CherryPick { .. } | GitOperation::Realign { .. } => {
+                bail!("cherry-pick requires sequence execution")
+            }
             GitOperation::Reset { .. } => self
                 .workspace
                 .reset_to(repository_dir, &record.after.commit),
@@ -644,7 +673,11 @@ fn block_branch_in_use(
 
 fn validate_operation(operation: &GitOperation) -> Result<()> {
     let (branch, target) = match operation {
-        GitOperation::CherryPick { commits } => {
+        GitOperation::Realign { base, .. } if !is_git_commit_id(base) => {
+            bail!("realign base must be a full commit id")
+        }
+        GitOperation::Realign { commits, .. } if commits.is_empty() => return Ok(()),
+        GitOperation::CherryPick { commits } | GitOperation::Realign { commits, .. } => {
             if commits.is_empty()
                 || commits.len() > 32
                 || commits.iter().any(|c| !is_git_commit_id(c))

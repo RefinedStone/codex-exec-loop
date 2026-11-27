@@ -4,6 +4,7 @@ import { flushSync } from "react-dom";
 import { type BadgeFolder, findRows, GIT_GRAPH_PAGE_LIMIT_MAX, type LoadedGitGraph, nextMatch, refLabels, scrollTopAfterRowsChange, threadBadges } from "./gitGraph";
 import { type GitOperationPlan, operationTitle } from "./gitOperations";
 import { graphWidth, ROW_HEIGHT } from "./graphGeometry";
+import { DRAG_BRANCH,GROUP_DROP } from "./GroupPlanControls";
 import { GraphRow } from "./GraphRow";
 import { openCommitActions } from "./openCommitActions";
 import type { GitGraph } from "./useGitGraph";
@@ -171,6 +172,8 @@ export function GraphRows({ graph, folders, selected, preview, top, picks, toggl
                 style={{ transform: `translateY(${item.start}px)` }}
                 role="option"
                 aria-selected={row.id === selected}
+                onDragOver={event=>{if(event.dataTransfer.types.includes(DRAG_BRANCH))event.preventDefault();}}
+                onDrop={event=>{const current=state.refs.find(r=>r.kind==="local_branch"&&r.head);if(!current||row.id===state.head||event.dataTransfer.getData(DRAG_BRANCH)!==current.name)return;event.preventDefault();flushSync(()=>onSelect(row.id));window.dispatchEvent(new Event(GROUP_DROP));}}
                 onClick={() => onSelect(row.id)}
                 onContextMenu={(event) => {
                   event.preventDefault();

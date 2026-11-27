@@ -44,12 +44,27 @@ pub(crate) fn run(args: &[OsString], stdout: &mut impl Write, desktop: bool) -> 
                 writeln!(stdout, "{shown}")?;
             }
         }
-        ["force-push", remote, branch] => {
+        ["group-preview", branch] => {
+            let p = git::plan(cwd, "origin", branch)?;
+            writeln!(
+                stdout,
+                "{}",
+                serde_json::json!({"url":p.destination.url,"branch":p.branch,"sha":p.remote_sha})
+            )?;
+        }
+        ["group-publish", _] | ["force-push", _, _] => {
             ensure!(
                 interactive,
                 "a reviewed lease push requires an interactive operator"
             );
-            let plan = git::plan(cwd, remote, branch)?;
+            let plan = match args.as_slice() {
+                ["group-publish", id] => {
+                    crate::composition::production::group_publication(cwd, id)?
+                }
+                ["force-push", remote, branch] => git::plan(cwd, remote, branch)?,
+                _ => unreachable!(),
+            };
+            let branch = &plan.branch;
             let lost = plan
                 .lost
                 .lines()
