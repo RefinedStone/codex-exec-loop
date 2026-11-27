@@ -2,6 +2,7 @@
 import { posix, win32 } from "node:path";
 import type { IssueAutomationPolicyFileRequest } from "../shared/bridge";
 import { editorUrl } from "./gitStatus";
+import { resolveAkraHome } from "./gatewayEndpoint";
 
 const POLICY_FILE_NAME = "issue-automation.toml";
 const MAX_PATH_CHARACTERS = 32_768;
@@ -75,15 +76,13 @@ function requestFromUnknown(value: unknown, platform: NodeJS.Platform): IssueAut
 }
 
 function userPolicyDirectory(access: IssueAutomationPolicyFileAccess): string {
-  const paths = access.platform === "win32" ? win32 : posix;
-  const override = access.environment.AKRA_HOME;
-  if (override !== undefined && override.length > 0) return absolutePath(override, access.platform);
-  // Rust configuration::akra_home_dir와 같다. os.homedir()의 별도 fallback은 쓰지 않는다.
-  const profile = access.environment.USERPROFILE;
-  const base = access.platform === "win32" && profile !== undefined && profile.length > 0
-    ? profile : access.environment.HOME;
-  if (base === undefined || base.length === 0) throw new Error("사용자 정책의 홈 경로를 확인할 수 없습니다.");
-  return paths.join(absolutePath(base, access.platform), ".akra");
+  // Retain the policy editor's stricter path validation after resolving the same
+  // profile as the native runtime; never fall back after an invalid override.
+  const resolved = resolveAkraHome(access.platform, access.environment);
+  const raw = access.environment.AKRA_HOME ?? access.environment[access.platform === "win32" ? "USERPROFILE" : "HOME"];
+  // Check the raw root as well: joining the default path may remove dot segments.
+  absolutePath(raw, access.platform);
+  return absolutePath(resolved, access.platform);
 }
 
 function samePath(left: string, right: string, platform: NodeJS.Platform): boolean {
