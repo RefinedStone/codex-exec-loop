@@ -606,6 +606,12 @@ export function GitGraphPanel({ request, cwd, maximized, changes, onOpenChanges,
   const busyReason = turnRunning ? "이 작업 트리에서 턴이 실행 중입니다. 턴이 끝난 뒤에 실행하십시오." : null;
   const current = state.phase === "loaded" ? headName(state.refs, state.head) : null;
   const unfinished = state.phase === "loaded" ? unfinishedWork(graph.progress, state.refs, state.head) : [];
+  // 첫 커밋 전에도 보인다. 커밋이 있으면 줄 목록의 맨 위에 둔다.
+  const uncommitted = state.phase === "loaded" && state.repository && changes !== null && changes > 0 && (
+    <button type="button" className="git-uncommitted" onClick={onOpenChanges} data-testid="git-graph-uncommitted">
+      커밋하지 않은 변경 · 파일 {changes}개
+    </button>
+  );
   return (
     <aside className="work-panel git-graph-panel" data-testid="git-graph-panel">
       <div className="work-header">
@@ -643,21 +649,19 @@ export function GitGraphPanel({ request, cwd, maximized, changes, onOpenChanges,
         <div className="git-graph-main">
           {repositoryCwd !== null && <OperationLogView log={log} cwd={repositoryCwd} busyReason={busyReason} />}
           {state.phase === "loaded" && !state.repository && <p className="muted work-section">이 폴더는 git 저장소가 아닙니다.</p>}
-          {state.phase === "loaded" && state.repository && state.rows.length === 0 && <p className="muted work-section">이 저장소에는 아직 커밋이 없습니다.</p>}
+          {state.phase === "loaded" && state.repository && state.rows.length === 0 && (
+            <>
+              {uncommitted}
+              <p className="muted work-section">이 저장소에는 아직 커밋이 없습니다.</p>
+            </>
+          )}
           {state.phase === "loaded" && state.repository && state.rows.length > 0 && (
             <GraphRows
               graph={{ ...graph, state }}
               folders={folders}
               selected={selected}
               preview={preview}
-              top={
-                changes !== null &&
-                changes > 0 && (
-                  <button type="button" className="git-uncommitted" onClick={onOpenChanges} data-testid="git-graph-uncommitted">
-                    커밋하지 않은 변경 · 파일 {changes}개
-                  </button>
-                )
-              }
+              top={uncommitted}
               onSelect={select}
               onOpenThread={onOpenThread}
             />
