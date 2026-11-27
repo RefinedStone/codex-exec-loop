@@ -1441,3 +1441,7 @@ The Gateway records the external documents that a thread mentions, without a mod
 - Parallel: `src/application/service/parallel_mode/`, `src/domain/parallel_mode/`
 - App-server adapter: `src/adapter/outbound/app_server/`
 - SQLite authority: `src/adapter/outbound/db/sqlite_planning_authority_adapter.rs`
+
+### Desktop provisional thread titles (#2913, initial slice)
+
+Unnamed threads use a single, bounded preview title in the list and conversation. A fresh local thread receives an in-memory provisional title after its first accepted meaningful text input. Explicit provider names take precedence; manual rename, archive, and reconnect invalidate pending fallback updates. This is not model-generated naming: it makes no auxiliary request or name-set write, does not persist the fallback independently, and does not yet implement the shared disclosure policy or multi-window generation ownership. The isolated provider and durable metadata contract remain proposed in #2913/#2914.
