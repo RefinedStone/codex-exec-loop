@@ -6,7 +6,7 @@ import { onBlogFocus, setViewingBlogArticle, takeBlogFocus } from "./blogFocus";
 import { copyText } from "../conversation/copyText";
 import { relativeAge } from "../sidebar/threadStatus";
 import type { ExtensionCall } from "./repositoryExtensions";
-import { type Article, type Finding, STAGES, stateLabel, type State, type Summary, type Targets, taskMarks, taskStages } from "./techBlogStages";
+import { type Article, type Finding, JOBS, jobArticle, type Receipt, STAGES, stateLabel, type State, type Summary, type Targets, taskMarks, taskStages } from "./techBlogStages";
 import "./techBlog.css";
 
 const FIGURE_FINDINGS: Record<string, string> = {
@@ -18,7 +18,6 @@ const errorText = (error: unknown) => String(error).replace(/^Error:\s*/, "");
 /** 서버(`targets`)가 받는 커밋 목록 크기의 최대값이다. */
 const MAX_TARGETS = 500;
 const REQUEST_EXAMPLES = ["더 짧게", "더 자세히", "처음 보는 사람도 읽게"];
-
 function StateBadge({ state, findings = 0 }: { state: State; findings?: number }) {
   const tone = { running: "", reviewed: " badge-ok", findings: " badge-warn", edited: "", stopped: " badge-bad" }[state];
   return <span className={`badge${tone}`}>{stateLabel(state, findings)}</span>;
@@ -74,8 +73,7 @@ function Home({ call, epoch, onOpen }: { call: ExtensionCall; epoch: number; onO
   const generate = async () => {
     setStarting(true); setError("");
     try {
-      const article = await call<Article>("generate", { commits: chosen, topic: topic.trim() });
-      onOpen(article.id);
+      onOpen(await jobArticle(call, await call<Receipt>("generate", { commits: chosen, topic: topic.trim() })));
     } catch (e) { setError(errorText(e)); } finally { setStarting(false); }
   };
   const now = Date.now();
@@ -147,7 +145,14 @@ function ArticleView({ id, call, epoch, workspace, onBack }: { id: string; call:
     setWorking(true); setError("");
     try {
       if (action === "delete") { await call("delete", { id }); onBack(); return true; }
-      receive(await call<Article>(action, { id, revision: article.revision, ...extra }));
+      if (action === "stop") { receive(await call<Article>("stop", { id })); return true; }
+      const input = { id, revision: article.revision, ...extra };
+      if (JOBS.has(action)) {
+        await jobArticle(call, await call<Receipt>(action, input));
+        receive(await call<Article>("open", { id }));
+        return true;
+      }
+      receive(await call<Article>(action, input));
       return true;
     } catch (e) { setError(errorText(e)); return false; } finally { setWorking(false); }
   };
@@ -206,7 +211,7 @@ function Progress({ article, back, working, act, children }: ViewProps) {
       {article.draft && <button type="button" className="button" onClick={() => setShowDraft(v => !v)}>{showDraft ? "초안 닫기" : "초안 보기"}</button>}
       <button type="button" className="button" disabled={working} onClick={() => { if (window.confirm("이 글을 버립니까? 되돌릴 수 없습니다.")) void act("delete"); }}>버리기</button>
     </div> : <>
-      <div className="blog-row"><button type="button" className="button" disabled={working} onClick={() => void act("cancel")}>취소</button></div>
+      <div className="blog-row"><button type="button" className="button" disabled={working} onClick={() => void act("stop")}>취소</button></div>
       <p className="muted">패널을 닫아도 계속됩니다.</p>
     </>}
     {children}

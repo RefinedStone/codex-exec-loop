@@ -13,6 +13,7 @@ const kernel = "blog-test-repository";
 const endpoint = fake.uniqueTestEndpoint();
 const workspace = fake.loadReplayTable(fake.INTERRUPTED_TURN_RECORDING).get("thread/resume").result.thread.cwd;
 let enabled = false;
+let configured = 0;
 let article;
 let fail = true;
 const commits = [1, 2, 3].map(n => ({sha: String(n).repeat(40), time: Math.floor(Date.now() / 1000) - n * 3600, subject: `feat: 작업 ${n}`}));
@@ -62,7 +63,7 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST
       return {result:{client_id:"1",protocol_version:1,kernel:params.workspace === workspace ? kernel : otherKernel},
         replyAfter:params.workspace === workspace ? originAttachBarrier : undefined};
     }
-    if (method === "akra/kernel/extensions/list") return {result:[{id:"akra.tech-blog",version:2,scope:"repository",enabled}]};
+    if (method === "akra/kernel/extensions/list") return {result:[{id:"akra.tech-blog",version:3,scope:"repository",enabled,revision:configured}]};
     if (method !== "akra/kernel/extensions/call") return;
     if (params.kernel === otherKernel) {
       if (params.action === "list") return {result:[]};
@@ -71,10 +72,14 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST
     }
     assert.equal(params.kernel,kernel);
     assert.equal(params.extension,"akra.tech-blog");
-    assert.equal(params.version,2);
+    assert.equal(params.version,3);
     const data = params.input;
-    if (params.action === "catalog") return {result:{enabled}};
-    if (params.action === "configure") { enabled = data.enabled; return {result:{enabled}}; }
+    if (params.action === "configure") {
+      assert.equal(data.expected_revision, configured);
+      enabled = data.enabled; configured++;
+      setTimeout(() => gateway.sendExtensionChange(kernel), 0);
+      return {result:{id:"akra.tech-blog",version:3,scope:"repository",enabled,revision:configured}};
+    }
     assert.ok(enabled);
     if (params.action === "targets") return {result:{commits, fresh: 2, selected: commits.slice(0, 2).map(c => c.sha), first: false, limit: 30, codex}};
     if (params.action === "list") return {result:article ? [{id:article.id,title:article.title,state:article.state,stage:article.stage,task:article.task,updated:article.updated,unread:!!article.unread}] : []};
@@ -118,6 +123,9 @@ const gateway = await fake.startFakeGateway(endpoint, [fake.APPROVAL_THREAD_LIST
     } else if (params.action !== "open") throw new Error(`unexpected action ${params.action}`);
     // 실제 호스트처럼 조회가 아닌 명령 뒤에는 변경 알림을 보낸다.
     if (params.action !== "open") setTimeout(() => gateway.sendExtensionChange(kernel), 0);
+    // 버전 3의 모델 작업은 공통 호스트의 receipt를 돌려주고, 맡은 글은 progress로 알린다.
+    if (["generate", "resume", "revise", "review"].includes(params.action))
+      return {result:{id:`job-${params.action}`, extension:"akra.tech-blog", action:params.action, state:"running", progress:{article_id:article.id, stage:article.stage}}};
     return {result:article};
   }},
 });

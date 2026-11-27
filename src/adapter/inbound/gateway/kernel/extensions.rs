@@ -2,10 +2,7 @@ use super::*;
 use crate::adapter::inbound::kernel_protocol::{
     METHOD_EXTENSION_ATTACH, METHOD_EXTENSION_CHANGED, METHOD_EXTENSION_DETACH,
     METHOD_EXTENSION_LIST,
-    extensions::{
-        ExtensionAttachRequest, ExtensionAttachResponse, ExtensionCall, ExtensionCatalogItem,
-        ExtensionChanged, ExtensionScope,
-    },
+    extensions::{ExtensionAttachRequest, ExtensionAttachResponse, ExtensionCall, ExtensionScope},
 };
 use crate::application::port::inbound::extension_host_port::ExtensionHostPort;
 use crate::domain::kernel_extension::ExtensionContext;
@@ -102,9 +99,8 @@ impl KernelSession {
             .kernels
             .extensions(&attached.kernel)
             .map_err(|e| unavailable(format!("{e:#}")))?;
-        let repository_for_build = repository.clone();
         let kernel_for_build = kernel.clone();
-        let host = blocking(move || repository_for_build.common(&kernel_for_build))
+        let host = blocking(move || repository.common(&kernel_for_build))
             .await?
             .map_err(|e| unavailable(format!("{e:#}")))?;
         if self
@@ -112,67 +108,11 @@ impl KernelSession {
             .as_ref()
             .is_some_and(|a| a.extension_events.is_none())
         {
-            let mut blog = repository.subscribe();
-            let mut common = host.subscribe();
-            let outbox = self.outbox.clone();
-            let kernel = kernel.clone();
-            self.attached.as_mut().expect("attachment").extension_events = Some(tokio::spawn(
-                async move {
-                    loop {
-                        let payload = tokio::select! {
-                            received=blog.recv()=>{
-                                if matches!(received,Err(broadcast::error::RecvError::Closed)){break;}
-                                serde_json::to_value(ExtensionChanged{kernel:kernel.clone(),extension:"akra.tech-blog".into(),..Default::default()}).expect("event")
-                            },
-                            received=common.recv()=>match received{
-                                Ok(event)=>serde_json::to_value(event).expect("event"),
-                                Err(broadcast::error::RecvError::Lagged(_))=>json!({"kernel":kernel,"extension":"*",
-                                    "generation":host.generation(),"resync":true}),
-                                Err(broadcast::error::RecvError::Closed)=>break,
-                            },
-                        };
-                        if send_extension_event(&outbox, payload).await.is_err() {
-                            break;
-                        }
-                    }
-                },
-            ));
+            let events =
+                forward_extension_events(host.subscribe(), self.outbox.clone(), host.clone());
+            self.attached.as_mut().expect("attachment").extension_events = Some(events);
         }
-        match request {
-            None => {
-                let mut catalog = repository
-                    .catalog()
-                    .await
-                    .map_err(|e| unavailable(format!("{e:#}")))?
-                    .into_iter()
-                    .map(ExtensionCatalogItem::Legacy)
-                    .map(serde_json::to_value)
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|e| unavailable(format!("{e:#}")))?;
-                let host = repository
-                    .common(&kernel)
-                    .map_err(|e| unavailable(format!("{e:#}")))?;
-                catalog.extend(host.catalog().into_iter().map(|e| {
-                    serde_json::to_value(ExtensionCatalogItem::Registered(e)).expect("catalog")
-                }));
-                Ok(Value::Array(catalog))
-            }
-            Some(request) if request.extension == "akra.tech-blog" => repository
-                .call(
-                    &request.extension,
-                    request.version,
-                    &request.action,
-                    request.input,
-                )
-                .await
-                .map_err(|e| unavailable(format!("{e:#}"))),
-            request => {
-                let host = repository
-                    .common(&kernel)
-                    .map_err(|e| unavailable(format!("{e:#}")))?;
-                self.invoke_registered(host, request).await
-            }
-        }
+        self.invoke_registered(host, request).await
     }
     async fn invoke_registered(
         &self,

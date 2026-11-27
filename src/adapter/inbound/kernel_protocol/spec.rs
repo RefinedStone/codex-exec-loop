@@ -200,7 +200,7 @@ pub fn describe() -> KernelSpec {
                 ),
                 KernelMethodKind::ExtensionList => (
                     Some(schemas.reference::<super::extensions::ExtensionScope>()),
-                    Some(schemas.reference::<Vec<super::extensions::ExtensionCatalogItem>>()),
+                    Some(schemas.reference::<Vec<crate::domain::kernel_extension::ExtensionCatalogEntry>>()),
                 ),
                 KernelMethodKind::ExtensionCall => (
                     Some(schemas.reference::<super::extensions::ExtensionCall>()),

@@ -160,13 +160,9 @@ export type ExtensionCall = { readonly "action": string; readonly "extension": s
 
 export type ExtensionCatalogEntry = { readonly "actions": Array<string>; readonly "api_version": number; readonly "compatibility_reason"?: (string | null); readonly "compatible": boolean; readonly "desired_enabled": boolean; readonly "enabled": boolean; readonly "error"?: (string | null); readonly "generation": string; readonly "id": string; readonly "label": string; readonly "lifecycle": ExtensionLifecycle; readonly "operations": Array<ExtensionOperation>; readonly "panel": string; readonly "permissions": Array<string>; readonly "registration_errors": Array<string>; readonly "revision": number; readonly "scope": ExtensionScope; readonly "sequence": number; readonly "version": number; };
 
-export type ExtensionCatalogItem = (ExtensionCatalogEntry | ExtensionManifest);
-
 export type ExtensionChanged = { readonly "extension": string; readonly "generation"?: (string | null); readonly "job_id"?: (string | null); readonly "kernel": string; readonly "resync"?: (boolean | null); readonly "revision"?: (number | null); readonly "sequence"?: (number | null); };
 
 export type ExtensionLifecycle = ("disabled" | "enabled" | "disabling" | "error");
-
-export type ExtensionManifest = { readonly "actions": Array<string>; readonly "enabled": boolean; readonly "id": string; readonly "label": string; readonly "operations": Array<ExtensionOperation>; readonly "panel": string; readonly "permissions": Array<string>; readonly "scope": string; readonly "version": number; };
 
 export type ExtensionOperation = { readonly "input_schema": unknown; readonly "kind": ExtensionOperationKind; readonly "name": string; readonly "output_schema": unknown; readonly "progress_schema"?: unknown; };
 

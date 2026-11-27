@@ -36,6 +36,8 @@ struct TestHandler {
     cleanup_entered: AtomicUsize,
     cleanup_barriers: Mutex<Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>>,
     cleanups: Mutex<Vec<(String, String)>>,
+    /// Zero means no per-extension bound.
+    max_active: AtomicUsize,
 }
 impl ExtensionHandler for TestHandler {
     fn operations(&self) -> &'static [&'static str] {
@@ -67,6 +69,9 @@ impl ExtensionHandler for TestHandler {
     }
     fn dedupe_key(&self, _action: &str, input: &Value) -> Result<Option<String>> {
         Ok(Some(input.to_string()))
+    }
+    fn max_active_jobs(&self) -> Option<usize> {
+        Some(self.max_active.load(Ordering::Acquire)).filter(|limit| *limit > 0)
     }
     fn cleanup(&self, _context: &ExtensionContext, job: &ExtensionJob) -> Result<()> {
         self.cleanup_entered.fetch_add(1, Ordering::AcqRel);

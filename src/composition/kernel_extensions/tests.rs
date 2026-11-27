@@ -31,7 +31,7 @@ fn native_host_crash_child() {
         return;
     };
     let root = std::path::PathBuf::from(root);
-    let host = build(&root, ExtensionScope::LocalUser, None, None).unwrap();
+    let host = build(&root, ExtensionScope::LocalUser, None, None, None).unwrap();
     call(
         &host,
         "configure",
@@ -98,7 +98,7 @@ fn native_forced_host_exit_recovers_interrupted_work_without_rerunning() {
     };
     child.0.kill().unwrap();
     assert!(!child.0.wait().unwrap().success());
-    let restored = build(&root, ExtensionScope::LocalUser, None, None).unwrap();
+    let restored = build(&root, ExtensionScope::LocalUser, None, None, None).unwrap();
     assert_eq!(restored.host_id(), ready["host_id"].as_str().unwrap());
     assert_ne!(restored.generation(), ready["generation"].as_str().unwrap());
     assert!(restored.catalog()[0].enabled);
@@ -112,4 +112,61 @@ fn native_forced_host_exit_recovers_interrupted_work_without_rerunning() {
     assert_eq!(jobs["jobs"][0]["state"], "interrupted");
     drop(restored);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn an_enabled_version_two_blog_stays_enabled_once_and_respects_a_later_disable() {
+    use crate::domain::repository_extension::tech_blog::{ID, VERSION};
+    let runtime = crate::test_utils::platform_safe_temp_dir().join(format!(
+        "akra-blog-adoption-{:032x}",
+        rand::random::<u128>()
+    ));
+    std::fs::create_dir_all(&runtime).unwrap();
+    let db = rusqlite::Connection::open(runtime.join("tech-blog.sqlite3")).unwrap();
+    db.execute_batch(
+        "CREATE TABLE settings (id INTEGER PRIMARY KEY, enabled INTEGER); INSERT INTO settings VALUES (1, 1);",
+    )
+    .unwrap();
+    drop(db);
+    let open = || {
+        let packages = RepositoryPackages {
+            workspace: Path::new("."),
+            runtime: &runtime,
+        };
+        let host = build(
+            &runtime.join("kernel-extensions"),
+            ExtensionScope::Repository,
+            Some("kernel".into()),
+            None,
+            Some(&packages),
+        )
+        .unwrap();
+        adopt_legacy_blog_activation(&host, &runtime).unwrap();
+        host
+    };
+    let blog = |host: &Arc<ExtensionService>| {
+        host.catalog()
+            .into_iter()
+            .find(|entry| entry.id == ID)
+            .unwrap()
+    };
+    let host = open();
+    let adopted = blog(&host);
+    assert!(adopted.enabled && adopted.revision == 1);
+    host.call(
+        host.context("test".into(), Some("kernel".into())),
+        ID,
+        VERSION,
+        "configure",
+        json!({"enabled": false, "expected_revision": adopted.revision}),
+        None,
+    )
+    .unwrap();
+    host.shutdown();
+    drop(host);
+    let reopened = open();
+    assert!(!blog(&reopened).desired_enabled, "adoption runs only once");
+    reopened.shutdown();
+    drop(reopened);
+    std::fs::remove_dir_all(runtime).unwrap();
 }

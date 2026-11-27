@@ -99,6 +99,18 @@ impl ExtensionService {
                 "extension concurrent job limit reached"
             );
             ensure!(
+                entry.handler.max_active_jobs().is_none_or(|limit| {
+                    state
+                        .durable
+                        .jobs
+                        .values()
+                        .filter(|j| j.extension == entry.manifest.id && j.state.active())
+                        .count()
+                        < limit
+                }),
+                "the extension's previous job is still running; retry after it finishes"
+            );
+            ensure!(
                 receipt_key.is_none() || state.durable.receipts.len() < MAX_RECEIPTS,
                 "extension receipt limit reached"
             );

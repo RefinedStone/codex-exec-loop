@@ -166,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn extension_cli_keeps_explicit_blog_version_two_in_the_request_body() {
+    fn extension_cli_keeps_explicit_blog_version_three_in_the_request_body() {
         for (action, input) in [
             ("generate", json!({"commits":["a".repeat(40)]})),
             ("seen", json!({"id":"article"})),
@@ -184,7 +184,7 @@ mod tests {
                 "akra.tech-blog",
                 action,
                 "--version",
-                "2",
+                "3",
                 "--scope",
                 "repository",
                 "--workspace",
@@ -199,7 +199,7 @@ mod tests {
             assert_eq!(
                 parsed.call.unwrap(),
                 json!({
-                    "extension":"akra.tech-blog","version":2,"action":action,
+                    "extension":"akra.tech-blog","version":3,"action":action,
                     "input":input,"idempotency_key":null
                 })
             );

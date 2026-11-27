@@ -171,3 +171,21 @@ fn cleaned_metadata_retirement_and_new_admission_share_one_durable_commit() {
     assert_eq!(handler.entered.load(Ordering::Acquire), 2);
     assert_eq!(handler.cleanup_entered.load(Ordering::Acquire), 1);
 }
+
+#[test]
+fn per_extension_job_bound_rejects_new_work_but_keeps_duplicate_receipts() {
+    let handler = Arc::new(TestHandler::default());
+    handler.max_active.store(1, Ordering::Release);
+    let host = service(Arc::new(MemoryStore::default()), handler.clone());
+    enable(&host);
+    let first = call(&host, "work", json!({"text":"one"}), Some("one")).unwrap();
+    let same = call(&host, "work", json!({"text":"one"}), None).unwrap();
+    assert_eq!(same["id"], first["id"]);
+    let error = call(&host, "work", json!({"text":"two"}), None).unwrap_err();
+    assert!(error.to_string().contains("previous job"), "{error}");
+    handler.release.store(true, Ordering::Release);
+    wait_until(|| {
+        call(&host, "job", json!({"job_id":first["id"]}), None).unwrap()["state"] == "completed"
+    });
+    call(&host, "work", json!({"text":"two"}), None).unwrap();
+}

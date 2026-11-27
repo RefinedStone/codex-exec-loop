@@ -37,6 +37,10 @@ pub(crate) trait ExtensionHandler: Send + Sync {
     fn dedupe_key(&self, _action: &str, _input: &Value) -> Result<Option<String>> {
         Ok(None)
     }
+    /// Upper bound of this extension's active jobs, below the host-wide bound.
+    fn max_active_jobs(&self) -> Option<usize> {
+        None
+    }
     /// Remove only artifacts belonging to this exact job ID and generation.
     fn cleanup(&self, _context: &ExtensionContext, _job: &ExtensionJob) -> Result<()> {
         Ok(())

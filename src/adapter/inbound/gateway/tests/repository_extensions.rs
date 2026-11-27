@@ -12,30 +12,37 @@ async fn blog_changes_reach_another_attached_desktop_and_reject_stale_scope() {
     let kernel = &attach["result"]["kernel"];
     let list = "akra/kernel/extensions/list";
     let call = "akra/kernel/extensions/call";
+    let blog = |catalog: &Value| {
+        catalog["result"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == "akra.tech-blog")
+            .cloned()
+            .unwrap_or_else(|| panic!("{catalog}"))
+    };
     let catalog = kernel_request(&mut observer, "before", list, json!({"kernel":kernel})).await;
-    assert_eq!(catalog["result"][0]["id"], "akra.tech-blog", "{catalog}");
-    assert_eq!(catalog["result"][0]["enabled"], false);
-    let enable = json!({"kernel":kernel,"extension":"akra.tech-blog","version":2,"action":"configure","input":{"enabled":true}});
+    assert_eq!(blog(&catalog)["enabled"], false);
+    let enable = json!({"kernel":kernel,"extension":"akra.tech-blog","version":3,"action":"configure",
+        "input":{"enabled":true,"expected_revision":blog(&catalog)["revision"]}});
     let mut stale = enable.clone();
     stale["kernel"] = json!("another-repository");
     let denied = kernel_request(&mut editor, "stale", call, stale).await;
     assert!(denied["error"].is_object(), "{denied}");
     let changed = kernel_request(&mut editor, "enable", call, enable).await;
-    assert_eq!(changed["result"]["enabled"], true, "{changed}");
+    assert!(changed["error"].is_null(), "{changed}");
     let notice = next_json_matching(&mut observer, |value| {
         value["method"] == "akra/kernel/extensions/changed"
+            && value["params"]["extension"] == "akra.tech-blog"
     })
     .await;
-    assert_eq!(
-        notice["params"],
-        json!({"kernel": kernel, "extension": "akra.tech-blog"})
-    );
+    assert_eq!(notice["params"]["kernel"], *kernel);
     let after = kernel_request(&mut observer, "after", list, json!({"kernel":kernel})).await;
-    assert_eq!(after["result"][0]["enabled"], true, "{after}");
+    assert_eq!(blog(&after)["enabled"], true, "{after}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn machine_cli_blog_v2_preserves_saved_articles_without_model_calls() {
+async fn machine_cli_blog_v3_preserves_saved_articles_without_model_calls() {
     use crate::adapter::outbound::extension_gateway_client;
     let folder = KernelTestFolder::new(&format!("blog-cli-{:032x}", rand::random::<u128>()));
     std::fs::write(
@@ -81,7 +88,7 @@ async fn machine_cli_blog_v2_preserves_saved_articles_without_model_calls() {
         .iter()
         .find(|entry| entry["id"] == "akra.tech-blog")
         .unwrap();
-    assert_eq!(blog["version"], 2);
+    assert_eq!(blog["version"], 3);
     assert!(
         blog["permissions"]
             .as_array()
@@ -97,14 +104,16 @@ async fn machine_cli_blog_v2_preserves_saved_articles_without_model_calls() {
     assert_eq!(
         actions,
         std::collections::BTreeSet::from([
-            "catalog",
             "configure",
+            "jobs",
+            "job",
+            "cancel",
             "targets",
             "list",
             "open",
             "seen",
             "generate",
-            "cancel",
+            "stop",
             "resume",
             "revise",
             "review",
@@ -119,11 +128,11 @@ async fn machine_cli_blog_v2_preserves_saved_articles_without_model_calls() {
         &mut client,
         &workspace,
         "configure",
-        json!({"enabled":true}),
+        json!({"enabled":true,"expected_revision":blog["revision"]}),
     )
     .await
     .unwrap();
-    assert_eq!(configured["enabled"], true);
+    assert_eq!(configured["enabled"], true, "{configured}");
     let targets = blog_cli_request(&mut client, &workspace, "targets", json!({"limit":1}))
         .await
         .unwrap();
@@ -389,7 +398,7 @@ async fn machine_cli_blog_v2_preserves_saved_articles_without_model_calls() {
             .downcast_ref::<crate::domain::kernel_extension::ExtensionCallRejection>()
             .is_some()
     );
-    let current = blog_cli_request(&mut client, &workspace, "cancel", json!({"id":"current"}))
+    let current = blog_cli_request(&mut client, &workspace, "stop", json!({"id":"current"}))
         .await
         .unwrap();
     assert_eq!(current["revision"], 3);
@@ -405,7 +414,7 @@ async fn machine_cli_blog_v2_preserves_saved_articles_without_model_calls() {
             &mut client,
             "repository",
             &workspace,
-            Some(json!({"extension":"akra.tech-blog","version":1,"action":"list","input":{}})),
+            Some(json!({"extension":"akra.tech-blog","version":2,"action":"list","input":{}})),
         )
         .await
         .is_err()
@@ -436,7 +445,7 @@ async fn blog_cli_request(
         client,
         "repository",
         workspace,
-        Some(json!({"extension":"akra.tech-blog","version":2,"action":action,"input":input})),
+        Some(json!({"extension":"akra.tech-blog","version":3,"action":action,"input":input})),
     )
     .await
 }

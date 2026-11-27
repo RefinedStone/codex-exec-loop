@@ -53,9 +53,10 @@ async fn local_extension_attachment_does_not_replace_repository_and_two_clients_
         json!({"kernel":repository}),
     )
     .await;
-    assert_eq!(repo["result"][0]["id"], "akra.tech-blog", "{repo}");
+    assert_eq!(repo["result"][0]["id"], "akra.example", "{repo}");
+    assert_eq!(repo["result"][1]["id"], "akra.tech-blog", "{repo}");
     assert_eq!(
-        repo["result"][1]["enabled"], false,
+        repo["result"][0]["enabled"], false,
         "repository activation stays independent"
     );
     let detached = kernel_request(
