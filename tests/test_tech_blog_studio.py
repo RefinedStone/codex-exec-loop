@@ -336,6 +336,16 @@ class StudioTest(unittest.TestCase):
         b = self.host.request("save", {"id": a["id"], "revision": a["revision"], "draft": "사람의 판"})
         self.assertEqual(("edited", "사람의 판", "reviewed"), (b["state"], b["draft"], b["previous"]["state"]))
 
+    def test_oversized_export_is_rejected_before_writing_files(self):
+        a = self.run_all(self.generate(), FakeModel("pass"))
+        before = self.host.request("open", {"id": a["id"]})
+        limit = len(json.dumps(before, ensure_ascii=False).encode("utf-8")) + 10
+        with patch.object(studio, "MAX_RESPONSE_BYTES", limit):
+            with self.assertRaisesRegex(ValueError, "응답 한도"):
+                self.host.request("export", {"id": a["id"], "revision": a["revision"]})
+        self.assertFalse((self.repo / "blog").exists())
+        self.assertEqual(before, self.host.request("open", {"id": a["id"]}))
+
     def test_export_writes_one_post_per_article_and_refuses_foreign_files(self):
         a = self.run_all(self.generate(), FakeModel("pass"))
         b = self.host.request("export", {"id": a["id"], "revision": a["revision"]})
