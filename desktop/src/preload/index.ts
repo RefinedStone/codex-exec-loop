@@ -20,6 +20,7 @@ import {
   type PullRequestDraft,
   type GitFileAction,
   type GitFileDiff,
+  type GitDiffSource,
   type GitStatusResult,
   type IssueAutomationPolicyFileRequest,
   IPC_CHANNELS,
@@ -73,8 +74,8 @@ const bridge: AkraBridge = {
   gitStatus(cwd: string): Promise<GitStatusResult> {
     return ipcRenderer.invoke(IPC_CHANNELS.gitStatus, cwd) as Promise<GitStatusResult>;
   },
-  gitFileDiff(cwd: string, path: string, untracked: boolean): Promise<GitFileDiff> {
-    return ipcRenderer.invoke(IPC_CHANNELS.gitFileDiff, cwd, path, untracked) as Promise<GitFileDiff>;
+  gitFileDiff(cwd: string, path: string, untracked: boolean, source?: GitDiffSource): Promise<GitFileDiff> {
+    return ipcRenderer.invoke(IPC_CHANNELS.gitFileDiff, cwd, path, untracked, source) as Promise<GitFileDiff>;
   },
   gitFileAction(cwd: string, action: GitFileAction, path: string): Promise<GitActionResult> {
     return ipcRenderer.invoke(IPC_CHANNELS.gitFileAction, cwd, action, path) as Promise<GitActionResult>;

@@ -64,6 +64,32 @@ describe("git file actions", () => {
     return { root, git, write, text, statuses };
   };
 
+  it("distinguishes staged, unstaged and combined diff snapshots", async () => {
+    const { root, git, write } = repository({ "a.txt": "base\n" });
+    write("a.txt", "stage\n");
+    git("add", "a.txt");
+    write("a.txt", "work\n");
+    const staged = await readGitFileDiff(root, "a.txt", false, "head_index");
+    const unstaged = await readGitFileDiff(root, "a.txt", false, "index_worktree");
+    const combined = await readGitFileDiff(root, "a.txt", false, "head_worktree");
+    expect(staged).toMatchObject({ kind: "gitDiff", text: expect.stringContaining("+stage"), snapshot: { source: "head_index", contentStatus: "patch_only" } });
+    expect(unstaged).toMatchObject({ kind: "gitDiff", text: expect.stringContaining("-stage"), snapshot: { source: "index_worktree" } });
+    expect(combined).toMatchObject({ kind: "gitDiff", text: expect.stringContaining("+work"), snapshot: { source: "head_worktree" } });
+    expect(new Set([staged.snapshot?.snapshotId, unstaged.snapshot?.snapshotId, combined.snapshot?.snapshotId]).size).toBe(3);
+    write("a.txt", "changed again\n");
+    expect((await readGitFileDiff(root, "a.txt", false, "index_worktree")).snapshot?.snapshotId).not.toBe(unstaged.snapshot?.snapshotId);
+    await expect(readGitFileDiff(root, "a.txt", false, "untracked")).rejects.toThrow();
+    await expect(readGitFileDiff(root, "a.txt", false, "invalid")).rejects.toThrow();
+  });
+
+  it("does not mislabel a first-commit staged diff as a combined comparison", async () => {
+    const { root, git, write } = repository({});
+    write("a.txt", "initial\n"); git("add", "a.txt");
+    const staged = await readGitFileDiff(root, "a.txt", false, "head_index");
+    expect(staged.snapshot).toMatchObject({ source: "head_index", headOid: null });
+    await expect(readGitFileDiff(root, "a.txt", false, "head_worktree")).rejects.toThrow("첫 커밋");
+  });
+
   it("picks the discard commands from the status", () => {
     expect(discardCommands("??", "new", null)).toEqual([["clean", "-f", "--", "new"]]);
     expect(discardCommands("A ", "added", null)).toEqual([["rm", "-f", "-q", "--", "added"]]);
