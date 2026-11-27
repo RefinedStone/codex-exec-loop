@@ -6,63 +6,13 @@ import type { AttentionItem } from "../../shared/kernel-protocol/generated";
 
 import { command, type CommandId, COMMANDS, commandForKey, PALETTE_ORDER } from "../../shared/commands";
 
-import { Composer, type ComposerActions } from "../conversation/Composer";
 import { Icon, type IconName } from "../design/icons";
-import { Picker } from "../design/Picker";
 import { useDesktopStore } from "../session/desktopStore";
 import { MOD_KEY, openPanel, showHome, showView, togglePanel, toggleDotsCloud, toggleTerminal, toggleTheme, useUiStore, toast } from "../session/uiStore";
 import { StatusMark, useThreadMarks } from "../sidebar/Sidebar";
 import { allThreads, folderName, type ListedThread, relativeAge, threadMark, type ThreadMark } from "../sidebar/threadStatus";
 
-const CHOOSE_FOLDER = "폴더 고르기…";
-const RECENT_COUNT = 5;
-
-export function Home({ actions, onChooseFolder, onOpenThread }: { actions: ComposerActions; onChooseFolder(): Promise<string | null>; onOpenThread(threadId: string): void }) {
-  const homeCwd = useUiStore((state) => state.homeCwd);
-  const workspaceMode = useUiStore((state) => state.homeWorkspaceMode);
-  const folders = useDesktopStore((state) => state.folders);
-  const marks = useThreadMarks();
-  const recent = useMemo(() => allThreads(folders).slice(0, RECENT_COUNT), [folders]);
-  // 같은 이름의 폴더가 둘이면 구분할 수 있게 전체 경로를 보여 준다.
-  const options = [...new Set([...(homeCwd ? [homeCwd] : []), ...folders.map((folder) => folder.cwd)]), CHOOSE_FOLDER];
-  const choose = (value: string) => {
-    if (value !== CHOOSE_FOLDER) {
-      useUiStore.setState({ homeCwd: value });
-      return;
-    }
-    void onChooseFolder().then((cwd) => cwd && useUiStore.setState({ homeCwd: cwd }));
-  };
-  return (
-    <div className="home" data-testid="home">
-      <div className="home-inner">
-        <h1>무엇을 할까요?</h1>
-        <div className="home-pickers">
-          <Picker icon={<Icon name="folder" size={12} />} value={homeCwd ?? CHOOSE_FOLDER} options={options} onChange={choose} />
-          <label>작업 위치 <select aria-label="작업 위치" value={workspaceMode} onChange={event => useUiStore.setState({ homeWorkspaceMode: event.target.value === "isolated" ? "isolated" : "existing" })}>
-            <option value="existing">기존 폴더</option>
-            <option value="isolated">격리 공간 (HEAD 기준)</option>
-          </select></label>
-        </div>
-        {workspaceMode === "isolated" && <p className="muted">커밋된 HEAD에서 별도 브랜치와 worktree를 준비합니다. 미커밋 변경은 복사하지 않습니다.</p>}
-        {/* 폴더를 바꾸면 입력창을 새로 만든다. 이전 폴더의 `@` 후보와 진행 중인 찾기를 버린다 (#2837). 초안은 저장소에 남는다. */}
-        <Composer key={homeCwd ?? ""} actions={actions} home />
-        {recent.length > 0 && <h3>최근 스레드</h3>}
-        <ul className="recent">
-          {recent.map((thread) => (
-            <li key={thread.id}>
-              <button type="button" onClick={() => onOpenThread(thread.id)}>
-                <StatusMark mark={threadMark(thread, marks)} />
-                <span className="recent-title">{thread.title}</span>
-                <span className="muted">{folderName(thread.cwd)}</span>
-                <span className="muted">{relativeAge(thread.updatedAt, Date.now())}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      </div>
-    </div>
-  );
-}
+export { Home } from "./Home";
 
 const FLEET_COLUMNS: { title: string; marks: ThreadMark[]; hint: string }[] = [
   { title: "확인 필요", marks: ["approval", "failed"], hint: "승인 또는 실패 확인을 기다립니다" },
