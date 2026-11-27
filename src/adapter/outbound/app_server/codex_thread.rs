@@ -21,6 +21,7 @@ use crate::application::port::conversation_stream::ConversationStreamEvent;
 use crate::domain::delegation::{Delivery, EndReason};
 use crate::domain::turn_terminal::{ConversationTurnErrorInfo, ConversationTurnTerminalOutcome};
 
+mod account_limits;
 mod driver;
 pub(crate) use driver::CodexThreadDriver;
 
@@ -181,6 +182,20 @@ impl CodexThreadBackend {
             });
             if let Some(schema) = request.output_schema {
                 params["outputSchema"] = schema;
+            }
+            // Only Issue Assessment supplies binding authorization; manual delegation stays independent.
+            // Read before acquiring the binding guard so a slow quota read cannot hold a pause open.
+            if authorization.is_some() {
+                let allowed = connection
+                    .isolated_request("account/rateLimits/read", json!({}))
+                    .map_err(|_| EndReason::Unavailable)
+                    .and_then(account_limits::admission);
+                if let Err(reason) = allowed {
+                    return End {
+                        reason,
+                        delivery: NotSent,
+                    };
+                }
             }
             let action_guard = match authorization
                 .map(|authorization| authorization.acquire())
