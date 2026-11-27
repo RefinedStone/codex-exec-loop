@@ -536,4 +536,3 @@ test("workspace member source changes retain Rust and portable validation", () =
   assert.equal(plan.portable, true);
   assert.equal(plan.docs_only, false);
 });
-

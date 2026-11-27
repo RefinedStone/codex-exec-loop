@@ -1178,4 +1178,3 @@ jobs:
           AKRA_CI_SMOKE_REQUIRED: ${{ needs.scope.outputs.smoke }}
           AKRA_CI_SMOKE_RESULT: ${{ needs.smoke_check.result }}
         run: node scripts/ci-scope.mjs gate
-
