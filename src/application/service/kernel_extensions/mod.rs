@@ -293,7 +293,7 @@ impl ExtensionService {
                 .handler
                 .response_guard(&context, action, &guard_input, &output)?;
         {
-            let state = self.lock();
+            let mut state = self.lock();
             ensure!(!state.stopped, "extension host is stopping");
             let activation = &state.durable.activations[&entry.manifest.id];
             ensure!(
@@ -304,6 +304,10 @@ impl ExtensionService {
             );
             if let Some(guard) = &response_guard {
                 guard.validate()?;
+            }
+            if operation.descriptor.kind == ExtensionOperationKind::Command {
+                // A command changed extension state; other attached clients re-read it.
+                self.publish(&mut state, &entry.manifest.id, None);
             }
         }
         // This is the response commit point: revoke and disable serialize against the checks

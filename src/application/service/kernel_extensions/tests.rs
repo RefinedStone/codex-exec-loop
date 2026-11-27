@@ -550,3 +550,40 @@ fn concurrent_starts_converge_and_expiry_cleans_only_the_original_job() {
     assert_eq!(retry["id"], id);
     assert_eq!(handler.entered.load(Ordering::Acquire), 1);
 }
+
+#[test]
+fn a_successful_command_notifies_attached_clients_but_a_query_does_not() {
+    let handler = Arc::new(TestHandler::default());
+    let mut command = registration("akra.test", ExtensionScope::LocalUser, handler);
+    command.manifest.operations[0].kind = ExtensionOperationKind::Command;
+    let host = ExtensionService::new(
+        ExtensionRegistry::build(vec![command], ExtensionScope::LocalUser).unwrap(),
+        Arc::new(MemoryStore::default()),
+        ExtensionScope::LocalUser,
+        None,
+        BTreeSet::from(["test.run".into()]),
+    )
+    .unwrap();
+    enable(&host);
+    let mut events = host.subscribe();
+    call(&host, "echo", json!({"text":"saved"}), None).unwrap();
+    let event = events.try_recv().unwrap();
+    assert_eq!(
+        (event.extension.as_str(), event.job_id),
+        ("akra.test", None)
+    );
+    assert!(call(&host, "echo", json!({"text":7}), None).is_err());
+    assert!(
+        events.try_recv().is_err(),
+        "a rejected command does not notify"
+    );
+
+    let query = service(
+        Arc::new(MemoryStore::default()),
+        Arc::new(TestHandler::default()),
+    );
+    enable(&query);
+    let mut quiet = query.subscribe();
+    call(&query, "echo", json!({"text":"read"}), None).unwrap();
+    assert!(quiet.try_recv().is_err());
+}
