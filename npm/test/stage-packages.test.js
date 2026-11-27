@@ -75,6 +75,9 @@ function createArchive(
   );
   const notices = path.join(bundleRoot, "THIRD_PARTY_NOTICES");
   fs.mkdirSync(notices, { recursive: true });
+  for (const notice of ["PixiJS-MIT.txt", "rust-crates.txt", "README.md"]) {
+    writeFile(path.join(notices, notice), "fixture notice");
+  }
   if (noticeBody !== null) {
     writeFile(path.join(notices, "Galmuri-OFL.txt"), noticeBody);
   }
@@ -174,7 +177,7 @@ function collectRelativeFiles(rootDir) {
       if (entry.isDirectory()) {
         visit(entryPath);
       } else {
-        files.push(path.relative(rootDir, entryPath));
+        files.push(path.relative(rootDir, entryPath).split(path.sep).join("/"));
       }
     }
   };
@@ -540,6 +543,27 @@ test("stage-npm-packages rejects missing or empty required font notices", () => 
       assert(!fs.existsSync(outDir));
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+});
+
+test("archive preflight rejects missing or empty project license and dependency notices despite valid checksums", async () => {
+  const config = PLATFORM_CONFIGS[0];
+  for (const name of ["LICENSE", "THIRD_PARTY_NOTICES/rust-crates.txt",
+    "THIRD_PARTY_NOTICES/PixiJS-MIT.txt", "THIRD_PARTY_NOTICES/README.md"]) {
+    for (const empty of [false, true]) {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "akra-release-license-"));
+      try {
+        createArchive(tmp, config, { beforeManifest: root => {
+          const file = path.join(root, name);
+          if (empty) fs.writeFileSync(file, "");
+          else fs.rmSync(file);
+        }});
+        await assert.rejects(findAndVerifyArchive(tmp, "0.1.0", config.targetTriple),
+          /Project license must be a nonempty|Required third-party notice/);
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
     }
   }
 });
