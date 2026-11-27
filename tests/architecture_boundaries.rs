@@ -777,7 +777,10 @@ fn issue_automation_journal_dependency_violations(source: &str) -> Vec<String> {
         .filter(|path| {
             let segments = path.split("::").collect::<Vec<_>>();
             let journal = segments.iter().any(|segment| {
-                matches!(*segment, "kernel_event" | "KernelEvent" | "RecordedKernelEvent")
+                matches!(
+                    *segment,
+                    "kernel_event" | "KernelEvent" | "RecordedKernelEvent"
+                )
             });
             let root_integration = matches!(segments.first(), Some(&"crate" | &"self" | &"super"))
                 && segments.iter().any(|segment| {
@@ -797,7 +800,10 @@ fn issue_automation_domain_cannot_read_kernel_journal_even_in_tests() {
         "src/application/service/issue_timeline/tests.rs",
         "src/domain/kernel_event/issue_scope.rs",
     ] {
-        assert!(root.join(required).is_file(), "missing timeline owner: {required}");
+        assert!(
+            root.join(required).is_file(),
+            "missing timeline owner: {required}"
+        );
     }
     let mut violations = Vec::new();
     for path in rust_files_for_path(&root.join("src/domain/issue_automation")) {
@@ -14431,14 +14437,17 @@ impl<'ast> Visit<'ast> for RustSemanticReferenceVisitor {
     }
 
     fn visit_trait_item(&mut self, item: &'ast syn::TraitItem) {
-        if !self.include_tests && trait_item_attributes(item).is_some_and(attributes_are_test_only) {
+        if !self.include_tests && trait_item_attributes(item).is_some_and(attributes_are_test_only)
+        {
             return;
         }
         visit::visit_trait_item(self, item);
     }
 
     fn visit_foreign_item(&mut self, item: &'ast syn::ForeignItem) {
-        if !self.include_tests && foreign_item_attributes(item).is_some_and(attributes_are_test_only) {
+        if !self.include_tests
+            && foreign_item_attributes(item).is_some_and(attributes_are_test_only)
+        {
             return;
         }
         visit::visit_foreign_item(self, item);
