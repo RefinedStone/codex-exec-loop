@@ -1663,28 +1663,50 @@ fn global_config_path() -> Result<PathBuf> {
 
 /// Akra 의 사용자별 홈 디렉터리이다. `AKRA_HOME` 이 있으면 그 절대 경로를, 없으면 `~/.akra` 를 쓴다.
 pub(crate) fn akra_home_dir() -> Result<PathBuf> {
-    let home = match std::env::var_os("AKRA_HOME") {
-        Some(path) if !path.is_empty() => PathBuf::from(path),
-        _ => default_akra_home()?,
-    };
-    if !home.is_absolute() {
-        bail!("AKRA_HOME must be an absolute path")
+    match std::env::var_os("AKRA_HOME") {
+        Some(path) => validate_explicit_akra_home(PathBuf::from(path)),
+        None => default_akra_home(),
     }
-    Ok(home)
+}
+
+/// An explicitly invalid profile must never select a different profile.
+/// Keep this validation shared by configuration, the Gateway and planning authority.
+pub(crate) fn validate_explicit_akra_home(path: PathBuf) -> Result<PathBuf> {
+    if path.as_os_str().is_empty() {
+        bail!("AKRA_HOME must not be empty; unset it to use the default profile");
+    }
+    validate_absolute_profile_home(path).context("AKRA_HOME must be an absolute normalized path")
+}
+
+fn validate_absolute_profile_home(path: PathBuf) -> Result<PathBuf> {
+    if !path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )
+        })
+    {
+        bail!("storage root must be an absolute normalized path");
+    }
+    Ok(path)
 }
 
 fn default_akra_home() -> Result<PathBuf> {
+    // Missing Windows USERPROFILE previously let config and authority choose
+    // different roots (HOME vs LocalAppData). Do not silently migrate either.
     #[cfg(windows)]
-    {
-        if let Some(home) = std::env::var_os("USERPROFILE").filter(|home| !home.is_empty()) {
-            return Ok(PathBuf::from(home).join(".akra"));
-        }
-    }
-    std::env::var_os("HOME")
+    let name = "USERPROFILE";
+    #[cfg(not(windows))]
+    let name = "HOME";
+    let home = std::env::var_os(name)
         .filter(|home| !home.is_empty())
-        .map(PathBuf::from)
-        .map(|home| home.join(".akra"))
-        .ok_or_else(|| anyhow!("AKRA_HOME is unset and the user home directory is unavailable"))
+        .ok_or_else(|| {
+            anyhow!(
+                "AKRA_HOME is unset and {name} is unavailable; set an explicit absolute AKRA_HOME"
+            )
+        })?;
+    Ok(validate_absolute_profile_home(PathBuf::from(home))?.join(".akra"))
 }
 
 fn find_git_worktree_root(cwd: &Path) -> Result<Option<PathBuf>> {

@@ -57,6 +57,8 @@ pub(crate) fn client_endpoint() -> Result<String> {
     }
     #[cfg(windows)]
     {
+        // The pipe is user-scoped; an invalid profile must not silently attach to it.
+        crate::configuration::akra_home_dir()?;
         windows_pipe_name()
     }
 }

@@ -77,4 +77,12 @@
 - `akra mcp skill install`이 적은 binary 경로 안내는 설치 폴더를 바꾸면 이전 경로로 남는다. 다시
   설치하면 고쳐진다.
 - `AKRA_HOME=""`(빈 값)은 설정·Gateway·Desktop이 없음으로 보고 `~/.akra`를 쓰지만, authority store는
-  오류로 멈춘다. 이름 변경과 관계없는 기존 동작이며 바꾸지 않았다.
+  오류로 멈췄다. 아래 후속 호환성 검사에서 이 불일치를 제거했다.
+
+
+### N2 후속 프로필 경계 (#2588)
+
+- 명시적 AKRA_HOME은 Rust 설정/authority/Gateway 클라이언트와 Desktop 접속 주소에서 공통 의미를 갖는다. 빈 값, 상대 경로, 상위 경로 이동은 오류다. 기본값을 쓰려면 변수를 제거한다. 명시된 오류를 다른 프로필로 조용히 fallback하지 않는다.
+- 변수가 없으면 Unix HOME 또는 Windows USERPROFILE의 .akra를 사용한다. Windows USERPROFILE이 없는 특수 실행 환경에서는 기존 HOME/LocalAppData 두 fallback의 서로 다른 저장소를 자동 선택하지 않고, 사용자가 기존 프로필의 절대 AKRA_HOME을 지정하도록 한다. 기존 OS-account 기준 보안 조정 경로 및 Windows 사용자 SID pipe 이름 자체는 변경하지 않는다. 테스트 전용 AKRA_GATEWAY_ENDPOINT의 명시적 우회 계약은 유지한다.
+- Windows Electron 45.2.3의 폐기 가능한 appData에서 실제 safeStorage/DPAPI 암호문, 지속 쿠키, 설정을 생성하고 제품의 keepCredentialIdentity와 prepareUserData로 구 profile을 새 이름에 옮겼다. 세 개의 독립 Electron 프로세스(seed/upgrade/reopen)에서 복호화 및 쿠키·설정 보존을 확인했다. 명령: desktop에서 node test/e2e/userdata-dpapi.mjs. 실사용 계정 자격 증명 또는 실제 외부 서비스는 이용하지 않았다.
+- macOS/Linux 키체인 시험은 별도의 폐기 가능한 OS 계정이 필요하므로 아직 수행하지 않았다. 실제 이전 binary 다운그레이드, 이미 옛 이름으로 열린 프로세스와의 동시 사용은 여전히 별도 검증이다. 이전/새 폴더를 자동으로 병합하거나 사용자 데이터를 덮어쓰지 않는다.
