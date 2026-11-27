@@ -201,7 +201,10 @@ fn required_problems(
     }
     let mut result = Vec::new();
     for (key, field) in meta.fields {
-        if !field.required || matches!(key.as_str(), "project" | "issuetype") {
+        let required = field
+            .required_for(&key)
+            .ok_or(IssueSourceFailure::MetadataIncomplete)?;
+        if !required || matches!(key.as_str(), "project" | "issuetype") {
             continue;
         }
         if key == "description" {

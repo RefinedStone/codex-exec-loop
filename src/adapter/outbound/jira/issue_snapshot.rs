@@ -54,6 +54,19 @@ impl JiraIssueSnapshotAdapter {
         serde_json::from_slice(&body).map_err(|_| anyhow!("Jira did not return the expected data"))
     }
 
+    /// Requiredness is a provider assertion. An omitted custom-field flag cannot authorize a write.
+    pub(super) fn edit_metadata(&self, issue_id: &str) -> Result<EditMeta> {
+        let meta: EditMeta = self.get(&format!("/rest/api/3/issue/{issue_id}/editmeta"))?;
+        if meta
+            .fields
+            .iter()
+            .any(|(key, field)| field.required_for(key).is_none())
+        {
+            bail!("Jira did not confirm which fields are required")
+        }
+        Ok(meta)
+    }
+
     fn cloud_id(&self) -> Result<String> {
         let tenant: TenantInfo = self.get(TENANT_INFO_PATH)?;
         ensure_cloud_id(&tenant.cloud_id)?;
@@ -124,10 +137,7 @@ impl IssueFieldRequirementPort for JiraIssueSnapshotAdapter {
     ) -> Result<IssueFieldRequirementResponse> {
         self.ensure_this_site(&request.issue)?;
         self.known_issue(&request.issue)?;
-        let meta: EditMeta = self.get(&format!(
-            "/rest/api/3/issue/{}/editmeta",
-            request.issue.issue_id
-        ))?;
+        let meta = self.edit_metadata(&request.issue.issue_id)?;
         Ok(requirements(meta))
     }
 }
@@ -163,7 +173,9 @@ fn requirements(meta: EditMeta) -> IssueFieldRequirementResponse {
     let mut response = IssueFieldRequirementResponse::default();
     for (key, field) in meta.fields {
         // `summary` 는 제목이다. 검증기가 항상 검사한다. `issuetype` 과 `project` 는 대상을 정하는 값이다.
-        if !field.required || ["summary", "issuetype", "project"].contains(&key.as_str()) {
+        if field.required == Some(false)
+            || ["summary", "issuetype", "project"].contains(&key.as_str())
+        {
             continue;
         }
         let label = field.name.unwrap_or_else(|| key.clone());
@@ -298,12 +310,25 @@ pub(super) struct EditMeta {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct EditMetaField {
-    #[serde(default)]
-    pub(super) required: bool,
+    required: Option<bool>,
     pub(super) name: Option<String>,
     pub(super) schema: FieldSchema,
     #[serde(default)]
     pub(super) allowed_values: Vec<AllowedValue>,
+}
+
+impl EditMetaField {
+    /// Jira always requires the summary and target coordinates. Other fields need explicit metadata.
+    pub(super) fn required_for(&self, key: &str) -> Option<bool> {
+        if matches!(key, "summary" | "project" | "issuetype") {
+            Some(true)
+        } else if key == "description" {
+            // A non-empty approved body satisfies either possible requirement. Empty is unsafe unless explicitly optional.
+            Some(self.required.unwrap_or(true))
+        } else {
+            self.required
+        }
+    }
 }
 
 #[derive(Deserialize)]
