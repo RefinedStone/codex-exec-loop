@@ -16,8 +16,8 @@ use rand::{RngCore, rngs::OsRng};
 
 use crate::application::port::outbound::evidence_vault_backup_port::{
     EvidenceVaultBackupPort, VAULT_RECOVERY_KEY_LEN, VaultBackupError, VaultBackupExportRequest,
-    VaultBackupImportReport, VaultBackupImportRequest, VaultBackupProjectApproval,
-    VaultBackupRecoveryMode, VaultRecoveryKey,
+    VaultBackupImportPlan, VaultBackupImportReport, VaultBackupProjectApproval,
+    VaultBackupRecoveryMode, VaultBackupSelection, VaultRecoveryKey,
 };
 use crate::application::port::outbound::evidence_vault_port::{
     EvidenceVaultStorePort, VaultRecordBinding, VaultRecordField, VaultRecordLoadRequest,
@@ -147,21 +147,30 @@ impl EvidenceVaultBackupService {
         if request.decision == VaultUserDecision::Cancelled {
             return Err(VaultBackupFailure::NotApproved);
         }
-        let local_key = self
-            .unlock
-            .sealing_key()
-            .map_err(VaultBackupFailure::Locked)?;
-        self.backup
-            .import(VaultBackupImportRequest {
-                archive: request.archive,
-                recovery_key: request.recovery_key,
-                local_key,
-                projects: request.projects,
+        let plan = self
+            .backup
+            .prepare_import(VaultBackupSelection {
+                archive: &request.archive,
+                recovery_key: &request.recovery_key,
+                projects: &request.projects,
                 recovery_mode: request.recovery_mode,
             })
-            .map_err(VaultBackupFailure::Backup)
+            .map_err(VaultBackupFailure::Backup)?;
+        match plan {
+            VaultBackupImportPlan::ReadOnly(report) => Ok(report),
+            VaultBackupImportPlan::Install(install) => {
+                let key = self
+                    .unlock
+                    .sealing_key()
+                    .map_err(VaultBackupFailure::Locked)?;
+                install(&key).map_err(VaultBackupFailure::Backup)
+            }
+        }
     }
 }
+
+#[cfg(test)]
+mod rejected_archive_tests;
 
 #[cfg(test)]
 #[cfg(unix)]
@@ -798,7 +807,7 @@ mod tests {
         <VaultBackupExport as NotSerialize<_>>::proven();
         <VaultBackupApprovedImport as NotSerialize<_>>::proven();
         <VaultBackupExportRequest as NotSerialize<_>>::proven();
-        <VaultBackupImportRequest as NotSerialize<_>>::proven();
+        <crate::application::port::outbound::evidence_vault_backup_port::VaultBackupImportRequest as NotSerialize<_>>::proven();
 
         let (_source, export) = exported("debug");
         let recovery_text = export.recovery_key.expose_text();

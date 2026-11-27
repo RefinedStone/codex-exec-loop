@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use super::*;
 use crate::adapter::outbound::filesystem::evidence_vault_store::seal_record;
+use crate::application::port::outbound::evidence_vault_backup_port::VaultBackupImportRequest;
 use crate::application::port::outbound::evidence_vault_port::{
     VaultBindingTransaction, VaultRecordSaveRequest, VaultStoreError,
 };
@@ -506,15 +507,18 @@ fn an_archive_without_approved_projects_does_not_initialize_a_vault() {
         std::process::id(),
         rand::random::<u128>(),
     ));
-    let report = FilesystemEvidenceVaultBackupAdapter::new(root.clone())
-        .import(VaultBackupImportRequest {
-            archive,
-            recovery_key,
-            local_key: key(2),
-            projects: Vec::new(),
+    let store = FilesystemEvidenceVaultBackupAdapter::new(root.clone());
+    let plan = store
+        .prepare_import(VaultBackupSelection {
+            archive: &archive,
+            recovery_key: &recovery_key,
+            projects: &[],
             recovery_mode: VaultBackupRecoveryMode::RecoverUnreadable,
         })
         .unwrap();
+    let VaultBackupImportPlan::ReadOnly(report) = plan else {
+        panic!("project preview must not ask for a destination key")
+    };
     assert_eq!(report.unapproved_projects, [source.project_scope]);
     assert!(report.imported.is_empty());
     assert!(report.kept_local.is_empty());

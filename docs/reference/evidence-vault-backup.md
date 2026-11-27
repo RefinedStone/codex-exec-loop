@@ -65,9 +65,11 @@ receives its records.
    scope. The remote issue (provider, server, repository, issue) is never changed. Records of
    projects without an approval are not written; the report lists those projects. An import with
    an empty approval list is a check of the recovery key and a list of the projects in the archive.
-4. The local device key is not replaced. A device without a key can obtain one through the
+4. Only an authenticated import with at least one approved issue asks for the local sealing key.
+   Malformed archives, wrong recovery keys, and project-list previews leave a fresh device key store
+   untouched. An approved installation on a device without a key uses the
    [coordinated initializer](./evidence-vault-key-initialization.md). An unresolved attempt stops
-   import with `Locked(KeyStoreUnavailable)` before the backup adapter runs. The exporting
+   installation with `Locked(KeyStoreUnavailable)` before the first record write. The exporting
    device key is used in memory only and is not stored.
 5. A readable local `CurrentVersion` is never changed (`kept_local`), including in recovery mode.
    An unreadable binding returns `LocalRecoveryRequired` in `PreserveLocal` mode. Only explicit
