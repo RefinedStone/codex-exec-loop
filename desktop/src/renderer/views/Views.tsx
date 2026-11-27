@@ -96,6 +96,8 @@ function FleetCard({ thread, mark, onOpenThread }: { thread: ListedThread; mark:
 export function Fleet({ onOpenThread }: { onOpenThread(threadId: string): void }) {
   const folders = useDesktopStore((state) => state.folders);
   const marks = useThreadMarks();
+  const kernel = useDesktopStore((state) => state.kernel);
+  const items = kernel.phase === "attached" ? kernel.attentionItems : null;
   const threads = useMemo(() => allThreads(folders).map((thread) => ({ thread, mark: threadMark(thread, marks) })), [folders, marks]);
   return (
     <div className="fleet" data-testid="fleet">
@@ -103,6 +105,17 @@ export function Fleet({ onOpenThread }: { onOpenThread(threadId: string): void }
         <h1>현황판</h1>
         <span className="muted">모든 작업 폴더의 스레드를 상태별로 봅니다.</span>
       </header>
+      <section className="fleet-column" data-testid="kernel-attention">
+        <h3>현재 저장소 · 커널 확인 필요 <span className="muted">{items?.length ?? "—"}</span></h3>
+        {items === null && <p className="muted fleet-empty">커널 확인 항목을 아직 읽지 못했습니다.</p>}
+        {items?.length === 0 && <p className="muted fleet-empty">없음</p>}
+        {items?.map((item) => <button key={item.id} type="button" className="fleet-card"
+          onClick={() => item.subject.kind === "thread" ? onOpenThread(item.subject.id) : openPanel(item.subject.kind === "issue_decision" ? "issues" : "kernel")}>
+          <span className="fleet-card-title">{item.summary}</span>
+          <span className="fleet-card-meta">{item.cause} · {item.subject.kind}</span>
+          <span className="muted">{item.next.map(step => "name" in step ? step.name : step.step).join(" → ")}</span>
+        </button>)}
+      </section>
       <div className="fleet-columns">
         {FLEET_COLUMNS.map((column) => {
           const items = threads.filter((item) => column.marks.includes(item.mark));
