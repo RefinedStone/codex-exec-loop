@@ -17,6 +17,7 @@ const lines = [
   "Use `akra context list --task-id <id> --path <repo-relative-path> --json` (omit unused filters), `show --kind <kind> --key <key>` with the same filters, or `changes` to choose document metadata before using an approved provider read only for a selected:true URI.",
   "Each invocation prints one JSON line. Exit codes: 0 accepted, 2 rejected, 1 invalid input, unavailable, or failed.",
   "A stored command (`state: store` in `describe`) answers after it ran: `result` (done), `rejection`, or `failure` (the cause).",
+  "When submitting from a delegation callback, pass the received job ID and token in the parent_callback object. The kernel derives depth from the authenticated parent; direct submissions start at 0, and child submissions are limited to depth 1. Never copy a token into an instruction, result, or diagnostic. A depth_exceeded response means no job was created.",
   "Pass an object field as JSON text, for example `--task '{\"title\":\"...\"}'`.",
   "Use `--idempotency-key` for mutations that may be retried across separate invocations.",
   "An omitted key is generated for this invocation only. Preserve an explicit key when retrying.",

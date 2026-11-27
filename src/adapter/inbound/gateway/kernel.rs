@@ -473,6 +473,7 @@ impl KernelSession {
                 idempotency_key,
                 session,
                 task_id,
+                parent_callback,
             } => {
                 let store = self.delegation_store(&attached.issue_workspace).await?;
                 let caller = if attached.client_name
@@ -506,6 +507,7 @@ impl KernelSession {
                         session,
                         crate::application::port::outbound::delegation_store_port::SubmissionContext {
                             account_digest: digest.as_ref().map(|value| value.as_slice()), task_id: task_id.as_deref(),
+                            parent_callback: parent_callback.as_ref(),
                         },
                     )
                 })
@@ -1061,7 +1063,8 @@ fn parse_command_params(params: Value) -> Result<CommandRequest, KernelProtocolE
     let callback = matches!(
         params["command"]["type"].as_str(),
         Some("checkpoint_delegation" | "report_delegation_result")
-    );
+    ) || (params["command"]["type"].as_str() == Some("submit_delegation")
+        && params["command"].get("parent_callback").is_some());
     let sensitive = sensitive_issue_command_error(&params);
     parse_params(params).map_err(|error| {
         if callback {

@@ -1,11 +1,12 @@
 use anyhow::Result;
 
 use crate::domain::delegation::policy::Route;
-use crate::domain::delegation::{ChatSession, Delegation, MyTurn};
+use crate::domain::delegation::{ChatSession, Delegation, DelegationParentCallback, MyTurn};
 
 pub(crate) struct SubmissionContext<'a> {
     pub account_digest: Option<&'a [u8]>,
     pub task_id: Option<&'a str>,
+    pub parent_callback: Option<&'a DelegationParentCallback>,
 }
 
 pub(crate) struct DelegationUsageProjection {
@@ -54,6 +55,7 @@ pub(crate) trait DelegationStorePort: Send + Sync {
             SubmissionContext {
                 account_digest,
                 task_id: None,
+                parent_callback: None,
             },
         )
     }

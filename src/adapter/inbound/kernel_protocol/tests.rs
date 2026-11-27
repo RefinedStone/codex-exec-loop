@@ -174,6 +174,7 @@ fn sample_commands() -> Vec<KernelCommand> {
             idempotency_key: "delegation-request-1".into(),
             session: Default::default(),
             task_id: None,
+            parent_callback: None,
         },
         KernelCommand::CancelDelegation { id: "job-1".into() },
         KernelCommand::CheckpointDelegation {

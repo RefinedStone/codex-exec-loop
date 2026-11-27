@@ -13,8 +13,8 @@ use crate::application::port::outbound::delegation_store_port::{
 };
 use crate::domain::delegation::policy::{DEFAULT_DEADLINE_MS, Route};
 use crate::domain::delegation::{
-    ChatSession, Delegation, Delivery, EndReason, Evidence, EvidenceSource, MyTurn, Phase, State,
-    can_fall_back,
+    ChatSession, Delegation, DelegationParentCallback, Delivery, EndReason, Evidence,
+    EvidenceSource, MAX_DELEGATION_DEPTH, MyTurn, Phase, State, can_fall_back,
 };
 
 const DAY_MS: i64 = 86_400_000;
@@ -108,14 +108,7 @@ impl DelegationStore {
         let Some((view, expected)) = current else {
             return Ok(None);
         };
-        let actual = Sha256::digest(token.as_bytes());
-        if expected.len() != actual.len()
-            || actual
-                .iter()
-                .zip(expected)
-                .fold(0, |delta, (a, b)| delta | (a ^ b))
-                != 0
-        {
+        if !callback_matches(token, &expected) {
             return Ok(None);
         }
         let now = now_ms();
@@ -182,6 +175,7 @@ impl DelegationStorePort for DelegationStore {
         let SubmissionContext {
             account_digest,
             task_id,
+            parent_callback,
         } = context;
         if let Some(task_id) = task_id {
             crate::domain::planning::evidence::validate_evidence_identifier(task_id)
@@ -195,6 +189,11 @@ impl DelegationStorePort for DelegationStore {
         }
         let mut db = self.open()?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // Authenticate lineage before checking the request key or allocating a job.
+        let lineage = match parent_callback {
+            Some(callback) => verify_parent(&tx, callback)?,
+            None => Lineage::default(),
+        };
         let existing = tx
             .query_row(
                 "SELECT instruction, view FROM delegation WHERE request_key = ?1",
@@ -207,6 +206,8 @@ impl DelegationStorePort for DelegationStore {
             if original != instruction
                 || existing.session != session
                 || existing.task_id.as_deref() != task_id
+                || existing.parent_id != lineage.parent_id
+                || existing.depth != lineage.depth
             {
                 bail!("idempotency_key already belongs to another delegation request");
             }
@@ -232,9 +233,10 @@ impl DelegationStorePort for DelegationStore {
             caller,
             &route,
             session,
-            SubmissionContext {
+            InsertContext {
                 account_digest,
                 task_id,
+                lineage,
             },
         )?;
         tx.commit()?;
@@ -389,6 +391,10 @@ impl DelegationStorePort for DelegationStore {
         ensure!(
             next.task_id == old.task_id,
             "delegation task identity cannot change"
+        );
+        ensure!(
+            next.parent_id == old.parent_id && next.depth == old.depth,
+            "delegation lineage cannot change"
         );
         let stored_view: Option<String> = tx
             .query_row(
@@ -622,9 +628,13 @@ impl DelegationStorePort for DelegationStore {
             &view.caller,
             &route,
             view.session,
-            SubmissionContext {
+            InsertContext {
                 account_digest: account_digest.as_deref(),
                 task_id: view.task_id.as_deref(),
+                lineage: Lineage {
+                    parent_id: view.parent_id,
+                    depth: view.depth,
+                },
             },
         )?;
         tx.execute(
@@ -714,6 +724,62 @@ fn circuit_until(db: &Connection, backend: &str) -> Result<Option<i64>> {
         .flatten())
 }
 
+#[derive(Default)]
+struct Lineage {
+    parent_id: Option<String>,
+    depth: u32,
+}
+
+struct InsertContext<'a> {
+    account_digest: Option<&'a [u8]>,
+    task_id: Option<&'a str>,
+    lineage: Lineage,
+}
+
+fn callback_matches(token: &str, expected: &[u8]) -> bool {
+    let actual = Sha256::digest(token.as_bytes());
+    expected.len() == actual.len()
+        && actual
+            .iter()
+            .zip(expected)
+            .fold(0, |delta, (a, b)| delta | (a ^ b))
+            == 0
+}
+
+fn verify_parent(db: &Connection, callback: &DelegationParentCallback) -> Result<Lineage> {
+    let row: Option<(String, Vec<u8>)> = db
+        .query_row(
+            "SELECT d.view, c.digest FROM delegation d JOIN delegation_callback c ON c.id = d.id
+         WHERE d.id = ?1 AND d.active = 1",
+            [&callback.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((view, expected)) = row else {
+        bail!("invalid_parent_callback");
+    };
+    ensure!(
+        callback_matches(&callback.token, &expected),
+        "invalid_parent_callback"
+    );
+    let parent: Delegation = serde_json::from_str(&view)?;
+    ensure!(
+        !parent.state.terminal()
+            && parent.state != State::Queued
+            && now_ms() < parent.effective_deadline(),
+        "invalid_parent_callback"
+    );
+    let depth = parent
+        .depth
+        .checked_add(1)
+        .ok_or_else(|| anyhow::anyhow!("depth_exceeded"))?;
+    ensure!(depth <= MAX_DELEGATION_DEPTH, "depth_exceeded");
+    Ok(Lineage {
+        parent_id: Some(parent.id),
+        depth,
+    })
+}
+
 fn insert(
     db: &Connection,
     key: &str,
@@ -721,11 +787,12 @@ fn insert(
     caller: &str,
     route: &Route,
     session: ChatSession,
-    context: SubmissionContext<'_>,
+    context: InsertContext<'_>,
 ) -> Result<Delegation> {
-    let SubmissionContext {
+    let InsertContext {
         account_digest,
         task_id,
+        lineage,
     } = context;
     let now = now_ms();
     let (running, started): (u32, u32) = db.query_row(
@@ -743,6 +810,8 @@ fn insert(
         id,
         caller: caller.to_owned(),
         task_id: task_id.map(str::to_owned),
+        parent_id: lineage.parent_id,
+        depth: lineage.depth,
         state: State::Queued,
         delivery: Delivery::NotSent,
         phase: Phase::Unknown,
@@ -810,6 +879,93 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_child_submission_enforces_depth_before_allocating_jobs() {
+        let (_directory, store) = ledger();
+        let route = Route {
+            max_running: 8,
+            ..Route::default()
+        };
+        let submit = |key: &str, parent_callback: Option<&DelegationParentCallback>| {
+            store.submit_task_session(
+                key,
+                "fixture",
+                "fake-backend",
+                Ok(route.clone()),
+                ChatSession::New,
+                SubmissionContext {
+                    account_digest: None,
+                    task_id: None,
+                    parent_callback,
+                },
+            )
+        };
+        let dispatch = |job: &Delegation| {
+            let mut active = job.clone();
+            active.state = State::Dispatching;
+            assert!(store.update(job, &mut active, None, false).unwrap());
+            let token = store.issue_callback_capability(&job.id).unwrap().unwrap();
+            (
+                active,
+                DelegationParentCallback {
+                    id: job.id.clone(),
+                    token,
+                },
+            )
+        };
+        let root = submit("root", None).unwrap();
+        assert_eq!(root.depth, 0);
+        assert!(root.parent_id.is_none());
+        let (active, capability) = dispatch(&root);
+        let wrong = DelegationParentCallback {
+            id: root.id.clone(),
+            token: "0".repeat(64),
+        };
+        assert_eq!(
+            submit("invalid", Some(&wrong)).unwrap_err().to_string(),
+            "invalid_parent_callback"
+        );
+        let child = submit("child", Some(&capability)).unwrap();
+        assert_eq!(child.depth, 1);
+        assert_eq!(child.parent_id.as_deref(), Some(root.id.as_str()));
+        assert_eq!(submit("child", Some(&capability)).unwrap().id, child.id);
+        assert!(submit("child", None).is_err());
+        assert_eq!(store.find(&child.id).unwrap().unwrap().depth, 1);
+        let mut forged = child.clone();
+        forged.depth = 0;
+        assert!(store.update(&child, &mut forged, None, false).is_err());
+        // A safe retry of an unsent child must not reset its depth.
+        store.cancel(&child.id).unwrap().unwrap();
+        let retry = store.retry(&child.id, "retry-child").unwrap().unwrap();
+        assert_eq!(retry.depth, 1);
+        assert_eq!(retry.parent_id, child.parent_id);
+        let (_child_active, child_capability) = dispatch(&retry);
+        let count = store.list().unwrap().len();
+        assert_eq!(
+            submit("grandchild", Some(&child_capability))
+                .unwrap_err()
+                .to_string(),
+            "depth_exceeded"
+        );
+        assert_eq!(store.list().unwrap().len(), count);
+        // Terminal and expired parents cannot authorize another submission.
+        let mut expired = active.clone();
+        expired.deadline = Some(0);
+        assert!(store.update(&active, &mut expired, None, false).unwrap());
+        assert_eq!(
+            submit("expired", Some(&capability))
+                .unwrap_err()
+                .to_string(),
+            "invalid_parent_callback"
+        );
+        store.cancel(&root.id).unwrap().unwrap();
+        assert_eq!(
+            submit("closed", Some(&capability)).unwrap_err().to_string(),
+            "invalid_parent_callback"
+        );
+        assert_eq!(store.list().unwrap().len(), count);
+    }
+
+    #[test]
     fn task_usage_delegation_scope_is_idempotent_and_retry_keeps_it() {
         let (_directory, store) = ledger();
         let submit = |task_id| {
@@ -822,6 +978,7 @@ mod tests {
                 SubmissionContext {
                     account_digest: None,
                     task_id,
+                    parent_callback: None,
                 },
             )
         };
