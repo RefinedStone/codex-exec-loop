@@ -26,6 +26,8 @@ interface Entry {
   rendererAvailable: boolean;
   /** 처음 `ready` 에만 확인을 시작한다. 화면을 다시 불러오면 잠근다. */
   started: boolean;
+  minimized: boolean;
+  hidden: boolean;
 }
 
 export interface VaultRestoreWindowsDeps {
@@ -104,7 +106,8 @@ export class VaultRestoreWindows {
     const session = new VaultRestoreSession({
       target,
       source: this.deps.source,
-      profileHold: () => entry.targetActive ? this.powerHold() ?? this.deps.profileHold() : "source_unavailable",
+      profileHold: () => !entry.targetActive ? "source_unavailable"
+        : entry.minimized || entry.hidden ? "window_not_visible" : this.powerHold() ?? this.deps.profileHold(),
       emit: (state) => {
         if (!contents.isDestroyed()) {
           try { contents.send(VAULT_RESTORE_CHANNELS.state, state); } catch { /* 종료된 renderer에 늦은 응답을 보내지 않는다. */ }
@@ -112,7 +115,7 @@ export class VaultRestoreWindows {
       },
       sessionMs: VIEWING_SESSION_MS,
     });
-    entry = { window, session, openerId, targetKey, targetActive: true, rendererAvailable: true, started: false };
+    entry = { window, session, openerId, targetKey, targetActive: true, rendererAvailable: true, started: false, minimized: false, hidden: false };
     this.entries.set(contentsId, entry);
     lockDownNavigation(contents);
     const invalidateRenderer = () => {
@@ -132,8 +135,16 @@ export class VaultRestoreWindows {
       entry.targetActive = false;
       session.lock("window_closed");
     });
-    window.on("minimize", () => session.lock("window_hidden"));
-    window.on("hide", () => session.lock("window_hidden"));
+    window.on("minimize", () => {
+      entry.minimized = true;
+      session.lock("window_hidden");
+    });
+    window.on("restore", () => { entry.minimized = false; });
+    window.on("hide", () => {
+      entry.hidden = true;
+      session.lock("window_hidden");
+    });
+    window.on("show", () => { entry.hidden = false; });
     window.once("closed", () => {
       session.lock("window_closed");
       this.entries.delete(contentsId);
