@@ -1348,6 +1348,7 @@ fn native_release_archives_are_reproducible_for_unix_and_windows_targets() {
         repo.join("assets/admin/fonts"),
         repo.join("examples"),
         repo.join(".akra/followups"),
+        repo.join("THIRD_PARTY_NOTICES"),
         bin_dir.clone(),
         home_dir.clone(),
     ] {
@@ -1398,6 +1399,14 @@ fn native_release_archives_are_reproducible_for_unix_and_windows_targets() {
     .expect("fixture font license should be written");
     fs::write(repo.join("examples/README.md"), "fixture example\n")
         .expect("fixture example should be written");
+    // The release verifier requires every tracked third-party notice.
+    for notice in ["PixiJS-MIT.txt", "rust-crates.txt", "README.md"] {
+        fs::write(
+            repo.join("THIRD_PARTY_NOTICES").join(notice),
+            "fixture notice\n",
+        )
+        .expect("fixture notice should be written");
+    }
     fs::write(
         repo.join(".akra/followups/10-review-queue.md"),
         "fixture followup\n",
@@ -1425,6 +1434,7 @@ fn native_release_archives_are_reproducible_for_unix_and_windows_targets() {
                 "assets",
                 "examples",
                 ".akra",
+                "THIRD_PARTY_NOTICES",
             ],
         ),
         "stage release fixture inputs",

@@ -1794,16 +1794,15 @@ impl KernelCommand {
                 task_id,
                 parent_callback,
             } => {
-                if let Some(callback) = &parent_callback {
-                    if callback.id.trim().is_empty()
+                if let Some(callback) = &parent_callback
+                    && (callback.id.trim().is_empty()
                         || callback.id.len() > 128
                         || callback.token.len() != 64
-                        || !callback.token.bytes().all(|b| b.is_ascii_hexdigit())
-                    {
-                        return Err(KernelProtocolError::invalid_params(
-                            "invalid delegation parent callback",
-                        ));
-                    }
+                        || !callback.token.bytes().all(|b| b.is_ascii_hexdigit()))
+                {
+                    return Err(KernelProtocolError::invalid_params(
+                        "invalid delegation parent callback",
+                    ));
                 }
                 if let Some(task_id) = &task_id {
                     crate::domain::planning::evidence::validate_evidence_identifier(task_id)
