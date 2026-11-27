@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": 2,
+  "revision": 3,
   "baselineSha": "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
   "rootPackage": "akra-ade",
   "packages": [
@@ -43,7 +43,7 @@
     {
       "name": "akra-native",
       "manifest": "crates/native/Cargo.toml",
-      "state": "planned",
+      "state": "active",
       "workspaceDependencies": [],
       "consumerCoverage": "full",
       "sourcePrefixes": [
@@ -314,38 +314,652 @@
       ],
       "features": "default-and-all",
       "ignored": "preserve"
+    },
+    {
+      "source": "src/process_liveness.rs",
+      "destination": "crates/native/src/process_liveness.rs",
+      "owner": "akra-native",
+      "kind": "production-and-unit-tests",
+      "oldTestPrefix": "process_liveness::tests::",
+      "newTestPrefix": "process_liveness::tests::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve",
+      "testOwnership": {
+        "moved": [
+          {
+            "oldName": "process_liveness::tests::current_process_is_alive_and_pid_zero_is_not_claimable",
+            "newName": "process_liveness::tests::current_process_is_alive_and_pid_zero_is_not_claimable",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "process_liveness::tests::current_process_has_a_stable_start_identity",
+            "newName": "process_liveness::tests::current_process_has_a_stable_start_identity",
+            "ignored": false,
+            "attributes": "#[cfg(any(target_os = \"linux\", target_vendor = \"apple\", windows))]\n    #[test]"
+          },
+          {
+            "oldName": "process_liveness::tests::new_process_owners_fail_closed_when_birth_identity_is_ambiguous",
+            "newName": "process_liveness::tests::new_process_owners_fail_closed_when_birth_identity_is_ambiguous",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "process_liveness::tests::linux_proc_stat_parser_handles_spaces_and_parentheses_in_command",
+            "newName": "process_liveness::tests::linux_proc_stat_parser_handles_spaces_and_parentheses_in_command",
+            "ignored": false,
+            "attributes": "#[cfg(target_os = \"linux\")]\n    #[test]"
+          }
+        ],
+        "retained": []
+      }
+    },
+    {
+      "source": "src/private_directory.rs",
+      "destination": "crates/native/src/private_directory.rs",
+      "owner": "akra-native",
+      "kind": "production-and-unit-tests",
+      "oldTestPrefix": "private_directory::tests::",
+      "newTestPrefix": "private_directory::tests::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve",
+      "testOwnership": {
+        "moved": [
+          {
+            "oldName": "private_directory::tests::creates_nested_directory_private_to_current_user",
+            "newName": "private_directory::tests::creates_nested_directory_private_to_current_user",
+            "ignored": false,
+            "attributes": "#[test]"
+          }
+        ],
+        "retained": []
+      }
+    },
+    {
+      "source": "src/private_fs.rs",
+      "destination": "crates/native/src/private_fs.rs",
+      "owner": "akra-native",
+      "kind": "production-and-unit-tests",
+      "oldTestPrefix": "private_fs::shared_directory_tests::",
+      "newTestPrefix": "private_fs::shared_directory_tests::",
+      "platforms": [
+        "windows"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve",
+      "testOwnership": {
+        "moved": [
+          {
+            "oldName": "private_fs::shared_directory_tests::shared_os_parent_accepts_inherited_acl_while_private_root_still_rejects_it",
+            "newName": "private_fs::shared_directory_tests::shared_os_parent_accepts_inherited_acl_while_private_root_still_rejects_it",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "private_fs::shared_directory_tests::shared_directory_allows_content_size_and_timestamps_but_keeps_identity_fields_strict",
+            "newName": "private_fs::shared_directory_tests::shared_directory_allows_content_size_and_timestamps_but_keeps_identity_fields_strict",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "private_fs::shared_directory_tests::shared_directory_rejects_non_directories_and_reparse_points_in_either_snapshot",
+            "newName": "private_fs::shared_directory_tests::shared_directory_rejects_non_directories_and_reparse_points_in_either_snapshot",
+            "ignored": false,
+            "attributes": "#[test]"
+          }
+        ],
+        "retained": []
+      }
+    },
+    {
+      "source": "src/private_sqlite.rs",
+      "destination": "crates/native/src/private_path.rs",
+      "owner": "akra-native",
+      "kind": "production-and-split-unit-tests",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve",
+      "retainedResponsibilities": [
+        "SQLite connection, schema, transaction, journal recovery, POSIX database locks and their integration tests"
+      ]
+    },
+    {
+      "source": "src/private_sqlite/pinned_directory.rs",
+      "destination": "crates/native/src/private_path/pinned_directory.rs",
+      "owner": "akra-native",
+      "kind": "production-primitives",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/adapter/outbound/filesystem/task_evidence_artifact/files.rs",
+      "destination": "crates/native/src/stable_file.rs",
+      "owner": "akra-native",
+      "kind": "production-primitives",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/adapter/outbound/github/automation.rs",
+      "destination": "crates/native/src/private_temp.rs",
+      "owner": "akra-native",
+      "kind": "production-and-split-unit-tests",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve",
+      "retainedResponsibilities": [
+        "provider/network credentials, Git context, private credential files and Git integration tests"
+      ]
+    },
+    {
+      "source": "src/adapter/outbound/github/automation/tests/windows_temp.rs",
+      "destination": "crates/native/src/private_temp/windows_tests.rs",
+      "owner": "akra-native",
+      "kind": "production-and-split-unit-tests",
+      "oldTestPrefix": "adapter::outbound::github::automation::tests::windows_temp::",
+      "newTestPrefix": "private_temp::windows_tests::",
+      "platforms": [
+        "windows"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve",
+      "testOwnership": {
+        "moved": [
+          {
+            "oldName": "adapter::outbound::github::automation::tests::windows_temp::existing_shared_temp_root_is_verified_without_acl_mutation",
+            "newName": "private_temp::windows_tests::existing_shared_temp_root_is_verified_without_acl_mutation",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "adapter::outbound::github::automation::tests::windows_temp::inherited_application_tree_is_compatible_and_legacy_temp_is_untouched",
+            "newName": "private_temp::windows_tests::inherited_application_tree_is_compatible_and_legacy_temp_is_untouched",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "adapter::outbound::github::automation::tests::windows_temp::concurrent_first_use_publishes_private_parents_and_children_atomically",
+            "newName": "private_temp::windows_tests::concurrent_first_use_publishes_private_parents_and_children_atomically",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "adapter::outbound::github::automation::tests::windows_temp::shared_parent_verification_rejects_replacement_after_the_handle_is_opened",
+            "newName": "private_temp::windows_tests::shared_parent_verification_rejects_replacement_after_the_handle_is_opened",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "adapter::outbound::github::automation::tests::windows_temp::existing_inherited_root_is_rejected_without_repair_or_legacy_fallback",
+            "newName": "private_temp::windows_tests::existing_inherited_root_is_rejected_without_repair_or_legacy_fallback",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "adapter::outbound::github::automation::tests::windows_temp::existing_extra_principal_acl_is_rejected_with_safe_header_diagnostics",
+            "newName": "private_temp::windows_tests::existing_extra_principal_acl_is_rejected_with_safe_header_diagnostics",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "adapter::outbound::github::automation::tests::windows_temp::existing_parent_junction_is_rejected_without_touching_the_target",
+            "newName": "private_temp::windows_tests::existing_parent_junction_is_rejected_without_touching_the_target",
+            "ignored": false,
+            "attributes": "#[test]"
+          }
+        ],
+        "retained": [
+          "adapter::outbound::github::automation::tests::windows_temp::concurrent_git_only_contexts_keep_the_shared_temp_boundary_private"
+        ]
+      }
+    },
+    {
+      "source": "src/trusted_executable.rs",
+      "destination": "crates/native/src/trusted_executable.rs",
+      "owner": "akra-native",
+      "kind": "production-and-split-unit-tests",
+      "oldTestPrefix": "trusted_executable::tests::",
+      "newTestPrefix": "trusted_executable::tests::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve",
+      "additionalDestinations": [
+        "crates/native/src/trusted_executable/tests.rs",
+        "crates/native/src/windows_ace.rs"
+      ],
+      "testMappings": [
+        {
+          "oldTestPrefix": "trusted_executable::tests::windows_ace_classification_distinguishes_file_and_directory_mutation_rights",
+          "newTestPrefix": "windows_ace::tests::windows_ace_classification_distinguishes_file_and_directory_mutation_rights"
+        }
+      ],
+      "retainedResponsibilities": [
+        "Codex launcher policy, trust environment setting, pinned command cache, credential command environment and product tests"
+      ],
+      "testOwnership": {
+        "moved": [
+          {
+            "oldName": "trusted_executable::tests::native_executable_validation_accepts_platform_binary_and_rejects_invalid_formats",
+            "newName": "trusted_executable::tests::native_executable_validation_accepts_platform_binary_and_rejects_invalid_formats",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "trusted_executable::tests::unix_executable_mode_requires_at_least_one_execute_bit",
+            "newName": "trusted_executable::tests::unix_executable_mode_requires_at_least_one_execute_bit",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "trusted_executable::tests::native_unix_mode_policy_limits_group_writes_to_privileged_macos_directories",
+            "newName": "trusted_executable::tests::native_unix_mode_policy_limits_group_writes_to_privileged_macos_directories",
+            "ignored": false,
+            "attributes": "#[cfg(unix)]\n    #[test]"
+          },
+          {
+            "oldName": "trusted_executable::tests::native_host_git_and_node_formats_are_accepted",
+            "newName": "trusted_executable::tests::native_host_git_and_node_formats_are_accepted",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "trusted_executable::tests::windows_process_argument_path_normalizes_only_drive_and_unc_extended_forms",
+            "newName": "trusted_executable::tests::windows_process_argument_path_normalizes_only_drive_and_unc_extended_forms",
+            "ignored": false,
+            "attributes": "#[cfg(windows)]\n    #[test]"
+          },
+          {
+            "oldName": "trusted_executable::tests::resolves_safe_user_local_and_canonical_symlink_installations",
+            "newName": "trusted_executable::tests::resolves_safe_user_local_and_canonical_symlink_installations",
+            "ignored": false,
+            "attributes": "#[cfg(unix)]\n    #[test]"
+          },
+          {
+            "oldName": "trusted_executable::tests::rejects_relative_repo_and_writable_path_candidates_without_falling_through",
+            "newName": "trusted_executable::tests::rejects_relative_repo_and_writable_path_candidates_without_falling_through",
+            "ignored": false,
+            "attributes": "#[cfg(unix)]\n    #[test]"
+          },
+          {
+            "oldName": "trusted_executable::tests::windows_ace_classification_distinguishes_file_and_directory_mutation_rights",
+            "newName": "windows_ace::tests::windows_ace_classification_distinguishes_file_and_directory_mutation_rights",
+            "ignored": false,
+            "attributes": "#[test]"
+          }
+        ],
+        "retained": [
+          "trusted_executable::tests::credential_config_opt_out_does_not_consult_user_environment",
+          "trusted_executable::tests::non_windows_credential_configuration_does_not_consult_appdata",
+          "trusted_executable::tests::windows_credential_configuration_passes_only_validated_appdata",
+          "trusted_executable::tests::windows_credential_configuration_never_passes_a_path_after_validation_failure",
+          "trusted_executable::tests::windows_credential_configuration_rejects_relative_and_repository_appdata",
+          "trusted_executable::tests::codex_executable_trust_policy_defaults_to_permissive_and_accepts_exact_strict_opt_in",
+          "trusted_executable::tests::permissive_codex_resolution_pins_repository_binary_and_reports_trust_warning",
+          "trusted_executable::tests::permissive_codex_resolution_rejects_native_binary_without_execute_bits",
+          "trusted_executable::tests::native_macos_homebrew_style_codex_launcher_is_trusted",
+          "trusted_executable::tests::native_windows_codex_shim_pins_node_and_package_script",
+          "trusted_executable::tests::codex_launcher_pins_its_trusted_node_interpreter_and_script",
+          "trusted_executable::tests::codex_launcher_skips_supported_path_wrappers_with_unsupported_shebangs",
+          "trusted_executable::tests::codex_launcher_rejects_repository_node_and_unbounded_shebangs",
+          "trusted_executable::tests::parses_only_the_standard_windows_npm_codex_cmd_shim"
+        ]
+      }
+    },
+    {
+      "source": "src/trusted_executable/fingerprint.rs",
+      "destination": "crates/native/src/trusted_executable/fingerprint.rs",
+      "owner": "akra-native",
+      "kind": "production-primitives",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/trusted_executable/fingerprint/tests.rs",
+      "destination": "crates/native/src/trusted_executable/fingerprint/tests.rs",
+      "owner": "akra-native",
+      "kind": "production-and-unit-tests",
+      "oldTestPrefix": "trusted_executable::fingerprint::tests::",
+      "newTestPrefix": "trusted_executable::fingerprint::tests::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve",
+      "testOwnership": {
+        "moved": [
+          {
+            "oldName": "trusted_executable::fingerprint::tests::pinned_native_format_and_digest_describe_the_same_bytes",
+            "newName": "trusted_executable::fingerprint::tests::pinned_native_format_and_digest_describe_the_same_bytes",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "trusted_executable::fingerprint::tests::a_modified_pinned_executable_cannot_keep_its_prepared_identity",
+            "newName": "trusted_executable::fingerprint::tests::a_modified_pinned_executable_cannot_keep_its_prepared_identity",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "trusted_executable::fingerprint::tests::a_script_is_rejected_before_it_can_be_fingerprinted_as_a_native_runner",
+            "newName": "trusted_executable::fingerprint::tests::a_script_is_rejected_before_it_can_be_fingerprinted_as_a_native_runner",
+            "ignored": false,
+            "attributes": "#[test]"
+          }
+        ],
+        "retained": []
+      }
+    },
+    {
+      "source": "src/subprocess.rs",
+      "destination": "crates/native/src/subprocess.rs",
+      "owner": "akra-native",
+      "kind": "production-and-split-unit-tests",
+      "oldTestPrefix": "subprocess::tests::",
+      "newTestPrefix": "subprocess::tests::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve",
+      "retainedResponsibilities": [
+        "current_process_config, timeout env parsing, thread-local test override, default-timeout wrappers and four configuration contracts"
+      ],
+      "testOwnership": {
+        "moved": [
+          {
+            "oldName": "subprocess::tests::command_output_kills_slow_process_after_timeout",
+            "newName": "subprocess::tests::command_output_kills_slow_process_after_timeout",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "subprocess::tests::bounded_input_writer_drains_child_output_before_the_child_reads_stdin",
+            "newName": "subprocess::tests::bounded_input_writer_drains_child_output_before_the_child_reads_stdin",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "subprocess::tests::bounded_input_rejects_oversized_payload_before_spawning",
+            "newName": "subprocess::tests::bounded_input_rejects_oversized_payload_before_spawning",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "subprocess::tests::blocked_input_writer_remains_bounded_by_the_process_timeout",
+            "newName": "subprocess::tests::blocked_input_writer_remains_bounded_by_the_process_timeout",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "subprocess::tests::timeout_duration_format_uses_seconds_only_for_whole_seconds",
+            "newName": "subprocess::tests::timeout_duration_format_uses_seconds_only_for_whole_seconds",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "subprocess::tests::wait_with_output_timeout_kills_slow_existing_child",
+            "newName": "subprocess::tests::wait_with_output_timeout_kills_slow_existing_child",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "subprocess::tests::containment_failure_preserves_the_primary_timeout_error",
+            "newName": "subprocess::tests::containment_failure_preserves_the_primary_timeout_error",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "subprocess::tests::group_signal_eperm_counts_as_gone_only_after_macos_reap",
+            "newName": "subprocess::tests::group_signal_eperm_counts_as_gone_only_after_macos_reap",
+            "ignored": false,
+            "attributes": "#[cfg(all(unix, not(target_os = \"linux\")))]\n    #[test]"
+          },
+          {
+            "oldName": "subprocess::tests::explicit_termination_disarms_process_group_and_child_pid",
+            "newName": "subprocess::tests::explicit_termination_disarms_process_group_and_child_pid",
+            "ignored": false,
+            "attributes": "#[cfg(unix)]\n    #[test]"
+          },
+          {
+            "oldName": "subprocess::tests::exited_parent_with_inherited_pipe_still_obeys_the_deadline",
+            "newName": "subprocess::tests::exited_parent_with_inherited_pipe_still_obeys_the_deadline",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "subprocess::tests::timeout_terminates_long_lived_descendants_in_the_child_process_group",
+            "newName": "subprocess::tests::timeout_terminates_long_lived_descendants_in_the_child_process_group",
+            "ignored": false,
+            "attributes": "#[cfg(unix)]\n    #[test]"
+          },
+          {
+            "oldName": "subprocess::tests::successful_parent_cleanup_terminates_sets_id_double_fork_daemon",
+            "newName": "subprocess::tests::successful_parent_cleanup_terminates_sets_id_double_fork_daemon",
+            "ignored": false,
+            "attributes": "#[cfg(target_os = \"linux\")]\n    #[test]"
+          },
+          {
+            "oldName": "subprocess::tests::linux_double_fork_fixture_helper",
+            "newName": "subprocess::tests::linux_double_fork_fixture_helper",
+            "ignored": false,
+            "attributes": "#[cfg(target_os = \"linux\")]\n    #[test]"
+          },
+          {
+            "oldName": "subprocess::tests::linux_stat_parser_uses_start_time_identity_with_tricky_command_names",
+            "newName": "subprocess::tests::linux_stat_parser_uses_start_time_identity_with_tricky_command_names",
+            "ignored": false,
+            "attributes": "#[cfg(target_os = \"linux\")]\n    #[test]"
+          },
+          {
+            "oldName": "subprocess::tests::late_member_at_old_final_scan_is_stopped_before_convergence",
+            "newName": "subprocess::tests::late_member_at_old_final_scan_is_stopped_before_convergence",
+            "ignored": false,
+            "attributes": "#[cfg(target_os = \"linux\")]\n    #[test]"
+          },
+          {
+            "oldName": "subprocess::tests::continuous_fork_churn_exhausts_the_freeze_budget_as_an_error",
+            "newName": "subprocess::tests::continuous_fork_churn_exhausts_the_freeze_budget_as_an_error",
+            "ignored": false,
+            "attributes": "#[cfg(target_os = \"linux\")]\n    #[test]"
+          },
+          {
+            "oldName": "subprocess::tests::linux_scan_process_budget_exhaustion_is_an_observable_error",
+            "newName": "subprocess::tests::linux_scan_process_budget_exhaustion_is_an_observable_error",
+            "ignored": false,
+            "attributes": "#[cfg(target_os = \"linux\")]\n    #[test]"
+          },
+          {
+            "oldName": "subprocess::tests::linux_scan_environment_budget_exhaustion_is_an_observable_error",
+            "newName": "subprocess::tests::linux_scan_environment_budget_exhaustion_is_an_observable_error",
+            "ignored": false,
+            "attributes": "#[cfg(target_os = \"linux\")]\n    #[test]"
+          },
+          {
+            "oldName": "subprocess::tests::linux_scan_absolute_deadline_is_an_observable_timeout",
+            "newName": "subprocess::tests::linux_scan_absolute_deadline_is_an_observable_timeout",
+            "ignored": false,
+            "attributes": "#[cfg(target_os = \"linux\")]\n    #[test]"
+          },
+          {
+            "oldName": "subprocess::tests::normal_short_lived_commands_use_bounded_containment_fast_path",
+            "newName": "subprocess::tests::normal_short_lived_commands_use_bounded_containment_fast_path",
+            "ignored": false,
+            "attributes": "#[cfg(target_os = \"linux\")]\n    #[test]"
+          },
+          {
+            "oldName": "subprocess::tests::kill_fallback_rejects_stale_start_time_before_signaling_pid",
+            "newName": "subprocess::tests::kill_fallback_rejects_stale_start_time_before_signaling_pid",
+            "ignored": false,
+            "attributes": "#[cfg(target_os = \"linux\")]\n    #[test]"
+          },
+          {
+            "oldName": "subprocess::tests::command_output_drains_more_than_a_pipe_buffer_before_child_exit",
+            "newName": "subprocess::tests::command_output_drains_more_than_a_pipe_buffer_before_child_exit",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "subprocess::tests::bounded_output_capture_fails_without_retaining_an_oversized_response",
+            "newName": "subprocess::tests::bounded_output_capture_fails_without_retaining_an_oversized_response",
+            "ignored": false,
+            "attributes": "#[test]"
+          }
+        ],
+        "retained": [
+          "subprocess::tests::timeout_env_parser_falls_back_for_missing_empty_zero_and_invalid_values",
+          "subprocess::tests::test_timeout_override_stays_on_its_own_thread",
+          "subprocess::tests::command_output_uses_configured_timeout_and_captures_successful_output",
+          "subprocess::tests::wait_with_output_uses_configured_timeout_for_existing_child"
+        ]
+      }
+    },
+    {
+      "source": "src/subprocess/controlled.rs",
+      "destination": "crates/native/src/subprocess/controlled.rs",
+      "owner": "akra-native",
+      "kind": "production-primitives",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve"
+    },
+    {
+      "source": "src/subprocess/controlled/tests.rs",
+      "destination": "crates/native/src/subprocess/controlled/tests.rs",
+      "owner": "akra-native",
+      "kind": "production-and-unit-tests",
+      "oldTestPrefix": "subprocess::controlled::tests::",
+      "newTestPrefix": "subprocess::controlled::tests::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "default-and-all",
+      "ignored": "preserve",
+      "testOwnership": {
+        "moved": [
+          {
+            "oldName": "subprocess::controlled::tests::controlled_child_fixture",
+            "newName": "subprocess::controlled::tests::controlled_child_fixture",
+            "ignored": true,
+            "attributes": "#[test]\n#[ignore = \"child process fixture, invoked by bounded capture tests\"]"
+          },
+          {
+            "oldName": "subprocess::controlled::tests::completed_capture_retains_exact_bytes_and_marks_both_streams_complete",
+            "newName": "subprocess::controlled::tests::completed_capture_retains_exact_bytes_and_marks_both_streams_complete",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "subprocess::controlled::tests::cancellation_terminates_and_reaps_without_waiting_for_the_command_timeout",
+            "newName": "subprocess::controlled::tests::cancellation_terminates_and_reaps_without_waiting_for_the_command_timeout",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "subprocess::controlled::tests::cancellation_after_natural_exit_reaps_without_losing_the_cancelled_fact",
+            "newName": "subprocess::controlled::tests::cancellation_after_natural_exit_reaps_without_losing_the_cancelled_fact",
+            "ignored": false,
+            "attributes": "#[cfg(target_os = \"macos\")]\n#[test]"
+          },
+          {
+            "oldName": "subprocess::controlled::tests::deadline_stops_a_running_process_and_does_not_claim_complete_streams",
+            "newName": "subprocess::controlled::tests::deadline_stops_a_running_process_and_does_not_claim_complete_streams",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "subprocess::controlled::tests::overflow_retains_only_an_actual_bounded_prefix_and_never_synthetic_padding",
+            "newName": "subprocess::controlled::tests::overflow_retains_only_an_actual_bounded_prefix_and_never_synthetic_padding",
+            "ignored": false,
+            "attributes": "#[test]"
+          },
+          {
+            "oldName": "subprocess::controlled::tests::cancellation_after_exit_signal_keeps_the_cancelled_fact",
+            "newName": "subprocess::controlled::tests::cancellation_after_exit_signal_keeps_the_cancelled_fact",
+            "ignored": false,
+            "attributes": "#[cfg(windows)]\n#[test]"
+          }
+        ],
+        "retained": []
+      }
     }
   ],
   "nativeCandidates": [
     {
       "source": "src/process_liveness.rs",
       "owner": "akra-native",
-      "decision": "extract"
+      "decision": "extracted-with-contract-tests"
     },
     {
       "source": "src/trusted_executable.rs",
       "owner": "akra-native",
-      "decision": "extract-with-private-filesystem"
+      "decision": "native-format-path-fingerprint-extracted-product-policy-retained"
     },
     {
       "source": "src/private_fs.rs",
       "owner": "akra-native",
-      "decision": "extract-windows"
+      "decision": "extracted-with-contract-tests"
     },
     {
       "source": "src/private_directory.rs",
       "owner": "akra-native",
-      "decision": "extract"
+      "decision": "extracted-with-contract-tests"
     },
     {
       "source": "src/private_sqlite.rs",
       "owner": "akra-native",
-      "decision": "extract-directory-identity-only"
+      "decision": "directory-chain-and-identity-extracted-database-retained"
     },
     {
       "source": "src/subprocess.rs",
-      "owner": "akra-ade",
-      "decision": "retain-configuration-boundary-until-injected"
+      "owner": "akra-native",
+      "decision": "explicit-timeout-containment-extracted-product-configuration-facade-retained"
     },
     {
       "source": "src/private_ipc.rs",
@@ -439,6 +1053,156 @@
       "classification": "root-integration",
       "reason": "live lease and verification integration",
       "coverage": "retain-full"
+    },
+    {
+      "id": "native-liveness",
+      "owner": "akra-native",
+      "target": {
+        "kind": "lib",
+        "name": "akra_native"
+      },
+      "filter": "process_liveness::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "all",
+      "isolation": "process-per-filter",
+      "classification": "native-primitive",
+      "reason": "Host ownership, identity, containment and trust contracts independent of product configuration",
+      "coverage": "retain-full"
+    },
+    {
+      "id": "native-private-directory",
+      "owner": "akra-native",
+      "target": {
+        "kind": "lib",
+        "name": "akra_native"
+      },
+      "filter": "private_directory::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "all",
+      "isolation": "process-per-filter",
+      "classification": "native-primitive",
+      "reason": "Host ownership, identity, containment and trust contracts independent of product configuration",
+      "coverage": "retain-full"
+    },
+    {
+      "id": "native-windows-identity",
+      "owner": "akra-native",
+      "target": {
+        "kind": "lib",
+        "name": "akra_native"
+      },
+      "filter": "private_fs::",
+      "platforms": [
+        "windows"
+      ],
+      "features": "all",
+      "isolation": "process-per-filter",
+      "classification": "native-primitive",
+      "reason": "Host ownership, identity, containment and trust contracts independent of product configuration",
+      "coverage": "retain-full"
+    },
+    {
+      "id": "native-private-temp",
+      "owner": "akra-native",
+      "target": {
+        "kind": "lib",
+        "name": "akra_native"
+      },
+      "filter": "private_temp::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "all",
+      "isolation": "process-per-filter",
+      "classification": "native-primitive",
+      "reason": "Host ownership, identity, containment and trust contracts independent of product configuration",
+      "coverage": "retain-full"
+    },
+    {
+      "id": "native-stable-file",
+      "owner": "akra-native",
+      "target": {
+        "kind": "lib",
+        "name": "akra_native"
+      },
+      "filter": "stable_file::tests::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "all",
+      "isolation": "process-per-filter",
+      "classification": "native-primitive",
+      "reason": "Host ownership, identity, containment and trust contracts independent of product configuration",
+      "coverage": "retain-full"
+    },
+    {
+      "id": "native-process-containment",
+      "owner": "akra-native",
+      "target": {
+        "kind": "lib",
+        "name": "akra_native"
+      },
+      "filter": "subprocess::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "all",
+      "isolation": "process-per-filter",
+      "classification": "native-primitive",
+      "reason": "Host ownership, identity, containment and trust contracts independent of product configuration",
+      "coverage": "retain-full"
+    },
+    {
+      "id": "native-trusted-executable",
+      "owner": "akra-native",
+      "target": {
+        "kind": "lib",
+        "name": "akra_native"
+      },
+      "filter": "trusted_executable::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "all",
+      "isolation": "process-per-filter",
+      "classification": "native-primitive",
+      "reason": "Host ownership, identity, containment and trust contracts independent of product configuration",
+      "coverage": "retain-full"
+    },
+    {
+      "id": "native-ace-classifier",
+      "owner": "akra-native",
+      "target": {
+        "kind": "lib",
+        "name": "akra_native"
+      },
+      "filter": "windows_ace::tests::",
+      "platforms": [
+        "linux",
+        "windows",
+        "macos"
+      ],
+      "features": "all",
+      "isolation": "process-per-filter",
+      "classification": "native-primitive",
+      "reason": "Host ownership, identity, containment and trust contracts independent of product configuration",
+      "coverage": "retain-full"
     }
   ],
   "securityContracts": [
@@ -464,6 +1228,22 @@
       "name": "verification-owner-run-token",
       "owner": "akra-verification",
       "boundary": "retain private construction, redacted Debug and no external deserialization"
+    },
+    {
+      "name": "PinnedNativeExecutable",
+      "owner": "akra-native",
+      "source": "crates/native/src/trusted_executable/fingerprint.rs",
+      "privateFields": [
+        "path",
+        "context",
+        "file",
+        "identity",
+        "sha256"
+      ],
+      "forbiddenDerives": [
+        "Deserialize"
+      ],
+      "construction": "inspect; compile-fail external field construction contract"
     }
   ]
 }

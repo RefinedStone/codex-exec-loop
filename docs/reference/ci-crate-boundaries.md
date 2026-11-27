@@ -14,6 +14,11 @@
 | akra-verification-native | 위 Port를 구현하는 Git 검증 adapter와 native 계약 | 다른 Git 기능과 업무 통합·최종 전달 판단 |
 | akra-ade | 제품 bin, Kernel/Gateway/TUI, 아직 미이관 기능과 통합시험 | 배포 이름·root public API를 유지 |
 
+`akra-native`의 실제 파일 이동, root 잔류 정책, Windows 전후 시험 목록과 기존 호스트 ACL 실패는
+[Native crate 분리 검증](../validation/ci-native-crate-extraction-20261127.md)에 기록한다.
+`subprocess`는 명시적 timeout 원시부가 native이고 제품 설정은 root facade가 소유한다.
+`trusted_executable`의 Codex 정책·캐시도 root에 남는다.
+
 순수 template parser 및 policy 해시는 실제 사용하는 좁은 API만 추출한다.
 파일 SourcePort를 새 crate에 가져오기 위해 제품 서비스 전체를 옮기지 않는다.
 큰 공용 core/ports crate로 순환 참조를 숨기지 않는다.
