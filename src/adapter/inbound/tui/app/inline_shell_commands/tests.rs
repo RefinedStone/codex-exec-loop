@@ -786,6 +786,7 @@ fn capability_projection_uses_parallel_application_state() {
             parallel_mode_enabled: false,
             parallel_transition_in_flight: false,
             active_parallel_agent_count: 0,
+            gateway_kernel_client: false,
         },
     );
     assert_eq!(
@@ -805,6 +806,7 @@ fn capability_projection_uses_parallel_application_state() {
             parallel_mode_enabled: true,
             parallel_transition_in_flight: false,
             active_parallel_agent_count: 0,
+            gateway_kernel_client: false,
         },
     );
     assert_eq!(
@@ -820,6 +822,7 @@ fn capability_projection_uses_parallel_application_state() {
             parallel_mode_enabled: true,
             parallel_transition_in_flight: false,
             active_parallel_agent_count: 1,
+            gateway_kernel_client: false,
         },
     );
     assert_eq!(
@@ -836,6 +839,7 @@ fn capability_projection_marks_parallel_transition_pending() {
             parallel_mode_enabled: true,
             parallel_transition_in_flight: true,
             active_parallel_agent_count: 1,
+            gateway_kernel_client: false,
         },
     );
     let pending = InlineShellCommandAvailability::Pending(
@@ -874,6 +878,7 @@ fn session_capability_follows_startup_readiness_outside_parallel_mode() {
                 parallel_mode_enabled: false,
                 parallel_transition_in_flight: false,
                 active_parallel_agent_count: 0,
+                gateway_kernel_client: false,
             },
         );
         assert_eq!(
@@ -885,4 +890,56 @@ fn session_capability_follows_startup_readiness_outside_parallel_mode() {
             InlineShellCommandAvailability::Ready
         );
     }
+}
+
+#[test]
+fn gateway_kernel_client_locks_harness_screens_with_the_kernel_protocol_reason() {
+    let capabilities = InlineShellCommandCapabilitySet::from_application_context(
+        InlineShellCommandCapabilityContext {
+            startup_readiness: InlineShellCommandStartupReadiness::Ready,
+            parallel_mode_enabled: false,
+            parallel_transition_in_flight: false,
+            active_parallel_agent_count: 0,
+            gateway_kernel_client: true,
+        },
+    );
+    let missing = InlineShellCommandAvailability::Locked(
+        InlineShellCommandAvailabilityReason::KernelProtocolMissing,
+    );
+    for command in [
+        InlineShellCommand::Work,
+        InlineShellCommand::Parallel,
+        InlineShellCommand::Peek,
+        InlineShellCommand::Reviews,
+        InlineShellCommand::Queue,
+        InlineShellCommand::Directions,
+        InlineShellCommand::Doctor,
+        InlineShellCommand::PlanningInit,
+        InlineShellCommand::Reset,
+    ] {
+        assert_eq!(capabilities.availability(command), missing, "{command:?}");
+    }
+    assert_eq!(
+        capabilities.availability(InlineShellCommand::Turns),
+        InlineShellCommandAvailability::Locked(
+            InlineShellCommandAvailabilityReason::KernelClientReadsOnly
+        )
+    );
+    for command in [
+        InlineShellCommand::Sessions,
+        InlineShellCommand::Diagnostics,
+        InlineShellCommand::Help,
+    ] {
+        assert_eq!(
+            capabilities.availability(command),
+            InlineShellCommandAvailability::Ready,
+            "{command:?}"
+        );
+    }
+    assert_eq!(
+        TuiLanguage::Korean.inline_command_availability_reason(
+            InlineShellCommandAvailabilityReason::KernelProtocolMissing
+        ),
+        "커널 프로토콜에 아직 없습니다. Akra Desktop 이나 admin 웹을 쓰세요"
+    );
 }

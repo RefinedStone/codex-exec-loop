@@ -894,6 +894,43 @@ pub(crate) fn acquire_native_tui_kernel_lock() -> Result<Option<RepositoryKernel
     acquire_native_tui_kernel_lock_for_workspace(&native_tui_workspace_dir())
 }
 
+/// 잠금을 다른 프로세스가 쥐었을 때, 그 커널이 Gateway 의 것이면 TUI 는 그 커널에 붙는다 (plan 18 K6-2).
+/// 잠금을 잡지 않는다. 다른 TUI 가 쥐었거나 Gateway 가 이 저장소의 커널을 돌리지 않으면 `None` 이다.
+pub(crate) fn attach_native_tui_to_gateway_kernel(
+    lock_error: &anyhow::Error,
+) -> Option<Box<dyn crate::core::native_client_port::NativeClientPort>> {
+    use super::gateway_kernel_client_runtime::{
+        GatewayKernelClientRuntime, TUI_KERNEL_CLIENT_NAME,
+    };
+    use crate::adapter::outbound::filesystem::kernel_lock::{
+        RepositoryKernelLockHeld, RepositoryKernelOwner,
+    };
+    use crate::application::port::outbound::kernel_gateway_port::{
+        KernelGatewayPort, KernelGatewayReply,
+    };
+
+    let held = lock_error.downcast_ref::<RepositoryKernelLockHeld>()?;
+    if held.owner == Some(RepositoryKernelOwner::Tui) {
+        return None;
+    }
+    let workspace = native_tui_workspace_dir();
+    let probe = crate::adapter::outbound::gateway_kernel_client::GatewayKernelClientAdapter::new(
+        workspace.clone(),
+        TUI_KERNEL_CLIENT_NAME.to_string(),
+    )
+    .request(
+        "akra/kernel/query",
+        serde_json::json!({"query": {"type": "sessions"}}),
+        false,
+    );
+    match probe {
+        Ok(KernelGatewayReply::Answer(_)) => {
+            Some(Box::new(GatewayKernelClientRuntime::attach(workspace)))
+        }
+        _ => None,
+    }
+}
+
 /// 잠금 파일 오류(경합이 아닌 오류)는 이전 개입의 planning fence를 복구한 경우에만 우회한다.
 /// 복구 실패는 runtime 시작을 막고, 복구 성공 시 경고를 남긴 뒤 잠금 없이 시작한다.
 pub(crate) fn acquire_native_tui_kernel_lock_for_workspace(
@@ -2581,5 +2618,32 @@ mod tests {
 
         assert!(lock.is_none());
         let _ = std::fs::remove_dir(&lock_path);
+    }
+
+    /// plan 18 K6-2: TUI 는 Gateway 가 이 저장소의 커널을 돌릴 때만 그 커널에 붙는다. 나머지는 지금처럼 오류이다.
+    #[test]
+    fn the_tui_attaches_only_to_a_kernel_that_a_reachable_gateway_runs() {
+        use crate::adapter::outbound::filesystem::kernel_lock::{
+            RepositoryKernelLockHeld, RepositoryKernelOwner,
+        };
+        let held = |owner| {
+            anyhow::Error::new(RepositoryKernelLockHeld {
+                repository_root: "/repo".to_string(),
+                lock_path: std::path::PathBuf::from("/repo/kernel.lock"),
+                holder: None,
+                owner,
+            })
+        };
+        assert!(attach_native_tui_to_gateway_kernel(&anyhow::anyhow!("disk failed")).is_none());
+        // Another TUI owns the kernel: the TUI does not ask a Gateway.
+        assert!(
+            attach_native_tui_to_gateway_kernel(&held(Some(RepositoryKernelOwner::Tui))).is_none()
+        );
+        // The unit-test build has no Gateway, so a Gateway-owned lock keeps the error.
+        assert!(
+            attach_native_tui_to_gateway_kernel(&held(Some(RepositoryKernelOwner::Gateway)))
+                .is_none()
+        );
+        assert!(attach_native_tui_to_gateway_kernel(&held(None)).is_none());
     }
 }

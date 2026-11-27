@@ -1625,14 +1625,13 @@ impl NativeTuiParallelModeBinding {
 }
 
 /*
- * Test-only trigger that refuses probes: clipboard behavior is covered by the
- * outbound adapter and composition worker tests, so app fixtures stay inert.
+ * Trigger that refuses probes: clipboard behavior is covered by the outbound
+ * adapter and composition worker tests, so app fixtures stay inert. The Gateway
+ * kernel client has no conversation yet, so it has nothing to attach an image to.
  */
-#[cfg(test)]
 #[derive(Debug, Clone)]
 pub(super) struct InertClipboardImageProbeTrigger;
 
-#[cfg(test)]
 impl ClipboardImageProbeTrigger for InertClipboardImageProbeTrigger {
     fn request_probe(
         &self,
@@ -1691,6 +1690,17 @@ impl NativeTuiApp {
             turn_control_truth,
             github_review_polling,
             clipboard_image_probe_trigger,
+        )
+    }
+
+    /// Gateway 의 커널에 붙은 TUI 이다 (plan 18 K6-2). 자기 커널과 app-server 를 띄우지 않는다.
+    pub(super) fn new_gateway_kernel_client(client_runtime: Box<dyn NativeClientPort>) -> Self {
+        Self::new_with_bound_application(
+            client_runtime,
+            NativeTuiAppRuntimeChannels::new(),
+            crate::domain::conversation::ConversationRuntimeControlTruth::codex_app_server(),
+            GithubReviewPollingBootstrap::disabled(),
+            Arc::new(InertClipboardImageProbeTrigger),
         )
     }
 

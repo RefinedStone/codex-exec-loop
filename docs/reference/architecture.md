@@ -800,6 +800,15 @@ TUI start (plan 18 K6-1): `AppServerTransport::GatewayRelay` spawns the `akra` e
 Gateway client endpoint (`src/adapter/outbound/app_server/gateway_relay.rs`). The connection speaks the
 same WebSocket transport over that child, so the Gateway session relays the TUI like a Desktop client.
 The kernel protocol carries no conversation stream.
+When the repository lock is held by a kernel that the Gateway runs, the TUI does not stop (plan 18
+K6-2a): `production::attach_native_tui_to_gateway_kernel` checks that the holder is not a TUI and that the
+Gateway answers a `sessions` query for the workspace, then the TUI runs on
+`composition::gateway_kernel_client_runtime::GatewayKernelClientRuntime`, a `NativeClientPort` that
+holds no kernel. Its thread stays attached (`gateway_kernel_client::watch_kernel_values`), reads
+`sessions`, `auto_follow`, and `thread_activity`, follows their events, reads them again after
+`resync`, and maps them to the core projections the TUI already draws. Core inputs other than the
+startup check and the session list read do nothing in this slice; the TUI locks those screens and actions
+(`InlineShellCommandAvailabilityReason::KernelProtocolMissing`, `KernelClientReadsOnly`).
 
 Dropping `NativeClientRuntime` closes every parallel automation epoch first. The kernel drops the
 runtime on its host thread, so the epochs close before the lock is released. Worker threads of the

@@ -11752,8 +11752,16 @@ fn tui_startup_takes_the_repository_kernel_lock_before_it_builds_the_kernel() {
     let production_source =
         compact_production_source(&top_level_function_source(&shell_entrypoint, "run"));
     let lock = production_source
-        .find("letkernel_lock=production::acquire_native_tui_kernel_lock()?;")
-        .expect("TUI startup must take the repository kernel lock and stop when it is held");
+        .find("letkernel_lock=matchproduction::acquire_native_tui_kernel_lock(){Ok(lock)=>lock,")
+        .expect("TUI startup must take the repository kernel lock first");
+    // plan 18 K6-2a: a held lock either attaches to the Gateway's kernel without building one, or
+    // stops with the lock error. No other branch reaches the kernel build.
+    assert!(
+        production_source.contains(
+            "Err(error)=>matchproduction::attach_native_tui_to_gateway_kernel(&error){Some(client)=>{"
+        ) && production_source.contains("None=>returnErr(error),"),
+        "a held lock must attach to the Gateway kernel or stop: {production_source}"
+    );
     let build = production_source
         .find("production::build_native_tui_application(kernel_lock.as_ref())")
         .expect("TUI startup must pass its exact optional kernel owner to the native application");
