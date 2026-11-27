@@ -5,7 +5,13 @@ const MAX_EXECUTABLE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// A trusted native executable whose format, digest, and identity were observed
 /// through the same opened handle. It is revalidated before and after execution.
-pub(crate) struct PinnedNativeExecutable {
+/// Callers cannot construct trusted evidence from unverified fields.
+///
+/// ```compile_fail
+/// use akra_native::trusted_executable::PinnedNativeExecutable;
+/// let _ = PinnedNativeExecutable { path: Default::default(), context: Default::default(), file: todo!(), identity: todo!(), sha256: String::new() };
+/// ```
+pub struct PinnedNativeExecutable {
     path: PathBuf,
     context: PathBuf,
     file: fs::File,
@@ -14,7 +20,7 @@ pub(crate) struct PinnedNativeExecutable {
 }
 
 impl PinnedNativeExecutable {
-    pub(crate) fn inspect(path: &Path, context: &Path) -> Result<Self> {
+    pub fn inspect(path: &Path, context: &Path) -> Result<Self> {
         let path = validate_absolute(path, context)?;
         let (mut file, identity) = open_validated_file(&path)?;
         let length = file.metadata()?.len();
@@ -35,21 +41,21 @@ impl PinnedNativeExecutable {
         })
     }
 
-    pub(crate) fn path(&self) -> &Path {
+    pub fn path(&self) -> &Path {
         &self.path
     }
-    pub(crate) fn sha256(&self) -> &str {
+    pub fn sha256(&self) -> &str {
         &self.sha256
     }
 
-    pub(crate) fn verify_identity(&self) -> Result<()> {
+    pub fn verify_identity(&self) -> Result<()> {
         if validate_absolute(&self.path, &self.context)? != self.path {
             bail!("pinned native executable path changed");
         }
         finish_validated_file_read(&self.path, &self.file, self.identity)
     }
 
-    pub(crate) fn verify(&self) -> Result<()> {
+    pub fn verify(&self) -> Result<()> {
         self.verify_identity()?;
         let mut file = self.file.try_clone()?;
         if hash_file(&mut file, self.file.metadata()?.len())? != self.sha256 {

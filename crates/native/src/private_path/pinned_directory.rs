@@ -1,4 +1,4 @@
-//! Reuse the SQLite boundary's directory traversal without opening a database.
+//! Pin the shared private-directory boundary without any database dependency.
 //! Callers retain every ancestor handle while operating on host-owned private files.
 
 use super::{DirectoryAnchor, platform, validate_runtime_path};
@@ -9,18 +9,18 @@ use anyhow::{Result, bail};
 use std::fs::File;
 use std::path::{Component, Path, PathBuf};
 
-pub(crate) struct PinnedPrivateDirectory {
+pub struct PinnedPrivateDirectory {
     directories: Vec<DirectoryAnchor>,
 }
 
 impl PinnedPrivateDirectory {
-    pub(crate) fn open(path: &Path, create: bool) -> Result<Self> {
+    pub fn open(path: &Path, create: bool) -> Result<Self> {
         Self::open_with_privacy(path, create, true)
     }
 
     /// Pin an existing Git metadata/temporary parent chain without requiring its
     /// final directory to have private mode. New children still require privacy.
-    pub(crate) fn pin_ancestors(path: &Path) -> Result<Self> {
+    pub fn pin_ancestors(path: &Path) -> Result<Self> {
         Self::open_with_privacy(path, false, false)
     }
 
@@ -47,7 +47,7 @@ impl PinnedPrivateDirectory {
         Ok(directory)
     }
 
-    pub(crate) fn child(&self, name: &str, create: bool) -> Result<Self> {
+    pub fn child(&self, name: &str, create: bool) -> Result<Self> {
         validate_name(name)?;
         self.verify()?;
         let mut child = Self::open(&self.path().join(name), create)?;
@@ -67,7 +67,7 @@ impl PinnedPrivateDirectory {
         Ok(child)
     }
 
-    pub(crate) fn path(&self) -> &Path {
+    pub fn path(&self) -> &Path {
         &self
             .directories
             .last()
@@ -76,7 +76,7 @@ impl PinnedPrivateDirectory {
     }
 
     #[cfg(any(unix, windows))]
-    pub(crate) fn handle(&self) -> &File {
+    pub fn handle(&self) -> &File {
         &self
             .directories
             .last()
@@ -84,19 +84,19 @@ impl PinnedPrivateDirectory {
             .file
     }
 
-    pub(crate) fn verify(&self) -> Result<()> {
+    pub fn verify(&self) -> Result<()> {
         for directory in &self.directories {
             directory.verify()?;
         }
         Ok(())
     }
 
-    pub(crate) fn file_path(&self, name: &str) -> Result<PathBuf> {
+    pub fn file_path(&self, name: &str) -> Result<PathBuf> {
         validate_name(name)?;
         Ok(self.path().join(name))
     }
 
-    pub(crate) fn sync(&self) -> Result<()> {
+    pub fn sync(&self) -> Result<()> {
         self.verify()?;
         // Windows directory handles do not support FlushFileBuffers. File contents are
         // flushed before publishing; Unix additionally persists the directory entry.
