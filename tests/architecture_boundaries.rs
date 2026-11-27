@@ -3649,6 +3649,8 @@ fn core_session_feature_reducer_owns_only_the_session_lifecycle_slice() {
             "next_rename_generation".to_string(),
             "active_rename".to_string(),
             "deferred_catalog_load".to_string(),
+            // #2804: thread prompts that wait for the catalog read before admission.
+            "thread_lookups".to_string(),
         ]),
         "SessionFeatureReducer must remain a cohesive session-only lifecycle slice"
     );

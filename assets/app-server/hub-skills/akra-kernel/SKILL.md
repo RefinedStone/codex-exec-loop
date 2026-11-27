@@ -18,8 +18,8 @@ When a command ends with an error, the output carries `idempotency_key` and, for
 Send the same command again with that key: the kernel does not run it twice. Find the code in `errors` of `describe`.
 Destructive commands require `--confirm true`.
 A missing Gateway permits store commands only. Runtime commands require a running Gateway.
-A command from this CLI starts the kernel only for that command. The session list is not kept between invocations:
-`load_sessions` helps only while another client (Akra Desktop) keeps the kernel up.
+A command from this CLI starts the kernel only for that command. The session list is not kept between invocations.
+`submit_prompt` reads the session list itself when the kernel does not know the thread.
 Follow structured `next` actions after rejection. Admission does not mean completion.
 Use `akra kernel operation <op_id> --wait --json` to observe completion.
 Use `akra kernel history --after <sequence> --wait --json` to wait for records.

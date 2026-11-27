@@ -157,7 +157,7 @@
       },
       {
         "name": "failed",
-        "summary": "The preparation or the turn of the command failed."
+        "summary": "The preparation or the turn of the command failed, or the kernel did not find the thread. `reason` of the `command_completed` record names the cause."
       },
       {
         "name": "lost",
@@ -5531,14 +5531,10 @@
     },
     {
       "name": "unknown_thread",
-      "summary": "The kernel does not know the thread. Send `load_sessions` first.",
+      "summary": "The thread is not in the session list. The kernel read the list from the app-server before it decided, so the prompt ends its operation as `failed`. Check the thread id.",
       "next": [
         {
-          "step": "command",
-          "name": "load_sessions"
-        },
-        {
-          "step": "resend"
+          "step": "ask_user"
         }
       ]
     },

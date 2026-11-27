@@ -89,9 +89,8 @@ pub fn reason_next(reason: ReasonCode) -> Vec<NextStep> {
         ],
         // 이 거절도 `prompt_submission` 이벤트를 낸다. 그 이벤트를 기다리면 자기 거절에서 바로 풀린다.
         ReasonCode::PreparationActive => vec![Step::short_wait(), Step::Resend],
-        ReasonCode::UnknownThread => {
-            vec![Step::command(KernelCommandKind::LoadSessions), Step::Resend]
-        }
+        // 커널이 세션 목록을 읽은 뒤에 정했다. 같은 thread 를 다시 보내면 같은 결과이다 (#2804).
+        ReasonCode::UnknownThread => vec![Step::AskUser],
         // 다른 저장소의 커널로 보낼지는 사람이 정한다. 같은 커널에 다시 보내면 같은 거절이다.
         ReasonCode::ForeignWorkspace => vec![Step::AskUser],
         // 병렬 모드를 끄는 명령은 아직 프로토콜에 없다 (K4-9b). 끌지는 사람이 정한다.

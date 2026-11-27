@@ -678,12 +678,7 @@ fn only_coarse_core_events_are_exported() {
             thread_id: "thread-2".to_string(),
             status: PromptSubmissionStatus::Rejected,
             reason: Some(ReasonCode::UnknownThread),
-            next: vec![
-                NextStep::Command {
-                    name: "load_sessions".to_string()
-                },
-                NextStep::Resend,
-            ],
+            next: vec![NextStep::AskUser],
             task_id: None,
             message: Some(ReasonCode::UnknownThread.summary().to_string()),
         }))

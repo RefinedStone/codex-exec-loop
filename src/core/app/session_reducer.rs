@@ -1,7 +1,7 @@
 use super::{
     ConversationLoadCorrelation, SessionCatalogLoadCorrelation, SessionCatalogLoadIntent,
     SessionCatalogLoadMode, SessionCatalogSnapshot, SessionRenameAdmission,
-    SessionRenameCorrelation,
+    SessionRenameCorrelation, ThreadPromptSubmission,
 };
 use crate::domain::recent_sessions::SessionRenameRequest;
 
@@ -21,6 +21,8 @@ pub(super) struct SessionFeatureReducer {
     next_rename_generation: u64,
     active_rename: Option<SessionRenameCorrelation>,
     deferred_catalog_load: Option<SessionCatalogLoadIntent>,
+    // 모르는 thread 에 온 프롬프트이다. 세션 목록을 읽은 뒤 다시 받는다 (#2804).
+    thread_lookups: Vec<ThreadPromptSubmission>,
 }
 
 impl SessionFeatureReducer {
@@ -31,6 +33,7 @@ impl SessionFeatureReducer {
             next_rename_generation: 1,
             active_rename: None,
             deferred_catalog_load: None,
+            thread_lookups: Vec::new(),
         }
     }
 
@@ -127,6 +130,18 @@ impl SessionFeatureReducer {
 
     pub(super) fn take_deferred_catalog_load(&mut self) -> Option<SessionCatalogLoadIntent> {
         self.deferred_catalog_load.take()
+    }
+
+    pub(super) fn await_thread_lookup(&mut self, submission: ThreadPromptSubmission) {
+        self.thread_lookups.push(submission);
+    }
+
+    pub(super) fn take_thread_lookups(&mut self) -> Vec<ThreadPromptSubmission> {
+        std::mem::take(&mut self.thread_lookups)
+    }
+
+    pub(super) fn has_thread_lookups(&self) -> bool {
+        !self.thread_lookups.is_empty()
     }
 
     #[cfg(test)]

@@ -148,6 +148,7 @@ impl CoreController {
         self.conversation_turn.has_busy_session()
             || self.planning.has_work_in_flight()
             || self.session_feature.has_active_rename()
+            || self.session_feature.has_thread_lookups()
     }
 
     pub(in crate::core) fn handle_input(&mut self, input: CoreInput) -> CoreDispatchOutcome {
@@ -494,7 +495,7 @@ impl CoreController {
                 }
             }
             CoreInput::Command(AppCommand::SubmitThreadPrompt(submission)) => {
-                self.begin_thread_prompt(*submission)
+                self.begin_thread_prompt(*submission, false)
             }
             CoreInput::Command(AppCommand::SetParallelModeEnabled(enabled)) => {
                 self.planning.set_host_parallel_mode(enabled);
@@ -759,7 +760,14 @@ impl CoreController {
                     return self.unchanged_outcome();
                 }
                 self.state.apply_session_catalog_result(result);
-                self.session_catalog_changed_outcome(Vec::new())
+                let mut outcome = self.session_catalog_changed_outcome(Vec::new());
+                for submission in self.session_feature.take_thread_lookups() {
+                    let resolved = self.begin_thread_prompt(submission, true);
+                    outcome.events.extend(resolved.events);
+                    outcome.effects.extend(resolved.effects);
+                    outcome.snapshot = resolved.snapshot;
+                }
+                outcome
             }
             CoreInput::EffectCompleted(CoreEffectCompletion::SessionRenamed {
                 correlation,
@@ -1731,11 +1739,28 @@ impl CoreController {
     /*
      * thread 를 지정한 프롬프트를 받는다 (plan 18 K3-3b). 그 thread 를 알고 쉬고 있으면 준비를 시작한다. 준비가
      * 끝나면 `submit_prepared_thread_prompt` 가 이어서 제출한다. TUI 가 하던 준비 -> 제출 두 단계를 core 가 잇는다.
+     *
+     * 모르는 thread 는 바로 거절하지 않는다 (#2804). 잠깐 붙는 접속(CLI)이 떠나면 커널이 내려가고 세션 목록을 잃는다.
+     * 목록을 읽은 뒤에 생긴 thread 도 있다. 그래서 목록을 app-server 에서 다시 읽은 뒤(`looked_up`) 다시 받는다. 그때의
+     * 거절은 명령의 답이 아니라 연산의 끝(`command_completed` 의 `failed`)으로 적는다.
      */
     fn begin_thread_prompt(
         &mut self,
         submission: super::ThreadPromptSubmission,
+        looked_up: bool,
     ) -> CoreDispatchOutcome {
+        if !looked_up
+            && self.planning.host_parallel_mode() == Some(false)
+            && !self.thread_is_known(&submission.thread_id)
+        {
+            let intent = SessionCatalogLoadIntent::refresh(
+                super::SESSION_CATALOG_PAGE_SIZE,
+                submission.workspace_directory.clone(),
+            );
+            self.session_feature.await_thread_lookup(submission);
+            return self.admit_session_catalog_load(intent);
+        }
+        let op_id = submission.op_id;
         let (admission, effects) = match self.planning.host_parallel_mode() {
             Some(false) => self.admit_thread_prompt(
                 submission.workspace_directory,
@@ -1759,6 +1784,16 @@ impl CoreController {
                     thread_id: thread_id.clone(),
                     reason,
                 });
+            if looked_up
+                && let Some(record) = command_completed(
+                    op_id,
+                    &thread_id,
+                    kernel_event::OperationEnd::Failed,
+                    reason,
+                )
+            {
+                self.conversation_turn.record_kernel_event(record);
+            }
         }
         CoreDispatchOutcome {
             events: vec![AppEvent::ThreadPromptAdmissionResolved {
@@ -10706,15 +10741,8 @@ mod tests {
     }
 
     #[test]
-    fn a_thread_prompt_is_refused_for_an_unknown_or_busy_thread() {
+    fn a_thread_prompt_is_refused_for_a_busy_thread() {
         let mut controller = hosted_controller(false);
-        let unknown = controller.handle_input(thread_prompt("thread-9", "hello"));
-        assert_eq!(
-            thread_prompt_admission(&unknown),
-            super::super::ThreadPromptAdmission::RejectedUnknownThread
-        );
-        assert!(unknown.effects.is_empty());
-
         load_test_session_catalog(&mut controller);
         start_test_turn(&mut controller, "thread-1", "turn-1");
         for thread_id in ["thread-1", "thread-alpha"] {
@@ -10726,6 +10754,97 @@ mod tests {
             );
             assert!(busy.effects.is_empty(), "no planning task is made");
         }
+    }
+
+    #[test]
+    fn a_thread_prompt_for_an_unknown_thread_waits_for_the_session_list() {
+        // #2804: a kernel that a short connection (CLI) started has no session list. The core reads the list from
+        // the app-server before it refuses the thread.
+        use kernel_event::ReasonCode;
+        let mut controller = hosted_controller(false);
+        let submit = |controller: &mut CoreController, thread_id: &str, op_id| {
+            controller.handle_input(CoreInput::Command(AppCommand::SubmitThreadPrompt(
+                Box::new(super::super::ThreadPromptSubmission {
+                    workspace_directory: "/tmp/workspace".to_string(),
+                    thread_id: thread_id.to_string(),
+                    prompt: "hello".to_string(),
+                    op_id: Some(op_id),
+                }),
+            )))
+        };
+        let admissions = |outcome: &CoreDispatchOutcome| {
+            outcome
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    AppEvent::ThreadPromptAdmissionResolved {
+                        thread_id,
+                        admission,
+                    } => Some((thread_id.clone(), admission.rejection())),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let waiting = submit(&mut controller, "thread-beta", 7);
+        assert_eq!(admissions(&waiting), [], "the command is not refused");
+        assert_eq!(
+            waiting.effects,
+            [CoreEffect::LoadSessionCatalog {
+                correlation: session_catalog_correlation(1, 10, "/tmp/workspace"),
+            }]
+        );
+        let second = submit(&mut controller, "thread-9", 8);
+        assert!(second.effects.is_empty(), "both prompts wait for one read");
+        assert!(
+            controller.has_remaining_work(),
+            "a transient kernel stays up while it reads the list"
+        );
+        controller.take_kernel_records();
+
+        let loaded = controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionCatalogLoaded {
+                correlation: session_catalog_correlation(1, 10, "/tmp/workspace"),
+                result: Ok(SessionCatalogReadySnapshot::from_catalog(
+                    RecentSessions {
+                        items: vec![sample_session_summary("thread-beta", "Beta")],
+                        warnings: Vec::new(),
+                        next_cursor: None,
+                    }
+                    .into(),
+                )),
+            },
+        ));
+        assert_eq!(
+            admissions(&loaded),
+            [
+                ("thread-beta".to_string(), None),
+                ("thread-9".to_string(), Some(ReasonCode::UnknownThread)),
+            ]
+        );
+        assert!(matches!(
+            loaded.effects.as_slice(),
+            [CoreEffect::PrepareManualPrompt(request)]
+                if request.parent_thread_id.as_deref() == Some("thread-beta")
+        ));
+        // The refusal comes after the answer of the command, so it ends the operation.
+        assert_eq!(
+            controller.take_kernel_records(),
+            vec![
+                KernelEvent::ThreadPromptRejected {
+                    thread_id: "thread-9".to_string(),
+                    reason: ReasonCode::UnknownThread,
+                },
+                KernelEvent::CommandCompleted {
+                    task_mutation: None,
+                    op_id: 8,
+                    thread_id: "thread-9".to_string(),
+                    result: kernel_event::OperationEnd::Failed,
+                    reason: Some(ReasonCode::UnknownThread),
+                    detail: None,
+                },
+            ]
+        );
     }
 
     #[test]
@@ -11519,6 +11638,19 @@ mod tests {
         );
 
         controller.handle_input(thread_prompt("thread-9", "hello"));
+        controller.handle_input(CoreInput::EffectCompleted(
+            CoreEffectCompletion::SessionCatalogLoaded {
+                correlation: session_catalog_correlation(1, 10, "/tmp/workspace"),
+                result: Ok(SessionCatalogReadySnapshot::from_catalog(
+                    RecentSessions {
+                        items: Vec::new(),
+                        warnings: Vec::new(),
+                        next_cursor: None,
+                    }
+                    .into(),
+                )),
+            },
+        ));
         assert_eq!(
             controller.take_kernel_records(),
             vec![KernelEvent::ThreadPromptRejected {
