@@ -551,7 +551,7 @@ pub(crate) mod tests {
         let (refresh, mut requests) = tokio::sync::mpsc::channel(1);
         let mut client = GatewayKernelClientRuntime::with_updates("/repo".to_string(), updates);
         client.refresh = Some(refresh);
-        client.dispatch_client_event(NativeClientEvent::core(CoreInput::Command(
+        let _ = client.dispatch_client_event(NativeClientEvent::core(CoreInput::Command(
             AppCommand::LoadSessionCatalog(crate::core::app::SessionCatalogLoadIntent::refresh(
                 10, "/repo",
             )),
