@@ -3,8 +3,7 @@
 // - Windows: \\.\pipe\akra-gateway-<현재 사용자 SID>
 import { execFileSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, posix, resolve, win32 } from "node:path";
 
 export function resolveGatewayEndpoint(
   platform: NodeJS.Platform = process.platform,
@@ -15,11 +14,30 @@ export function resolveGatewayEndpoint(
   if (env.AKRA_GATEWAY_ENDPOINT && env.AKRA_GATEWAY_ENDPOINT.length > 0) {
     return env.AKRA_GATEWAY_ENDPOINT;
   }
+  const akraHome = resolveAkraHome(platform, env);
   if (platform === "win32") {
     return `\\\\.\\pipe\\akra-gateway-${readUserSid()}`;
   }
-  const akraHome = env.AKRA_HOME && env.AKRA_HOME.length > 0 ? env.AKRA_HOME : join(homedir(), ".akra");
   return join(akraHome, "run", "gateway.sock");
+}
+
+/** Match native configuration and planning: invalid explicit roots never fall back. */
+export function resolveAkraHome(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string {
+  const windows = platform === "win32";
+  const paths = windows ? win32 : posix;
+  const profile = windows ? "USERPROFILE" : "HOME";
+  const explicit = env.AKRA_HOME;
+  const root = explicit === undefined ? env[profile] : explicit;
+  if (!root) throw new Error(explicit === undefined
+    ? `AKRA_HOME is unset and ${profile} is unavailable; set an explicit absolute AKRA_HOME`
+    : "AKRA_HOME must not be empty; unset it to use the default profile");
+  // win32.isAbsolute also accepts a drive-relative root such as backslash-foo.
+  const separated = windows ? root.replaceAll(String.fromCharCode(92), "/") : root;
+  const fullyQualified = !windows || /^[a-z]:\//i.test(separated) || /^\/\/[^/]+\/[^/]+/.test(separated);
+  if (!paths.isAbsolute(root) || !fullyQualified || separated.split("/").includes("..")) {
+    throw new Error("AKRA_HOME must be an absolute normalized path");
+  }
+  return explicit === undefined ? paths.join(root, ".akra") : root;
 }
 
 /** `whoami /user /fo csv /nh` 출력(`"domain\user","S-1-5-21-..."`)에서 SID 를 꺼낸다. */

@@ -11,8 +11,6 @@ repo-scoped planning authority의 핵심은 "현재 process가 어느 worktree�
 모듈이 모두 공유하는 기준 좌표다.
 */
 use std::collections::BTreeMap;
-#[cfg(not(test))]
-use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -36,8 +34,7 @@ use super::SqlitePlanningAuthorityAdapter;
 `projects/<repo>-<hash>/runtime` 형태를 택하는 이유는 같은 이름의 repository가 다른 절대 경로에
 여러 개 있어도 충돌하지 않게 하기 위해서다.
 */
-#[cfg(not(test))]
-const AKRA_HOME_ENV: &str = "AKRA_HOME";
+#[cfg(test)]
 const AKRA_HOME_DIRECTORY: &str = ".akra";
 const AKRA_PROJECTS_DIRECTORY: &str = "projects";
 const RUNTIME_DIRECTORY: &str = "runtime";
@@ -478,30 +475,7 @@ pub(super) fn akra_home_root() -> Result<PathBuf> {
 
 #[cfg(not(test))]
 pub(super) fn akra_home_root() -> Result<PathBuf> {
-    if let Some(path) = env::var_os(AKRA_HOME_ENV) {
-        return validate_absolute_akra_home(PathBuf::from(path));
-    }
-
-    #[cfg(unix)]
-    {
-        let home = env::var_os("HOME")
-            .map(PathBuf::from)
-            .context("HOME is required when AKRA_HOME is not configured")?;
-        Ok(validate_absolute_profile_home(home)?.join(AKRA_HOME_DIRECTORY))
-    }
-
-    #[cfg(windows)]
-    {
-        if let Some(home) = env::var_os("USERPROFILE").map(PathBuf::from) {
-            return Ok(validate_absolute_profile_home(home)?.join(AKRA_HOME_DIRECTORY));
-        }
-        Ok(crate::private_fs::windows_local_app_data_path()?.join("Akra"))
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    {
-        bail!("AKRA_HOME is required on this platform")
-    }
+    crate::configuration::akra_home_dir()
 }
 
 #[cfg(test)]
@@ -513,27 +487,6 @@ fn unit_test_authority_home_is_process_isolated() {
             .join(AKRA_HOME_DIRECTORY)
             .join("tests")
     );
-}
-
-fn validate_absolute_akra_home(path: PathBuf) -> Result<PathBuf> {
-    if path.as_os_str().is_empty() {
-        bail!("AKRA_HOME must not be empty");
-    }
-    validate_absolute_profile_home(path).context("AKRA_HOME must be an absolute normalized path")
-}
-
-fn validate_absolute_profile_home(path: PathBuf) -> Result<PathBuf> {
-    if !path.is_absolute()
-        || path.components().any(|component| {
-            matches!(
-                component,
-                std::path::Component::CurDir | std::path::Component::ParentDir
-            )
-        })
-    {
-        bail!("storage root must be an absolute normalized path");
-    }
-    Ok(path)
 }
 
 /*
@@ -1355,8 +1308,10 @@ pub(super) fn canonicalize_best_effort(path: &Path) -> PathBuf {
 mod tests {
     use super::{
         REPOSITORY_INCARNATION_MARKER_HEADER, parse_repository_incarnation_marker,
-        render_repository_incarnation_marker, validate_absolute_akra_home,
+        render_repository_incarnation_marker,
     };
+
+    use crate::configuration::validate_explicit_akra_home as validate_absolute_akra_home;
 
     #[cfg(any(unix, windows))]
     use super::install_repository_marker_no_replace;

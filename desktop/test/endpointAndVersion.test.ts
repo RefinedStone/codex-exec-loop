@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseWhoamiSid,
   resolveGatewayEndpoint,
+  resolveAkraHome,
   resolveGatewayExecutable,
   windowsWhoamiPath,
 } from "../src/main/gatewayEndpoint";
@@ -16,6 +17,19 @@ describe("gateway endpoint", () => {
     expect(resolveGatewayEndpoint("linux", { AKRA_HOME: "/srv/akra" })).toBe(join("/srv/akra", "run", "gateway.sock"));
   });
 
+  it("rejects explicit empty, relative and parent-traversal roots instead of attaching to another profile", () => {
+    for (const root of ["", "relative", "/tmp/../other"]) {
+      expect(() => resolveGatewayEndpoint("linux", { AKRA_HOME: root, HOME: "/home/fixture" })).toThrow("AKRA_HOME");
+    }
+    for (const root of ["", "C:relative", "/rooted", "C:/repo/../other"]) {
+      expect(() => resolveGatewayEndpoint("win32", { AKRA_HOME: root, USERPROFILE: "C:/Users/fixture" }, () => "unused")).toThrow("AKRA_HOME");
+    }
+    expect(resolveAkraHome("linux", { HOME: "/home/fixture" })).toBe("/home/fixture/.akra");
+    expect(resolveAkraHome("win32", { USERPROFILE: "C:/Users/fixture" }).replaceAll(String.fromCharCode(92), "/")).toBe("C:/Users/fixture/.akra");
+    expect(() => resolveAkraHome("win32", { HOME: "C:/another" })).toThrow("USERPROFILE");
+    expect(() => resolveAkraHome("linux", {})).toThrow("HOME");
+  });
+
   it("lets AKRA_GATEWAY_ENDPOINT point the app at another gateway", () => {
     expect(resolveGatewayEndpoint("win32", { AKRA_GATEWAY_ENDPOINT: "\\\\.\\pipe\\fake" }, () => "unused")).toBe(
       "\\\\.\\pipe\\fake",
@@ -23,7 +37,7 @@ describe("gateway endpoint", () => {
   });
 
   it("uses the per-user named pipe on Windows", () => {
-    expect(resolveGatewayEndpoint("win32", {}, () => "S-1-5-21-1-2-3-1000")).toBe(
+    expect(resolveGatewayEndpoint("win32", { USERPROFILE: "C:/Users/fixture" }, () => "S-1-5-21-1-2-3-1000")).toBe(
       "\\\\.\\pipe\\akra-gateway-S-1-5-21-1-2-3-1000",
     );
   });
