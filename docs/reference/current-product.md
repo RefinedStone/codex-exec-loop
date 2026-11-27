@@ -83,9 +83,10 @@ settings are kept: the kernel records them (`auto_follow_configured`) and the ne
 restores the last record.
 
 Stored commands change stored planning data only, so they run without a running kernel. Today
-they are `reset_planning`, the task commands (`create_task`, `update_task`, `delete_task`), and
-the direction commands (`create_direction`, `update_direction`, `delete_direction`)
-(`state: store` in the specification). The process that holds the repository lock runs them at once: the Gateway kernel,
+they are `reset_planning`, the task commands (`create_task`, `update_task`, `delete_task`), the
+direction commands (`create_direction`, `update_direction`, `delete_direction`), the file
+commands (`export_planning_files`, `apply_planning_files`), `promote_draft`, and
+`save_parallel_agent_profiles` (`state: store` in the specification). The process that holds the repository lock runs them at once: the Gateway kernel,
 or the command-only kernel when no Gateway runs or the running Gateway is an older version that
 does not know the command. The answer of `create_task`, `update_task`, and `delete_task` comes
 after the change: `result` (the task id and the new planning revision), `rejection`, or `failure`
@@ -122,7 +123,33 @@ notice and the current values. Another failure of these routes is a 500 that car
 (`{ "message" }`, or the tasks page with the cause as its notice). Two cases are not recorded:
 a folder that cannot have a repository kernel (a repository without a primary checkout, a
 parallel slot worktree) changes tasks directly, and a repository whose kernel a TUI holds runs
-the command without a record. The file and draft changes of the admin still run directly.
+the command without a record. Creating, saving, and validating a draft in the admin still runs
+directly: a draft is a file that the operator edits, not planning data.
+
+The file commands have no input. `export_planning_files` writes the stored support file into
+the primary checkout of the repository as a file to edit and changes no planning data; its
+`result` has `directory` and `paths`. `apply_planning_files` stores the edited file; when
+planning changed after the export, it is rejected with `planning_revision_stale`. The admin
+file routes (`/admin/files/export`, `/admin/files/apply`, `/api/planning/files/export`,
+`/api/planning/files/apply`) send these commands. When the admin runs in another worktree of
+the repository, the files are in the primary checkout and the notice names that folder. A
+rejection of these routes is a 409 and another failure is a 500 that carries its cause.
+
+`promote_draft` promotes a saved editor draft (`draft_name`, `kind`, and `direction_id` for a
+direction detail draft) into active planning. `expected_planning_revision` is the revision that
+the draft was made from; a different current revision rejects the command with
+`planning_revision_stale`. A draft that fails validation changes nothing; the `result` has
+`promoted_file_count`, `is_valid`, and the new `planning_revision` when the draft was promoted.
+The admin promote routes (`/admin/drafts/{draft_name}/promote`,
+`/api/planning/drafts/{draft_name}/promote`) first save the posted text into the draft, then send
+this command with the revision that the admin kept when it made the draft. A rejection is a 409
+with its message (the JSON `{ "reason", "message" }`, or the editor page with the message as its
+notice).
+
+`save_parallel_agent_profiles` replaces the parallel agent profiles (`profiles`) in the primary
+checkout of the repository; an empty list restores the built-in profiles. The admin profile form
+(`/admin/controls/agent-profiles`) sends it; a failure answers the controls page with its cause
+and a 500. The command fails on Windows, where custom profile files are not written.
 
 The planning reset of the other entrances also goes to the repository kernel. `akra reset`, the
 admin reset (`/api/planning/reset`, `/admin/controls/reset`), and the Telegram `/reset` commands
