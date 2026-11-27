@@ -463,8 +463,9 @@ function createWindow(dotQuery?: { dotWindow: string; dot: string }): BrowserWin
     });
     window.once("closed", () => {
       mainWindows.delete(window);
-      // A hidden chat host must not keep Desktop alive after the last application window closes.
-      if (!BrowserWindow.getAllWindows().length && process.platform !== "darwin") app.quit();
+      // A hidden chat host or its sign-in popup must not keep Desktop alive after the last application window closes.
+      const remaining = BrowserWindow.getAllWindows().filter((other) => !delegatedChatWindow.ownsPopup(other));
+      if (!remaining.length && process.platform !== "darwin") app.quit();
     });
   }
   // 페이지를 읽을 때마다 배율을 100% 로 둔다. 옛 판이 같은 출처에 남긴 배율을 따르지 않는다.

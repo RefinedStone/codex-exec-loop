@@ -45,6 +45,10 @@ export class DelegatedChatWindow {
     return this.manualGeneration;
   }
 
+  ownsPopup(window: BrowserWindow): boolean {
+    return this.popups.has(window);
+  }
+
   getContents(): Electron.WebContents {
     if (this.view && !this.view.webContents.isDestroyed()) return this.view.webContents;
     this.window?.destroy();
