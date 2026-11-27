@@ -34,6 +34,7 @@
 다음 문서는 현재 구현 계약이 아닙니다.
 
 - [Akra Desktop 사용자 흐름: 경쟁 앱 7 개의 실제 순서(맡기기, 지켜보기, 답하기, 검토하기, 전달하기, 정리하기, 돌아오기)와 Akra 에서 끊기는 곳, 고칠 화면과 블루프린트 mock (제안)](../plan/33-akra-desktop-user-flows.md)
+- [Akra 확장 통합 규약과 AI 양방향 조작: 모든 확장의 등록·호출 규약 하나, 블로그 버전 3 이전, 생성 payload 타입, 대화 모델의 확장 호출 정책(`allow`/`confirm`/`deny`)과 확장의 대화 넘김 grant (제안)](../plan/34-akra-extension-unified-protocol.md)
 - [위임 실행: 기능이 위임 작업을 내고, 경로 정책이 백엔드(Desktop 브라우저의 ChatGPT 채팅, 고립 Codex thread)를 우선순위로 고른다. 전달·진행·비정상 중단·결과의 공통 계약, 대체, PR 자동 리뷰. ChatGPT 백엔드는 akra-tunnel 에서 나눈 core 라이브러리를 쓴다. 조각 문서 `29-d1` ~ `29-d7` (제안)](../plan/29-akra-delegated-execution.md)
 - [이슈 자동화: 외부 이슈를 수집하고 정책으로 판정해 계획 큐와 병렬 전달로 실행한다. 자율 수준(관찰, 제안, 반자동, 자동), 사람 관문, 마감이 있는 결정 요청, 중재자 (제안)](../plan/28-akra-issue-automation.md)
 - [Akra git 그래프: 커밋 그래프 화면과 git 작업 엔진(계획, 백업 ref, 되돌리기, hard reset, cherry-pick, sha 를 명시한 lease 의 강제 push, Akra 보호 브랜치 목록)과 Desktop 조작 설계 (제안)](../plan/27-akra-git-graph.md)
