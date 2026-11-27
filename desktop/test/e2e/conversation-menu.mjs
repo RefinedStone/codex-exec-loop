@@ -73,10 +73,13 @@ try {
   // 본문이 150% 일 때도 메뉴는 누른 자리에 열린다.
   await page.locator(".main-view").evaluate((view) => { view.style.zoom = "1.5"; });
   const paragraph = message.locator("p");
-  await paragraph.scrollIntoViewIfNeeded();
-  const box = await paragraph.boundingBox();
-  const click = { x: box.x + 5, y: box.y + 5 };
-  await page.mouse.click(click.x, click.y, { button: "right" });
+  await paragraph.evaluate((element) => {
+    element.addEventListener("contextmenu", (event) => {
+      element.dataset.menuClick = JSON.stringify({ x: event.clientX, y: event.clientY });
+    }, { once: true });
+  });
+  await paragraph.click({ button: "right" });
+  const click = JSON.parse(await paragraph.getAttribute("data-menu-click"));
   const zoomed = await page.getByTestId("conversation-menu").evaluate((element) => element.getBoundingClientRect().toJSON());
   check("the menu opens at the click point in a zoomed body", Math.abs(zoomed.left - click.x) < 2 && Math.abs(zoomed.top - click.y) < 2,
     JSON.stringify({ click, zoomed }));
