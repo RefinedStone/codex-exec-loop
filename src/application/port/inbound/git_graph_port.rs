@@ -11,6 +11,8 @@ use crate::domain::git_graph::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitGraphCursor {
+    #[serde(default)]
+    pub filter: crate::domain::git_graph::filter::GraphFilter,
     /// 이미 읽은 커밋 수이다.
     pub skip: usize,
     /// 앞 쪽의 마지막 줄 아래의 레인 상태이다.
@@ -21,6 +23,7 @@ pub struct GitGraphCursor {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitGraphPageRequest {
+    pub filter: crate::domain::git_graph::filter::GraphFilter,
     /// 저장소 안의 폴더이다. 절대 경로이다.
     pub repository_dir: String,
     pub limit: Option<usize>,

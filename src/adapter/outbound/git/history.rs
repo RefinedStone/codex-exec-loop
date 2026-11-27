@@ -40,9 +40,30 @@ const DETAIL_FIELD_COUNT: usize = 8;
 const COMMIT_DIFF_LIMIT_BYTES: usize = 2 << 20;
 const COMMIT_DIFF_STDERR_LIMIT_BYTES: usize = 64 * 1024;
 
+mod filter;
+
 pub(crate) struct GitHistoryAdapter;
 
 impl GitHistoryPort for GitHistoryAdapter {
+    fn filtered_page(
+        &self,
+        cwd: &str,
+        filter: &crate::domain::git_graph::filter::GraphFilter,
+        refs: &GitHistoryRefs,
+        page: std::ops::Range<usize>,
+    ) -> Result<Vec<GitGraphCommit>> {
+        filter::page(cwd, filter, refs, page)
+    }
+    fn matches_on_page(
+        &self,
+        cwd: &str,
+        filter: &crate::domain::git_graph::filter::GraphFilter,
+        refs: &GitHistoryRefs,
+        rows: &[crate::domain::git_graph::GitGraphRow],
+    ) -> Result<HashSet<String>> {
+        filter::matches(cwd, filter, refs, rows)
+    }
+
     fn read_refs(&self, repository_dir: &str) -> Result<Option<GitHistoryRefs>> {
         let repository = Path::new(repository_dir);
         if !repository.is_absolute() {
@@ -401,6 +422,9 @@ mod tests {
 
     use super::*;
     use crate::test_utils::git_command;
+
+    #[path = "filter_tests.rs"]
+    mod filter_tests;
 
     fn git(directory: &Path, args: &[&str]) {
         let status = git_command()

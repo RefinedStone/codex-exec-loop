@@ -30,6 +30,25 @@ pub struct GitWorktreeProgress {
 }
 
 pub trait GitHistoryPort: Send + Sync {
+    fn filtered_page(
+        &self,
+        _cwd: &str,
+        _filter: &crate::domain::git_graph::filter::GraphFilter,
+        _refs: &GitHistoryRefs,
+        _page: std::ops::Range<usize>,
+    ) -> Result<Vec<GitGraphCommit>> {
+        anyhow::bail!("graph filters unavailable")
+    }
+    fn matches_on_page(
+        &self,
+        _cwd: &str,
+        _filter: &crate::domain::git_graph::filter::GraphFilter,
+        _refs: &GitHistoryRefs,
+        _rows: &[crate::domain::git_graph::GitGraphRow],
+    ) -> Result<HashSet<String>> {
+        anyhow::bail!("graph filters unavailable")
+    }
+
     /// 저장소의 ref 들이다. 저장소가 아닌 폴더는 `None` 이다.
     fn read_refs(&self, repository_dir: &str) -> Result<Option<GitHistoryRefs>>;
 

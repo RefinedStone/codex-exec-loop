@@ -39,6 +39,7 @@ export interface GitGraphRow extends RowLanes {
   subject: string;
   /** 백업 ref 에서만 닿는 커밋이다. 흐리게 그린다. */
   backupOnly: boolean;
+  outsideFilter?: boolean;
 }
 
 export interface GitGraphPage {
@@ -146,6 +147,7 @@ function rowFrom(entry: unknown): GitGraphRow[] {
       authorTime: typeof item.authorTime === "number" ? item.authorTime : 0,
       subject: text(item.subject) ?? "",
       backupOnly: item.backupOnly === true,
+      ...(item.outsideFilter === true ? { outsideFilter: true } : {}),
       lane: item.lane as number,
       lanesIn: lanes(item.lanesIn),
       lanesOut: lanes(item.lanesOut),

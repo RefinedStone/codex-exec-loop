@@ -9,6 +9,11 @@ export function graphFixture() {
   const planRequests = [], executeRequests = [], undoRequests = [], journal = [], graphRequests = [], commitRequests = [];
   const handlers = {
     gitGraph(params) {
+      if (params.filter?.author === "needle" && params.filter?.hide) {
+        graphRequests.push(params);
+        const page = params.cursor ? secondPage() : firstPage(params.cwd, state.repositoryChanged);
+        return { ...page, rows: [page.rows[0]], next: params.cursor ? null : page.next };
+      }
       if (state.unborn) return { repository: true, stale: false, head: null, refsDigest: "unborn", refs: [], worktrees: [], rows: [], next: null };
       if (!params.cursor && (state.initialStalePages > 0 || state.holdFirstPagesStale)) {
         state.initialStalePages = Math.max(0, state.initialStalePages - 1);

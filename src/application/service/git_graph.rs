@@ -32,13 +32,16 @@ impl GitGraphService {
 
 impl GitGraphPort for GitGraphService {
     fn graph_page(&self, request: GitGraphPageRequest) -> Result<GitGraphPage> {
+        request.filter.validate()?;
         let Some(refs) = self.history.read_refs(&request.repository_dir)? else {
             return Ok(empty_page(false, false, None));
         };
         let page_digest = refs_digest(&refs);
         let first_page = request.cursor.is_none();
         let (skip, mut lanes) = match request.cursor {
-            Some(cursor) if cursor.refs_digest != page_digest => {
+            Some(cursor)
+                if cursor.refs_digest != page_digest || cursor.filter != request.filter =>
+            {
                 return Ok(empty_page(true, true, refs.head));
             }
             Some(cursor) if cursor.lanes.lane_count() > GIT_GRAPH_LANE_LIMIT => {
@@ -48,9 +51,31 @@ impl GitGraphPort for GitGraphService {
             None => (0, GitGraphLaneState::default()),
         };
         let limit = clamp_git_graph_page_limit(request.limit);
-        let commits = self.read_commits(&request.repository_dir, &refs, skip, limit)?;
+        let filtered = request.filter.active();
+        let hide = filtered && request.filter.hide;
+        let commits = if hide {
+            self.history.filtered_page(
+                &request.repository_dir,
+                &request.filter,
+                &refs,
+                skip..skip.saturating_add(limit + 1),
+            )?
+        } else {
+            self.read_commits(&request.repository_dir, &refs, skip, limit)?
+        };
         let has_more = commits.len() > limit;
         let mut rows = place_rows(&mut lanes, commits, limit);
+        if filtered && !hide {
+            let matches = self.history.matches_on_page(
+                &request.repository_dir,
+                &request.filter,
+                &refs,
+                &rows,
+            )?;
+            for row in &mut rows {
+                row.outside_filter = !matches.contains(&row.id);
+            }
+        }
         self.mark_backup_only_rows(&request.repository_dir, &refs, &mut rows)?;
         // log와 백업 분류는 움직이는 ref를 읽는다. 읽는 동안 바뀌었으면
         // 이 쪽과 커서를 버려 서로 다른 이력의 줄을 이어 붙이지 않는다.
@@ -61,7 +86,8 @@ impl GitGraphPort for GitGraphService {
             return Ok(empty_page(true, true, current_refs.head));
         }
         let next = has_more.then(|| GitGraphCursor {
-            skip: skip + rows.len(),
+            filter: request.filter,
+            skip: skip.saturating_add(rows.len()),
             lanes,
             refs_digest: page_digest.clone(),
         });
@@ -317,6 +343,7 @@ mod tests {
 
     fn request(limit: usize, cursor: Option<GitGraphCursor>) -> GitGraphPageRequest {
         GitGraphPageRequest {
+            filter: Default::default(),
             repository_dir: "/repo".to_string(),
             limit: Some(limit),
             cursor,

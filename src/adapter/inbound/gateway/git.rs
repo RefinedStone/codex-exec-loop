@@ -46,6 +46,8 @@ struct RequestEnvelope {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GraphParams {
+    #[serde(default)]
+    filter: crate::domain::git_graph::filter::GraphFilter,
     cwd: String,
     #[serde(default)]
     limit: Option<usize>,
@@ -153,6 +155,7 @@ type MethodResult = Option<anyhow::Result<Value>>;
 fn graph_result(graph: &dyn GitGraphPort, text: &str) -> MethodResult {
     let params = params::<GraphParams>(text)?;
     let page = graph.graph_page(GitGraphPageRequest {
+        filter: params.filter,
         repository_dir: params.cwd,
         limit: params.limit,
         cursor: params.cursor,

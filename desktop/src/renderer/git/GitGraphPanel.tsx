@@ -14,6 +14,8 @@ import type { GatewayRequest } from "../work/notionHub";
 import { fullTime, headName, shortSha, threadIdsInWorktreeOf, unfinishedWork, type GitCommitDetail, type GitRef, type GitRefKind, type GitWorktree } from "./gitGraph";
 import { CommitActionsView, OperationLogView, useGitOperationLog } from "./GitOperationViews";
 import type { GitOperationPlan } from "./gitOperations";
+import { ALL_HISTORY, GraphFilters, type GraphFilter } from "./GraphFilters";
+import { GIT_GRAPH_METHOD } from "./gitGraph";
 import { GraphRows } from "./GraphRows";
 import { useCommitDetail, useGitGraph, type CommitDetailState } from "./useGitGraph";
 export { useCommitDetail, useGitGraph, REFS_POLL_INTERVAL_MS } from "./useGitGraph";
@@ -135,7 +137,10 @@ export interface GitGraphPanelProps {
 export function GitGraphPanel({ request, cwd, maximized, changes, onOpenChanges, onOpenThread }: GitGraphPanelProps) {
   // 스레드 목록의 폴더들이다. 작업 트리의 커밋에 스레드 배지를 붙이는 데 쓴다. 패널이 열려 있을 때만 구독한다.
   const folders = useDesktopStore((state) => state.folders);
-  const graph = useGitGraph(request, cwd);
+  const [scopedFilter, setFilter] = useState<{ cwd: string | null; value: GraphFilter }>({ cwd, value: ALL_HISTORY });
+  const filter = scopedFilter.cwd === cwd ? scopedFilter.value : ALL_HISTORY;
+  const filteredRead = useCallback<GatewayRequest>((method, params) => request(method, method === GIT_GRAPH_METHOD && filter !== ALL_HISTORY && typeof params === "object" && params !== null ? { ...params, filter } : params), [request, filter]);
+  const graph = useGitGraph(filteredRead, cwd);
   const { state, reload } = graph;
   const [selection, setSelection] = useState<{ cwd: string; commit: string } | null>(null);
   // 다른 폴더의 선택은 쓰지 않는다. sha 는 저장소마다 뜻이 다르다.
@@ -188,6 +193,7 @@ export function GitGraphPanel({ request, cwd, maximized, changes, onOpenChanges,
           </button>
         </span>
       </div>
+      {cwd && <GraphFilters key={cwd} refs={state.phase === "loaded" ? state.refs : []} apply={value => { setSelection(null); setFilter({cwd,value}); }} />}
       {unfinished.length > 0 && (
         <div className="git-status-strip" role="status" data-testid="git-status-strip">
           {unfinished.join(" · ")}
@@ -208,7 +214,7 @@ export function GitGraphPanel({ request, cwd, maximized, changes, onOpenChanges,
           {state.phase === "loaded" && state.repository && state.rows.length === 0 && (
             <>
               {uncommitted}
-              <p className="muted work-section">이 저장소에는 아직 커밋이 없습니다.</p>
+              <p className="muted work-section">{filter.hide ? "필터에 맞는 커밋이 없습니다." : "이 저장소에는 아직 커밋이 없습니다."}</p>
             </>
           )}
           {state.phase === "loaded" && state.repository && state.rows.length > 0 && (
