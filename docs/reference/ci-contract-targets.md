@@ -20,6 +20,10 @@ node scripts/run_native_rust_contracts.mjs --contract-id evidence-gate --all-fea
 
 명시 package 선택은 registry의 old namespace 대신 해당 target의 실제 시험 이름을 받는다. --contract-id는 registry의 owner/target/filter/OS/feature/격리 조건을 적용한다.
 
+선택 계획은 --include-members --package <member>를 사용할 수 있다. 뒤의 실제 계약 필터가 없으면 그 member의 모든 일반 시험·통합시험·doctest를 실행하며, 필터가 있으면 그 그룹과 나머지를 나누어 중복 없이 실행한다. root 전체 검증은 이 단축 경로를 거절하고 기존 full gate로 보낸다.
+
+CI target matrix는 --all-tests --package <member> --target-kind <lib|test|bin> --target-name <name>를 쓴다. 이 명시 모드에서는 해당 harness 전체를 검사하므로 실제 0개 시험 harness도 빌드·실행한 결과로 기록한다. 필수 계약 필터의 0개 일치 거절은 계속 유지한다.
+
 ## 전체 member 보존과 격리
 
 --include-members는 기존 root 계약 필터를 실행하고 새 member의 남은 비-ignored 단위시험, bin/integration harness를 각각 실행한다. 이미 계약으로 실행한 시험은 --exact --skip으로 제외하므로 부분 이름이 같은 시험을 실수로 제외하지 않는다. 이어 각 member의 doctest를 같은 Cargo 조건으로 실행한다. root의 전체 검증은 기존 Linux workspace gate가 유지하고, Windows/macOS의 기존 root native 계약과 별도 native confirmation helper 경로를 보존한다.
@@ -30,7 +34,7 @@ compareContractInventory는 package/target별 기존·새 시험의 일대일 �
 
 ## 검증 근거
 
-- Node 회귀: runner/target/progress/CI scope 47개 통과(첫 작업 base 기준; 후속 stack에서 전체 정책 재확인).
+- Node 회귀: runner/target/progress/CI scope/impact plan 84개 범위를 검사했고, 마지막 empty-harness 수정은 target 회귀11개와 실제 Cargo fixture로 재확인했다.
 - 실제 Cargo fixture: 동일 lib 이름을 가진 2개 package, 이동한 필터, member 나머지, integration, doctest, ignored 유지, 명시 package/target 선택을 실행했다.
 - fixture 결과: 3개 실행 파일 준비, 4개 그룹/5개 일반 시험 + member doctest1개 통과. 명시 integration 요청1개 추가 통과.
 - 재현: `node scripts/check_ci_contract_targets.mjs`. 외부 dependency 없이 자체 임시 workspace를 만들고 그 디렉터리만 정리한다.

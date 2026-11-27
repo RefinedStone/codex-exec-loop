@@ -132,3 +132,31 @@ test("full member selection includes its integration targets but not root binari
   const requests=resolveContractTargets(m,undefined,ownership,true);
   assert.deepEqual(requests.map(r=>[r.package,r.target.kind,r.target.name]),[["akra-ade","lib","shared"],["feature","lib","shared"],["feature","test","contract"]]);
 });
+
+test("an explicit complete member may have no contract filters and retains all its targets", async () => {
+  assert.equal(parseContractArguments(["--include-members","--package","feature","--"]).includeMembers,true);
+  assert.throws(()=>parseContractArguments(["--include-members","--"]));
+  assert.throws(()=>parseContractArguments(["--include-members","--package","feature","--target-kind","lib","--","x"]),/complete member/);
+  const resolved=resolveContractTargets(metadata,{package:"feature"},ownership,true);
+  assert.equal(resolved.length,1);
+  const result=await runNativeContracts(["--include-members","--package","feature","--"],{metadata,ownership,write(){},record(){},
+    run(command,args){
+      if(command==="cargo") return {status:0,stdout:json(artifact(featureId,"feature-exe"))};
+      if(args.includes("--list")) return {status:0,stdout:args.includes("--ignored")?"":"feature::one: test\n"};
+      return {status:0,stdout:"test result: ok. 1 passed; 0 failed;\n"};
+    }
+  });
+  assert.equal(result.executedTests,1);
+});
+
+test("all-tests mode requires exact package/target identity and permits a legitimate empty harness", async () => {
+  assert.throws(()=>parseContractArguments(["--all-tests","--"]));
+  const result=await runNativeContracts(["--all-tests","--package","feature","--target-kind","lib","--target-name","shared","--"],{
+    metadata,ownership,write(){},record(){},run(command,args){
+      if(command==="cargo")return {status:0,stdout:json(artifact(featureId,"feature-exe"))};
+      if(args.includes("--list"))return {status:0,stdout:""};
+      return {status:0,stdout:"test result: ok. 0 passed; 0 failed;\n"};
+    }
+  });
+  assert.deepEqual(result,{preparedTargets:1,executedGroups:1,executedTests:0});
+});
