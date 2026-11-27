@@ -142,7 +142,8 @@ pub struct IssueDraftValidationError {
     /// 템플릿 필드나 섹션의 제목 또는 코드 검증기의 ID 이다. 제목 칸이면 `None` 이다.
     pub label: Option<String>,
     /// `missing`, `empty`, `invalid_format`, `failed`(필수 코드 검증기가 통과하지 않았다),
-    /// `cancelled`(사용자가 코드 검증을 취소했다) 중 하나이다.
+    /// `cancelled`(사용자가 코드 검증을 취소했다),
+    /// `isolation_unavailable`(필수 격리를 구성할 수 없다) 중 하나이다.
     pub kind: &'static str,
 }
 
