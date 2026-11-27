@@ -6,25 +6,16 @@
 import { useEffect, useRef, useState } from "react";
 
 import "./IssueDraftPanel.css";
+import type { DelegationActions } from "./DelegationPanel";
+import { IssueDraftReview } from "./IssueDraftReview";
+import { IssueDraftOpening } from "./IssueDraftOpening";
+import { IssueDraftPublishResult } from "./IssueDraftPublishResult";
 import { IssueReadinessPanel } from "./IssueReadinessPanel";
 import { IssueDraftRequirements as Requirements, IssueDraftPreviewView as Preview, IssueDraftTextFields } from "./IssueDraftFields";
 import {
-  cancelledByUser,
-  intentStatus,
-  expectedLabels,
-  ISSUE_METHOD,
-  type IssueDraftApproval,
-  type IssueDraftField,
-  type IssueDraftIntent,
-  type IssueDraftOpened,
-  type IssueDraftPreview,
-  type IssueDraftPublished,
-  type IssueDraftSpan,
-  type IssueDraftTarget,
-  type IssuePublishStatus,
-  publishStatus,
-  sameApproval,
-  shiftSpans,
+  cancelledByUser, intentStatus, expectedLabels, ISSUE_METHOD, publishStatus, sameApproval, shiftSpans,
+  type IssueDraftApproval, type IssueDraftField, type IssueDraftIntent, type IssueDraftOpened,
+  type IssueDraftPreview, type IssueDraftPublished, type IssueDraftSpan, type IssueDraftTarget, type IssuePublishStatus,
 } from "./issueDraft";
 import type { GatewayRequest } from "./notionHub";
 import { newValidationId, ValidationCancel } from "./ValidationCancel";
@@ -32,12 +23,7 @@ import { newValidationId, ValidationCancel } from "./ValidationCancel";
 /** 입력이 멈춘 뒤 미리보기를 다시 만들 때까지의 시간이다. */
 const PREVIEW_DELAY_MS = 300;
 
-const REFUSED_REASON: Record<string, string> = {
-  target: "승인한 이슈가 아닙니다.",
-  shared_copy: "승인한 뒤에 제목이나 본문이 바뀌었습니다.",
-  policy_version: "승인한 뒤에 이슈 정책이 바뀌었습니다.",
-  template_version: "승인한 뒤에 템플릿이 바뀌었습니다.",
-};
+
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -45,7 +31,7 @@ function message(error: unknown): string {
 
 type OpenState = { phase: "loading" } | { phase: "failed"; message: string } | { phase: "loaded"; opened: IssueDraftOpened };
 
-export function IssueDraftPanel({ request, target, onClose }: { request: GatewayRequest; target: IssueDraftTarget; onClose(): void }) {
+export function IssueDraftPanel({ request, reviewJobs, target, onClose }: { readonly target: IssueDraftTarget; readonly request: GatewayRequest; readonly reviewJobs: Pick<DelegationActions, "detail" | "cancel">; onClose(): void }) {
   const [openState, setOpenState] = useState<OpenState>({ phase: "loading" });
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -147,9 +133,9 @@ export function IssueDraftPanel({ request, target, onClose }: { request: Gateway
     }
   };
 
-  const edit = (field: IssueDraftField, next: string) => {
+  const edit = (field: IssueDraftField, next: string, reviewedSpans?: IssueDraftSpan[]) => {
     invalidatePreview(true);
-    setSpans((current) => shiftSpans(current, field, field === "title" ? title : body, next));
+    setSpans((current) => reviewedSpans ?? shiftSpans(current, field, field === "title" ? title : body, next));
     if (field === "title") setTitle(next);
     else setBody(next);
     // 끝난 게시의 결과는 새 글의 상태가 아니다.
@@ -216,24 +202,7 @@ export function IssueDraftPanel({ request, target, onClose }: { request: Gateway
     });
 
   const name = `${target.owner}/${target.repository}#${target.number}`;
-  if (openState.phase !== "loaded") {
-    return (
-      <aside className="work-panel issue-draft" data-testid="issue-draft-panel">
-        <div className="work-header">
-          <strong>이슈 수정 {name}</strong>
-          <button type="button" onClick={onClose}>
-            닫기
-          </button>
-        </div>
-        {openState.phase === "loading" && <p className="muted work-section">읽는 중…</p>}
-        {openState.phase === "failed" && (
-          <div className="error work-section" data-testid="issue-draft-error">
-            이슈를 읽을 수 없습니다. gh 로그인과 이슈 정책 파일을 확인하세요. {openState.message}
-          </div>
-        )}
-      </aside>
-    );
-  }
+  if (openState.phase !== "loaded") return <IssueDraftOpening name={name} state={openState} onClose={onClose} />;
 
   const opened = openState.opened;
   const needsDecision = preview?.status === "needs_confirmation" ? preview.spanIndexes : [];
@@ -264,6 +233,7 @@ export function IssueDraftPanel({ request, target, onClose }: { request: Gateway
           </details>
         )}
         <Preview preview={preview} />
+        <IssueDraftReview request={request} jobs={reviewJobs} target={target} preview={ready} text={{title,body,spans}} disabled={editingDisabled || waiting} onEdit={edit} />
         <IssueReadinessPanel result={preview?.readiness} pending={preview === null && error === null}
           labels={labelInput} disabled={editingDisabled}
           onLabelsChange={(value) => { invalidatePreview(); setLabelInput(value); }}
@@ -294,61 +264,9 @@ export function IssueDraftPanel({ request, target, onClose }: { request: Gateway
             </div>
           )}
         </section>
-        {status && (
-          <section className="work-section work-form" data-testid="issue-draft-status" data-status={status.kind}>
-            {status.kind === "confirmed" && (
-              <>
-                <strong>게시 확인</strong>
-                <p className="muted">원격의 글이 승인한 공유본과 같습니다. 입력창의 글은 지금 원격의 글입니다.</p>
-                <button type="button" onClick={onClose} disabled={busy} data-testid="issue-draft-done">
-                  닫기
-                </button>
-              </>
-            )}
-            {status.kind === "needs_confirmation" && (
-              <>
-                <strong>게시 결과 확인 필요</strong>
-                <p className="muted">쓰기를 보냈지만 결과를 모릅니다. 자동으로 다시 보내지 않습니다. 결과 확인을 마치거나 그만둘 때까지 초안 편집을 잠급니다.</p>
-                <button type="button" onClick={() => void recheck()} disabled={busy} data-testid="issue-draft-recheck">
-                  원격을 다시 확인
-                </button>
-                <button type="button" onClick={() => void abandon(status.intentId)} disabled={busy} data-testid="issue-draft-abandon">
-                  결과 확인을 그만두기
-                </button>
-              </>
-            )}
-            {status.kind === "external_change" && (
-              <>
-                <strong>알려진 외부 변경</strong>
-                <p className="muted">편집을 시작한 뒤에 원격의 글이 바뀌었습니다. 쓰지 않았습니다.</p>
-                <button type="button" onClick={() => void run(async () => void (await open(true)))} disabled={busy} data-testid="issue-draft-reload">
-                  원격 글을 다시 읽고 내 글을 유지
-                </button>
-                <button type="button" onClick={() => void open(false)} disabled={busy} data-testid="issue-draft-discard">
-                  내 글을 버리고 원격 글로 시작
-                </button>
-              </>
-            )}
-            {status.kind === "held" && (
-              <>
-                <strong>게시 보류</strong>
-                <p className="muted">표식으로 가린 구간을 복원용으로 저장하지 못했습니다. 쓰지 않았습니다. 공유본만 게시하면 그 구간은 복원할 수 없습니다.</p>
-                <button type="button" onClick={() => void publish(true)} disabled={!approval || busy} data-testid="issue-draft-shared-only">
-                  공유본만 게시
-                </button>
-                <button type="button" onClick={() => setStatus(null)} disabled={busy}>
-                  게시하지 않기
-                </button>
-              </>
-            )}
-            {status.kind === "refused" && (
-              <>
-                <strong>승인 갱신 필요</strong>
-                <p className="muted">{REFUSED_REASON[status.reason] ?? status.reason} 쓰지 않았습니다. 미리보기를 보고 다시 승인하세요.</p>
-              </>
-            )}
-          </section>
-        )}
+        {status && <IssueDraftPublishResult status={status} busy={busy} canShare={approval !== null} onClose={onClose}
+          onRecheck={() => void recheck()} onReload={() => void run(async () => void (await open(true)))} onDiscard={() => void open(false)}
+          onAbandon={id => void abandon(id)} onSharedOnly={() => void publish(true)} onDismiss={() => setStatus(null)} />}
       </div>
     </aside>
   );
