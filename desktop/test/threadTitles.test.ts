@@ -6,6 +6,11 @@ describe("display-only provisional thread titles", () => {
     expect(threadDisplayTitle("내가 정한 이름", "다른 이름")).toBe("내가 정한 이름");
     expect(threadDisplayTitle("  ", "\n  Kotlin Kafka #2796\nadditional details")).toBe("Kotlin Kafka #2796");
     expect(threadDisplayTitle(null, "hello")).toBe(UNTITLED_THREAD);
+    expect(provisionalThreadTitle("hello!\nFix Kafka #123")).toBe("Fix Kafka #123");
+    expect(provisionalThreadTitle("안녕하세요!\nKafka consumer 수정")).toBe("Kafka consumer 수정");
+    expect(provisionalThreadTitle("hello\u202e")).toBeNull();
+    expect(provisionalThreadTitle("hello\n```rs\nfn main() {}")).toBeNull();
+    expect(provisionalThreadTitle("hello\nfix Kafka\npassword: abc")).toBeNull();
     const cluster = "👩🏽‍💻";
     expect(provisionalThreadTitle(cluster.repeat(50))).toBe(cluster.repeat(35) + "…");
     expect(provisionalThreadTitle("작업\u202e 확인")).toBe("작업 확인");

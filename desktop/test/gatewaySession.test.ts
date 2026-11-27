@@ -539,6 +539,28 @@ describe("out-of-order resume navigation", () => {
     expect(store.snapshot.transcript?.turns.map((turn) => turn.id)).toEqual(["latest-turn"]);
   });
 
+  it("reconciles a missed name notification and protects a newer rename during resume", async () => {
+    const { session, store, pending, respond, emit } = await setup();
+    store.addThreadToFolder("/work", { id: "A", title: "임시 제목", updatedAt: 1, branch: null, failed: false });
+    const titleInList = () => store.snapshot.folders?.flatMap(folder => folder.threads).find(thread => thread.id === "A")?.title;
+    const first = session.openThread("A");
+    await waitFor(() => pending("thread/resume").length === 1);
+    respond(pending("thread/resume")[0]!.id, { thread: controlledThread("A", "외부 이름", "first-turn") });
+    await first;
+    expect(titleInList()).toBe("외부 이름");
+    expect(store.snapshot.transcript?.title).toBe("외부 이름");
+
+    const second = session.openThread("A");
+    await waitFor(() => pending("thread/resume").length === 2);
+    respond(pending("thread/resume")[1]!.id, { thread: controlledThread("A", "낡은 이름") });
+    await waitFor(() => pending("thread/turns/list").length === 1);
+    emit({ method: "thread/name/updated", params: { threadId: "A", threadName: "최신 이름" } });
+    respond(pending("thread/turns/list")[0]!.id, { data: [], nextCursor: null });
+    await second;
+    expect(titleInList()).toBe("최신 이름");
+    expect(store.snapshot.transcript?.title).toBe("최신 이름");
+  });
+
   it("rejects an old A page and an old error after a new A resume", async () => {
     const { session, store, pending, respond, fail } = await setup();
     const firstA = session.openThread("A");

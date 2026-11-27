@@ -248,6 +248,10 @@ export class DesktopSession {
    */
   private removedThreadIds = new Set<string>();
   private renamedThreads = new Map<string, string>();
+  // List/resume responses cannot overwrite names learned or edited after the request started.
+  private titleRevision = 0;
+  private readonly titleRevisions = new Map<string, number>();
+  private readonly pendingThreadRenames = new Map<string, number>();
   private readonly provisionalTitles = new ProvisionalThreadTitles();
   /** 이 접속에서 생기거나 보관을 푼 스레드이다. 그 전에 읽기 시작한 목록에는 없을 수 있다. */
   private addedThreads = new Map<string, Thread>();
@@ -765,10 +769,18 @@ export class DesktopSession {
     const trimmed = name.trim();
     if (!trimmed) throw new Error("이름이 비어 있습니다.");
     this.provisionalTitles.stopGenerating(threadId);
-    await this.client.request("thread/name/set", { threadId, name: trimmed });
-    this.provisionalTitles.forget(threadId);
-    this.renamedThreads.set(threadId, trimmed);
-    this.store.renameThread(threadId, trimmed);
+    const revision = this.advanceTitleRevision(threadId);
+    this.pendingThreadRenames.set(threadId, revision);
+    try {
+      await this.client.request("thread/name/set", { threadId, name: trimmed });
+      if (this.pendingThreadRenames.get(threadId) === revision
+          && this.titleRevisions.get(threadId) === revision) this.recordThreadName(threadId, trimmed);
+    } finally {
+      if (this.pendingThreadRenames.get(threadId) === revision) {
+        this.pendingThreadRenames.delete(threadId);
+        this.advanceTitleRevision(threadId);
+      }
+    }
   }
 
   /** 스레드를 보관한다. 목록에서 빠지고 다른 창에는 `thread/archived` 로 알려진다. */
@@ -922,15 +934,19 @@ export class DesktopSession {
       const generation = ++this.listGeneration;
       this.removedThreadIds.clear();
       this.renamedThreads.clear();
+      this.titleRevisions.clear();
+      this.pendingThreadRenames.clear();
+      this.titleRevision += 1;
       this.provisionalTitles.clear();
       this.addedThreads.clear();
+      const titleReadRevision = this.titleRevision;
       const threads = await this.listAllThreads(true).finally(() => {
         this.statusChangesWhileListing = null;
       });
       this.store.setSession({
         gateway,
         versionCheck: checkCodexVersion(GENERATED_CODEX_VERSION, gateway.codexVersion),
-        folders: groupThreadsByCwd(this.withLifecycleChanges(threads)),
+        folders: groupThreadsByCwd(this.withLifecycleChanges(threads, titleReadRevision)),
       });
       // 이 창이 아직 구독하지 않은 스레드도 목록의 상태로 진행 중 표시를 채운다.
       this.store.setActiveThreads(activeThreadIds(threads, statusChanges));
@@ -1000,9 +1016,10 @@ export class DesktopSession {
    */
   private async addThreadsFromRolloutScan(generation: number): Promise<void> {
     try {
+      const titleReadRevision = this.titleRevision;
       const threads = await this.listAllThreads(false);
-      if (generation === this.listGeneration) {
-        this.store.mergeFolders(groupThreadsByCwd(this.withLifecycleChanges(threads)));
+      if (generation === this.listGeneration && this.connected) {
+        this.store.mergeFolders(groupThreadsByCwd(this.withLifecycleChanges(threads, titleReadRevision)));
       }
     } catch {
       // 상태 DB 목록은 이미 보인다. 접속이 끊겨서 실패했으면 다시 연결할 때 다시 검사한다.
@@ -1046,6 +1063,7 @@ export class DesktopSession {
       return;
     }
     const settingsRevision = this.nextTurnSettings.snapshot(threadId).currentRevision;
+    const titleReadRevision = this.titleRevision;
     // 요청마다 버퍼를 따로 둔다. 빠르게 스레드를 바꿔 resume 이 겹쳐도 먼저 끝난 요청이 다음 요청의 버퍼를 지우지 않는다.
     const loading: ResumeLoading = { threadId, buffer: [] };
     this.loading = loading;
@@ -1068,7 +1086,7 @@ export class DesktopSession {
       this.nextTurnSettings.observeSnapshot(threadId, opened.model ?? opened.thread.model,
         opened.effort ?? opened.thread.reasoningEffort, settingsRevision, { approvalPolicy: opened.approvalPolicy, sandbox: opened.sandbox });
       if (opened.writerElsewhere) this.provisionalTitles.forget(threadId);
-      let transcript = transcriptFromThread({ ...opened.thread, preview: this.provisionalTitles.preview(threadId, opened.thread.name, opened.thread.preview) });
+      let transcript = transcriptFromThread({ ...opened.thread, preview: this.provisionalTitles.preview(threadId, null, opened.thread.preview) });
       // 서버가 턴을 함께 보냈으면(예: 녹화 재생) 그대로 쓴다.
       if (transcript.turns.length === 0) {
         const page = await this.readTurnPage(threadId, null);
@@ -1077,7 +1095,11 @@ export class DesktopSession {
         }
         transcript = prependOlderTurns(transcript, page.data, page.nextCursor);
       }
-      this.store.setTranscript(applyNotifications(transcript, loading.buffer));
+      // Reconcile the authoritative name only after the complete resume is still current.
+      if (opened.thread.id === threadId) this.observeThreadName(opened.thread, titleReadRevision);
+      const title = this.renamedThreads.get(threadId);
+      const loaded = applyNotifications(transcript, loading.buffer);
+      this.store.setTranscript(title === undefined ? loaded : { ...loaded, title });
     } catch (error) {
       if (isCurrent()) {
         this.store.setTranscript(null, errorMessage(error));
@@ -1104,7 +1126,8 @@ export class DesktopSession {
   }
 
   /** 목록 결과에 이 접속 중 생기거나 보관을 푼 스레드를 더하고, 보관·삭제된 스레드를 빼고, 바뀐 제목을 넣는다. */
-  private withLifecycleChanges(threads: readonly Thread[]): Thread[] {
+  private withLifecycleChanges(threads: readonly Thread[], titleReadRevision: number): Thread[] {
+    for (const thread of threads) this.observeThreadName(thread, titleReadRevision);
     return [...threads, ...this.addedThreads.values()]
       .filter((thread) => !this.removedThreadIds.has(thread.id))
       .map((thread) => {
@@ -1112,6 +1135,27 @@ export class DesktopSession {
         const observed = name ?? thread.name;
         return { ...thread, name: observed, preview: this.provisionalTitles.preview(thread.id, observed, thread.preview) };
       });
+  }
+
+  private advanceTitleRevision(threadId: string): number {
+    const revision = ++this.titleRevision;
+    this.titleRevisions.set(threadId, revision);
+    return revision;
+  }
+
+  private recordThreadName(threadId: string, name: string): void {
+    this.advanceTitleRevision(threadId);
+    this.provisionalTitles.forget(threadId);
+    this.renamedThreads.set(threadId, name);
+    this.store.renameThread(threadId, name);
+    this.store.updateTranscript(current => current.threadId === threadId ? { ...current, title: name } : current);
+  }
+
+  private observeThreadName(thread: Thread, readRevision: number): void {
+    if (!thread.name?.trim() || this.removedThreadIds.has(thread.id)
+        || this.pendingThreadRenames.has(thread.id)
+        || (this.titleRevisions.get(thread.id) ?? 0) > readRevision) return;
+    this.recordThreadName(thread.id, thread.name);
   }
 
   /** 다른 곳에서 보관을 푼 스레드를 읽어 사이드바에 다시 넣는다. 알림에는 스레드 id 만 있다. */
@@ -1236,11 +1280,10 @@ export class DesktopSession {
     }
     if (method === "thread/name/updated") {
       const name = (params as { threadName?: string }).threadName;
-      if (name) {
-        this.provisionalTitles.forget(threadId);
-        this.renamedThreads.set(threadId, name);
-        this.store.renameThread(threadId, name);
-      }
+      if (name) this.recordThreadName(threadId, name);
+      // The name was applied immediately to both projections. Do not batch it again:
+      // a delayed frame could otherwise overwrite a newer manual rename.
+      return;
     }
     if (method === "thread/archived" || method === "thread/deleted") {
       this.nextTurnQueue.pause(threadId, "대화가 보관되거나 삭제되어 예약을 멈췄습니다.");
