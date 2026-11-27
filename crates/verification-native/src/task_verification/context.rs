@@ -6,12 +6,10 @@ use std::time::Instant;
 use anyhow::{Context, Result, bail};
 
 use super::environment::{self, HostEnvironment, git_path};
-use crate::adapter::outbound::filesystem::task_evidence_artifact::files::{
-    StableFile, TemporaryFile,
-};
-use crate::private_sqlite::PinnedPrivateDirectory;
-use crate::subprocess::controlled::{ControlledTermination, wait_with_output_controlled};
-use crate::trusted_executable::PinnedNativeExecutable;
+use akra_native::private_path::PinnedPrivateDirectory;
+use akra_native::stable_file::{StableFile, TemporaryFile};
+use akra_native::subprocess::controlled::{ControlledTermination, wait_with_output_controlled};
+use akra_native::trusted_executable::PinnedNativeExecutable;
 
 const HOME: usize = 0;
 const TEMP: usize = 1;
@@ -39,9 +37,8 @@ impl PrivateGitContext {
         deadline: Instant,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Self> {
-        let root = crate::adapter::outbound::github::automation::create_private_temp_directory(
-            "akra-task-verification",
-        );
+        let root =
+            akra_native::private_temp::create_private_temp_directory("akra-task-verification");
         #[cfg(test)]
         if let Err(error) = &root {
             super::diagnostics::report("allocate_private_context", error);
@@ -94,7 +91,7 @@ impl PrivateGitContext {
                 "--null",
                 "--name-only",
                 "--get-regexp",
-                crate::git_execution_guard::EXECUTABLE_CONFIG_SECTION_REGEX,
+                crate::git_config::EXECUTABLE_CONFIG_SECTION_REGEX,
             ],
             deadline,
             cancelled,
@@ -102,7 +99,7 @@ impl PrivateGitContext {
         if !audit.status.success() && audit.status.code() != Some(1) {
             bail!("source Git configuration audit failed");
         }
-        crate::git_execution_guard::validate_host_git_execution_config_keys(&audit.stdout)?;
+        crate::git_config::validate_host_git_execution_config_keys(&audit.stdout)?;
         let top = context.source_text(
             binary,
             workspace,
@@ -263,7 +260,7 @@ impl PrivateGitContext {
         deadline: Instant,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Output> {
-        let mut command = crate::git_subprocess::command_with_program(
+        let mut command = crate::git_command::command_with_program(
             binary.path().as_os_str(),
             std::iter::empty::<&str>(),
         );
@@ -325,7 +322,7 @@ fn checked_output(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let output = wait_with_output_controlled(
-        crate::subprocess::spawn(command)?,
+        akra_native::subprocess::spawn(command)?,
         deadline,
         cancelled,
         limit,
@@ -372,7 +369,7 @@ fn validate_source_objects(path: &Path) -> Result<()> {
     }
     #[cfg(windows)]
     {
-        use crate::private_fs::*;
+        use akra_native::private_fs::*;
         use std::os::windows::fs::OpenOptionsExt;
         let file = fs::OpenOptions::new()
             .read(true)
