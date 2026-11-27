@@ -433,6 +433,10 @@ export function App() {
   // 접속이 끊기면 턴의 상태를 알 수 없다. 그때는 일하는 중으로 치지 않는다: 잠자기 방지가 켜진 채로 남지 않는다.
   const working = useDesktopStore((state) => state.connection?.phase === "connected" && state.activeThreadIds.length > 0);
   useEffect(() => window.akra.settings.reportWorking(working), [working]);
+  const badgeKernel = useDesktopStore(state => state.connection?.phase === "connected" && state.kernel.phase === "attached"
+    && state.kernel.attentionItems !== null ? state.kernel.kernel : null);
+  const badgeCount = useDesktopStore(state => state.kernel.attentionItems?.length ?? 0);
+  useEffect(() => window.akra.settings.reportAttention(badgeKernel, badgeCount), [badgeKernel, badgeCount]);
   // 프로젝트(열린 스레드의 폴더)가 바뀌면 이 창이 연 로컬 복원본을 다시 잠근다 (#2427).
   useEffect(() => () => window.akra.vaultRestore.projectChanged(), [openCwd]);
 
@@ -695,7 +699,11 @@ export function App() {
         if (state.kernel.kernel === previous.kernel.kernel && state.kernel.phase === "attached"
           && state.kernel.attentionItems !== previous.kernel.attentionItems) {
           const count = newAttentionCount(previous.kernel.attentionItems, state.kernel.attentionItems);
-          if (count && document.hasFocus()) toast(`새 응답 필요 항목 ${count}개가 있습니다.`);
+          if (count) void window.akra.isAppFocused("window").then(focused => {
+            const current = useDesktopStore.getState().kernel;
+            if (focused && current.phase === "attached" && current.kernel === state.kernel.kernel
+              && current.attentionItems === state.kernel.attentionItems) toast(`새 응답 필요 항목 ${count}개가 있습니다.`);
+          });
         }
         for (const event of issueDecisionAttentionEvents(previous, state)) {
           notifyIssueDecision(() => { setIssueAttentionTarget({ ...event }); openPanel("issues"); }, `akra:issue-decision:${event.kernel}:${event.decisionId}`,

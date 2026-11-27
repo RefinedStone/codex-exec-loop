@@ -108,6 +108,7 @@ export const IPC_CHANNELS = {
   settingsChanged: "akra:settings-changed",
   settingsOpen: "akra:settings-open",
   reportWorking: "akra:report-working",
+  reportAttention: "akra:report-attention",
   vaultRestoreOpen: "akra:vault-restore-open",
   vaultRestoreProjectChanged: "akra:vault-restore-project-changed",
   skillsList: "akra:skills-list",
@@ -481,7 +482,7 @@ export interface AkraBridge {
   dots: DotsBridge;
   zoom: ZoomBridge;
   /** 이 앱의 창 가운데 하나에 포커스가 있는지 묻는다. 브라우저 패널에 포커스가 있어도 true 이다. */
-  isAppFocused(): Promise<boolean>;
+  isAppFocused(scope?: "window"): Promise<boolean>;
   settings: SettingsBridge;
   skills: SkillsBridge;
   /** 로컬 복원본 창을 연다 (#2427). 복원한 글은 이 버스로 오지 않는다. */
@@ -499,6 +500,7 @@ export interface SettingsBridge {
   onOpen(listener: () => void): () => void;
   /** 이 창에 실행 중인 턴이 있는지 알린다. main 이 "일할 때만 잠자기 방지"에 쓴다. */
   reportWorking(working: boolean): void;
+  reportAttention(kernel: string | null, count: number): void;
 }
 
 /** 영역별 확대이다 (#2626). 값은 main 이 가지고 저장한다. renderer 가 영역마다 CSS `zoom` 으로 적용한다. */

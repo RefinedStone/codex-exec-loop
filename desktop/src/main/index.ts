@@ -1,4 +1,5 @@
 import { revealStoragePath } from "./storageReveal";
+import { reportAttention } from "./attentionBadge";
 // Electron main: Gateway 문자열 중계와 native UI를 소유한다. 확인 프로토콜은 별도 utility process에서 처리한다.
 import { spawn } from "node:child_process";
 import { lstat } from "node:fs/promises";
@@ -463,6 +464,7 @@ function createWindow(dotQuery?: { dotWindow: string; dot: string }): BrowserWin
     });
     window.once("closed", () => {
       mainWindows.delete(window);
+      reportAttention(window, mainWindows, null, 0);
       // A hidden chat host or its sign-in popup must not keep Desktop alive after the last application window closes.
       const remaining = BrowserWindow.getAllWindows().filter((other) => !delegatedChatWindow.ownsPopup(other));
       if (!remaining.length && process.platform !== "darwin") app.quit();
@@ -510,6 +512,7 @@ function createWindow(dotQuery?: { dotWindow: string; dot: string }): BrowserWin
   });
   // A crashed renderer never sends ready again; close stale native resources.
   contents.on("render-process-gone", () => {
+    if (mainWindows.has(window)) reportAttention(window, mainWindows, null, 0);
     diagnostics.get(contentsId)?.invalidate();
     closeRendererResources(contentsId);
   });
@@ -830,7 +833,10 @@ ipcMain.on(IPC_CHANNELS.openExternal, (_event, url: unknown) => {
 
 });
 
-ipcMain.handle(IPC_CHANNELS.appFocused, () => BrowserWindow.getFocusedWindow() !== null);
+ipcMain.handle(IPC_CHANNELS.appFocused, (event, scope: unknown) => {
+  const focused = BrowserWindow.getFocusedWindow();
+  return scope === "window" ? focused !== null && focused.webContents === event.sender : focused !== null;
+});
 ipcMain.handle(IPC_CHANNELS.zoomGet, () => windowState.zooms);
 ipcMain.on(IPC_CHANNELS.zoomStep, (event, scope: unknown, direction: unknown) => {
   if (isZoomScope(scope) && isZoomDirection(direction)) stepZoom(scope, direction, event.sender);
@@ -846,6 +852,12 @@ ipcMain.handle(IPC_CHANNELS.settingsSet, (_event, settings: unknown) => {
   }
   updateKeepAwake();
   return appSettings;
+});
+ipcMain.on(IPC_CHANNELS.reportAttention, (event, kernel: unknown, count: unknown) => {
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  if (owner && mainWindows.has(owner) && event.senderFrame === event.sender.mainFrame && isAppUrl(event.sender.getURL(), event.sender)) {
+    reportAttention(owner, mainWindows, kernel, count);
+  }
 });
 ipcMain.on(IPC_CHANNELS.reportWorking, (event, working: unknown) => {
   if (working === true) {

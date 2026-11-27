@@ -1367,7 +1367,12 @@ The Gateway records the external documents that a thread mentions, without a mod
   in the user and agent messages of the open thread, turn by turn. Messages and code blocks have copy buttons.
   In an empty composer the arrow keys recall sent prompts (kept in the window's local storage). While the
   window is not focused, a finished or failed turn and a new approval request raise an OS notification that
-  names the thread and opens it on click
+  names the thread and opens it on click. The taskbar overlay (Windows) or Dock badge (macOS)
+  counts unresolved kernel attention from repositories with a current report in an open main window.
+  Windows attached to the same kernel count once. Failed reads and closed windows withdraw their
+  report; read and snooze do not hide a demand. Only the focused native window shows a grouped
+  toast for new demands. `Cmd/Ctrl+Y` cycles thread subjects; it distinguishes no target from
+  an unavailable list
   (`desktop/src/main/windowState.ts`, `desktop/src/main/contextMenuItems.ts`,
   `desktop/src/renderer/session/navHistory.ts`, `desktop/src/renderer/conversation/find.ts`,
   `desktop/src/renderer/session/attention.ts`).

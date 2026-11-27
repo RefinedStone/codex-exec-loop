@@ -104,7 +104,7 @@ function harness(readOnly = false, scheduler: (callback: () => void) => void = (
     remote: { open: () => undefined, close: () => undefined, send: () => undefined, onMessage: () => () => undefined, onConnectionState: () => () => undefined },
     zoom: { get: () => Promise.resolve({}), step: () => undefined, onChanged: () => () => undefined, onCommand: () => () => undefined },
     isAppFocused: () => Promise.resolve(false),
-    settings: { get: () => Promise.resolve(DEFAULT_SETTINGS), set: () => Promise.resolve(DEFAULT_SETTINGS), onChanged: () => () => undefined, onOpen: () => () => undefined, reportWorking: () => undefined },
+    settings: { get: () => Promise.resolve(DEFAULT_SETTINGS), set: () => Promise.resolve(DEFAULT_SETTINGS), onChanged: () => () => undefined, onOpen: () => () => undefined, reportWorking: () => undefined, reportAttention: () => undefined },
     skills: {
       list: () => Promise.resolve([]),
       link: () => Promise.resolve({ ok: true }),
