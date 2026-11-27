@@ -76,6 +76,20 @@ src/test_utils/pr_review_loopback.rs는 임의 포트 바인딩을 사용하지�
 99238e87 재검토도 소스 대조로 수행했으며 추가 시험이나 CI 조회를 실행하지 않았다.
 비교 자료가 없으므로 성능 향상과 안정성 통과를 선언하지 않는다.
 
+## 이미 빌드한 시험의 개별 시간 진단
+
+stable libtest의 기본 출력에는 개별 실행 시간이 없다. 기본 CI 실행기는 유지하며, `scripts/ci-rust-test-profile.mjs`로 필요한 일반 시험만 선택해서 측정할 수 있다.
+
+```text
+node scripts/ci-rust-test-profile.mjs <local-test-executable> <output.json> [exact-test-name ...]
+```
+
+이름을 생략하면 해당 executable의 일반 시험 전체를 하나씩 실행하므로, 큰 lib의 진단은 기존 로그가 지목한 이름부터 시작한다. ignored 시험은 이름을 명시해도 실행하지 않는다. 실패·signal 종료·0개 통과는 incomplete 영수증과 실패 종료로 남으며 retry하지 않는다.
+
+이미 빌드된 신뢰하는 로컬 executable을 해당 소스와 같은 작업 위치에서만 사용한다. 분리 실행은 원래 병렬 libtest의 공유 상태나 경합 조건을 재현하지 않는다. JSON에 이 제한과 바이너리 SHA-256·OS·선택 목록을 기록한다. 프로세스 시작·종료를 포함한 wall time을 기본 CI의 성능 개선율로 계산하지 않는다.
+
+[#2865의 architecture 병목 및 로컬 전후 근거](../validation/ci-linux-test-performance-2026-11-27.md)를 참고한다. Linux의 실제 job 개선 여부는 같은 조건의 CI 표본으로 별도 인수한다.
+
 ## 목록 비교 도구
 
 scripts/ci-rust-test-inventory.mjs는 Cargo가 만든 test executable의 --list 결과와
