@@ -1,0 +1,210 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-11-27T07:22:30.955Z",
+  "platform": "win32",
+  "result": {
+    "preparedTargets": 3,
+    "executedGroups": 4,
+    "executedTests": 5
+  },
+  "explicit": {
+    "preparedTargets": 1,
+    "executedGroups": 1,
+    "executedTests": 1
+  },
+  "resultRecords": [
+    {
+      "contractId": "root_contract",
+      "filter": "root_contract",
+      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-WMeI9V#akra-ade@0.0.0",
+      "package": "akra-ade",
+      "target": {
+        "name": "shared",
+        "kind": "lib"
+      },
+      "os": "win32",
+      "features": "default",
+      "noDefaultFeatures": false,
+      "profile": "test",
+      "targetTriple": "host",
+      "phase": "started",
+      "index": 1,
+      "total": 4,
+      "expectedTests": 1
+    },
+    {
+      "contractId": "root_contract",
+      "filter": "root_contract",
+      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-WMeI9V#akra-ade@0.0.0",
+      "package": "akra-ade",
+      "target": {
+        "name": "shared",
+        "kind": "lib"
+      },
+      "os": "win32",
+      "features": "default",
+      "noDefaultFeatures": false,
+      "profile": "test",
+      "targetTriple": "host",
+      "phase": "finished",
+      "status": "passed",
+      "passed": 1,
+      "durationMs": 24
+    },
+    {
+      "contractId": "old::native::contract",
+      "filter": "old::native::contract",
+      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-WMeI9V/feature#0.0.0",
+      "package": "feature",
+      "target": {
+        "name": "shared",
+        "kind": "lib"
+      },
+      "os": "win32",
+      "features": "default",
+      "noDefaultFeatures": false,
+      "profile": "test",
+      "targetTriple": "host",
+      "phase": "started",
+      "index": 2,
+      "total": 4,
+      "expectedTests": 1
+    },
+    {
+      "contractId": "old::native::contract",
+      "filter": "old::native::contract",
+      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-WMeI9V/feature#0.0.0",
+      "package": "feature",
+      "target": {
+        "name": "shared",
+        "kind": "lib"
+      },
+      "os": "win32",
+      "features": "default",
+      "noDefaultFeatures": false,
+      "profile": "test",
+      "targetTriple": "host",
+      "phase": "finished",
+      "status": "passed",
+      "passed": 1,
+      "durationMs": 22
+    },
+    {
+      "contractId": "member remainder",
+      "filter": "member remainder",
+      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-WMeI9V/feature#0.0.0",
+      "package": "feature",
+      "target": {
+        "name": "shared",
+        "kind": "lib"
+      },
+      "os": "win32",
+      "features": "default",
+      "noDefaultFeatures": false,
+      "profile": "test",
+      "targetTriple": "host",
+      "phase": "started",
+      "index": 3,
+      "total": 4,
+      "expectedTests": 2
+    },
+    {
+      "contractId": "member remainder",
+      "filter": "member remainder",
+      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-WMeI9V/feature#0.0.0",
+      "package": "feature",
+      "target": {
+        "name": "shared",
+        "kind": "lib"
+      },
+      "os": "win32",
+      "features": "default",
+      "noDefaultFeatures": false,
+      "profile": "test",
+      "targetTriple": "host",
+      "phase": "finished",
+      "status": "passed",
+      "passed": 2,
+      "durationMs": 23
+    },
+    {
+      "contractId": "member remainder",
+      "filter": "member remainder",
+      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-WMeI9V/feature#0.0.0",
+      "package": "feature",
+      "target": {
+        "name": "fence",
+        "kind": "test"
+      },
+      "os": "win32",
+      "features": "default",
+      "noDefaultFeatures": false,
+      "profile": "test",
+      "targetTriple": "host",
+      "phase": "started",
+      "index": 4,
+      "total": 4,
+      "expectedTests": 1
+    },
+    {
+      "contractId": "member remainder",
+      "filter": "member remainder",
+      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-WMeI9V/feature#0.0.0",
+      "package": "feature",
+      "target": {
+        "name": "fence",
+        "kind": "test"
+      },
+      "os": "win32",
+      "features": "default",
+      "noDefaultFeatures": false,
+      "profile": "test",
+      "targetTriple": "host",
+      "phase": "finished",
+      "status": "passed",
+      "passed": 1,
+      "durationMs": 23
+    },
+    {
+      "contractId": "member-doctest",
+      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-WMeI9V/feature#0.0.0",
+      "package": "feature",
+      "target": {
+        "kind": "doc",
+        "name": "feature"
+      },
+      "os": "win32",
+      "features": "default",
+      "noDefaultFeatures": false,
+      "profile": "test",
+      "targetTriple": "host",
+      "phase": "started"
+    },
+    {
+      "contractId": "member-doctest",
+      "packageId": "path+file:///C:/Users/dorani/AppData/Local/Temp/akra-contract-targets-WMeI9V/feature#0.0.0",
+      "package": "feature",
+      "target": {
+        "kind": "doc",
+        "name": "feature"
+      },
+      "os": "win32",
+      "features": "default",
+      "noDefaultFeatures": false,
+      "profile": "test",
+      "targetTriple": "host",
+      "phase": "finished",
+      "status": "passed",
+      "durationMs": 496
+    }
+  ],
+  "checks": [
+    "same-name targets in different packages",
+    "moved filter inventory",
+    "non-overlapping member remainder",
+    "ignored helper not enabled",
+    "integration target executed",
+    "doctest executed",
+    "explicit package/integration target"
+  ]
+}

@@ -9,8 +9,14 @@ import {
   testRuntimeEnvironment,
 } from "./run_native_rust_contracts.mjs";
 
+const packageId="opaque:root";
+const metadata={workspace_root:process.cwd(),workspace_members:[packageId],packages:[{id:packageId,name:"akra-ade",manifest_path:process.cwd()+"/Cargo.toml",targets:[{name:"akra_ade",kind:["lib"],test:true}]}]};
+const ownership={packages:[{name:"akra-ade",state:"active"}],transfers:[]};
+const request={packageId,package:"akra-ade",target:{name:"akra_ade",kind:"lib"}};
+
 const artifact = (executable, changes = {}) => ({
   reason: "compiler-artifact",
+  package_id: packageId,
   target: { name: "akra_ade", kind: ["lib"] },
   profile: { test: true },
   executable,
@@ -24,20 +30,21 @@ test("prepares once and executes every filter with identical build options and e
     "--target-dir", "target with spaces", "--timings"];
   const env = { CARGO_TARGET_DIR: "external target", AKRA_FIXTURE: "1", PATH: "original-bin" };
   await runNativeContracts([...options, "--", "first::", "second::"], {
-    env,
+    env, metadata, ownership,
     write() {},
     record() {},
     run(command, args, settings) {
       calls.push({ command, args, settings });
       if (command === "cargo") return { status: 0, stdout: json(artifact("/target/debug/deps/akra-tests")) };
+      if (args.includes("--ignored")) return {status:0,stdout:""};
       if (args[0] === "--list") return { status: 0, stdout: "first::passes: test\nsecond::passes: test\n" };
       return { status: 0, stdout: "test result: ok. 1 passed; 0 failed; 0 ignored;\n" };
     },
   });
-  assert.equal(calls.length, 4);
-  assert.deepEqual(calls[0].args, ["test", "--locked", "--lib", "--no-run", "--message-format=json", ...options]);
+  assert.equal(calls.length, 5);
+  assert.deepEqual(calls[0].args, ["test", "--locked", "--lib", "--package", packageId, "--no-run", "--message-format=json", ...options]);
   assert.deepEqual(calls[0].settings.env, env);
-  assert.deepEqual(calls.slice(2).map((call) => call.args), [["first::", "--nocapture"], ["second::", "--nocapture"]]);
+  assert.deepEqual(calls.slice(3).map((call) => call.args), [["first::passes", "--exact", "--nocapture"], ["second::passes", "--exact", "--nocapture"]]);
   assert.ok(calls.slice(1).every((call) => call.settings.env.CARGO_TARGET_DIR === env.CARGO_TARGET_DIR));
   assert.ok(calls.slice(1).every((call) => call.settings.env.AKRA_FIXTURE === "1"));
 });
@@ -61,22 +68,23 @@ test("only accepts the unique Akra lib test artifact, not dependencies or produc
     artifact("/ordinary", { profile: { test: false } }),
     artifact("/actual"),
   ];
-  assert.equal(libraryTestExecutable(messages.map(json).join("")), "/actual");
-  assert.throws(() => libraryTestExecutable(json(messages[0])), /reported 0/);
-  assert.throws(() => libraryTestExecutable(json(artifact("/one")) + json(artifact("/two"))), /reported 2/);
-  assert.throws(() => libraryTestExecutable("not cargo json\n"));
+  assert.equal(libraryTestExecutable(messages.map(json).join(""), request), "/actual");
+  assert.throws(() => libraryTestExecutable(json(messages[0]), request), /reported 0/);
+  assert.throws(() => libraryTestExecutable(json(artifact("/one")) + json(artifact("/two")), request), /reported 2/);
+  assert.throws(() => libraryTestExecutable("not cargo json\n", request));
 });
 
 test("missing filters, all-ignored results, failing builds and failed or signalled tests fail closed", async () => {
   const check = ({ buildStatus = 0, listing = "one::test: test\n", testResult = {} } = {}) => {
     const calls = [];
     const operation = () => runNativeContracts(["--", "one::"], {
-      write() {},
+      metadata, ownership, write() {},
     record() {},
       run(command, args) {
         calls.push(args);
         if (command === "cargo") return { status: buildStatus, stdout: json(artifact("/test")) };
-        if (args[0] === "--list") return { status: 0, stdout: listing };
+        if (args.includes("--ignored")) return {status:0,stdout:""};
+      if (args[0] === "--list") return { status: 0, stdout: listing };
         return { status: 0, stdout: "test result: ok. 1 passed; 0 failed;\n", ...testResult };
       },
     });
@@ -92,7 +100,7 @@ test("missing filters, all-ignored results, failing builds and failed or signall
     const { operation, calls } = check(scenario);
     await assert.rejects(operation);
     if (scenario.buildStatus) assert.equal(calls.length, 1);
-    if (scenario.listing) assert.equal(calls.length, 2);
+    if (scenario.listing) assert.equal(calls.length, 3);
   }
 });
 
