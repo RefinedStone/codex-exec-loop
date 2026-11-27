@@ -1,0 +1,151 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-27T06:47:26.013Z",
+  "toolchain": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.95.0\nLLVM version: 22.1.2",
+  "os": "win32",
+  "architecture": "x64",
+  "scope": "isolated-cache-correctness-fixture; not an Akra performance measurement",
+  "reproduce": "node scripts/check_ci_cache_inputs.mjs",
+  "records": [
+    {
+      "label": "cold",
+      "seconds": 0.8057799999999999,
+      "exitCode": 0,
+      "cacheStatus": "missing_snapshot",
+      "restoredInputs": 0,
+      "changedInputs": 0,
+      "cargo": [
+        "   Compiling akra-cache-inputs-proof v0.1.0 ($FIXTURE/repo)",
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.57s"
+      ],
+      "tests": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "sealStatus": "sealed"
+    },
+    {
+      "label": "unchanged",
+      "seconds": 0.07008090000000004,
+      "exitCode": 0,
+      "cacheStatus": "matched_snapshot",
+      "restoredInputs": 0,
+      "changedInputs": 0,
+      "cargo": [
+        "       Fresh akra-cache-inputs-proof v0.1.0 ($FIXTURE/repo)",
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s"
+      ],
+      "tests": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "sealStatus": "sealed"
+    },
+    {
+      "label": "same-bytes-new-checkout-mtime-without-restore",
+      "seconds": 0.39248469999999996,
+      "exitCode": 0,
+      "cacheStatus": null,
+      "restoredInputs": null,
+      "changedInputs": null,
+      "cargo": [
+        "       Dirty akra-cache-inputs-proof v0.1.0 ($FIXTURE/repo): the file `src\\lib.rs` has changed (13440235643.548121100s, 506122500ns after last build at 13440235643.041998600s)",
+        "   Compiling akra-cache-inputs-proof v0.1.0 ($FIXTURE/repo)",
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s"
+      ],
+      "tests": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "sealStatus": null
+    },
+    {
+      "label": "same-bytes-new-checkout-mtime-with-restore",
+      "seconds": 0.06841409999999996,
+      "exitCode": 0,
+      "cacheStatus": "matched_snapshot",
+      "restoredInputs": 1,
+      "changedInputs": 0,
+      "cargo": [
+        "       Fresh akra-cache-inputs-proof v0.1.0 ($FIXTURE/repo)",
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s"
+      ],
+      "tests": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "sealStatus": "sealed"
+    },
+    {
+      "label": "restored-target-archive-identical-checkout",
+      "seconds": 0.23801830000000018,
+      "exitCode": 0,
+      "cacheStatus": "matched_snapshot",
+      "restoredInputs": 5,
+      "changedInputs": 0,
+      "cargo": [
+        "       Fresh akra-cache-inputs-proof v0.1.0 ($FIXTURE/repo)",
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.01s"
+      ],
+      "tests": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "sealStatus": "sealed"
+    },
+    {
+      "label": "changed-rust-content",
+      "seconds": 0.49122429999999984,
+      "exitCode": 0,
+      "cacheStatus": "matched_snapshot",
+      "restoredInputs": 0,
+      "changedInputs": 1,
+      "cargo": [
+        "       Dirty akra-cache-inputs-proof v0.1.0 ($FIXTURE/repo): the file `src\\lib.rs` has changed (13440235644.776418000s, 1s after last build at 13440235643.737201500s)",
+        "   Compiling akra-cache-inputs-proof v0.1.0 ($FIXTURE/repo)",
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s"
+      ],
+      "tests": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "sealStatus": "sealed"
+    },
+    {
+      "label": "changed-include-str-input",
+      "seconds": 0.23017100000000026,
+      "exitCode": 0,
+      "cacheStatus": "matched_snapshot",
+      "restoredInputs": 0,
+      "changedInputs": 1,
+      "cargo": [
+        "       Dirty akra-cache-inputs-proof v0.1.0 ($FIXTURE/repo): the file `src\\payload.txt` has changed (13440235645.491322700s, 1s after last build at 13440235644.986443300s)",
+        "   Compiling akra-cache-inputs-proof v0.1.0 ($FIXTURE/repo)",
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s"
+      ],
+      "tests": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "sealStatus": "sealed"
+    },
+    {
+      "label": "changed-build-script-environment",
+      "seconds": 0.2467395999999999,
+      "exitCode": 0,
+      "cacheStatus": "matched_snapshot",
+      "restoredInputs": 0,
+      "changedInputs": 0,
+      "cargo": [
+        "       Dirty akra-cache-inputs-proof v0.1.0 ($FIXTURE/repo): the env variable AKRA_CACHE_FIXTURE_VALUE changed",
+        "   Compiling akra-cache-inputs-proof v0.1.0 ($FIXTURE/repo)",
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s"
+      ],
+      "tests": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "sealStatus": "sealed"
+    }
+  ]
+}

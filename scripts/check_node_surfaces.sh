@@ -16,6 +16,8 @@ for script_path in \
   scripts/capture_admin_graphic.mjs \
   scripts/capture_admin_validation_evidence.mjs \
   scripts/agent-plan.mjs \
+  scripts/ci-plan-inputs.mjs \
+  scripts/ci-impact-plan.mjs \
   scripts/check_native_confirmation_process.mjs \
   scripts/ci-scope.mjs \
   scripts/npm-audit-gate.mjs \
@@ -38,6 +40,8 @@ printf '\n==> CI, agent planning, and approval-package tests\n'
 node --test \
   scripts/ci-scope.test.mjs \
   scripts/agent-plan.test.mjs \
+  scripts/ci-plan-inputs.test.mjs \
+  scripts/ci-impact-plan.test.mjs \
   scripts/npm-audit-gate.test.mjs \
   scripts/pr-validation-approval-package.test.mjs \
   scripts/pr-validation-rollout-evidence.test.mjs \

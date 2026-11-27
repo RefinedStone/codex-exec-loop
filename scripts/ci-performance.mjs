@@ -103,11 +103,17 @@ export function compareSamples(samples) {
   }));
 }
 export function createCargoObserver() {
-  const state = { compilingUnits: 0, freshUnits: 0, finished: [], testResults: [] };
+  const state = { compilingUnits: 0, checkingUnits: 0, freshUnits: 0, dirtyUnits: 0,
+    dirtyReasons: [], finished: [], testResults: [] };
   let pending = "";
   const line = (text) => {
     const clean = text.replace(/\x1b\[[0-9;]*m/g, "").trim();
     if (/^Compiling\s/.test(clean)) state.compilingUnits += 1;
+    if (/^Checking\s/.test(clean)) state.checkingUnits += 1;
+    if (/^Dirty\s/.test(clean)) {
+      state.dirtyUnits += 1;
+      if (state.dirtyReasons.length < 128) state.dirtyReasons.push(clean);
+    }
     if (/^Fresh\s/.test(clean)) state.freshUnits += 1;
     if (/^Finished\s/.test(clean)) state.finished.push(clean);
     if (/^test result:/.test(clean)) state.testResults.push(clean);
@@ -151,6 +157,9 @@ export async function measure(label, command, args, {
   observers.forEach((observer) => observer.finish());
   const cargo = {
     compilingUnits: observers.reduce((sum, observer) => sum + observer.state.compilingUnits, 0),
+    checkingUnits: observers.reduce((sum, observer) => sum + observer.state.checkingUnits, 0),
+    dirtyUnits: observers.reduce((sum, observer) => sum + observer.state.dirtyUnits, 0),
+    dirtyReasons: observers.flatMap((observer) => observer.state.dirtyReasons),
     freshUnits: observers.reduce((sum, observer) => sum + observer.state.freshUnits, 0),
     finished: observers.flatMap((observer) => observer.state.finished),
     testResults: observers.flatMap((observer) => observer.state.testResults),

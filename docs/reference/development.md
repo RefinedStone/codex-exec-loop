@@ -49,14 +49,22 @@ split mixed-responsibility files before they pass roughly 800 LOC.
 Local checks are a quick pre-flight; `CI Gate` is the full gate. Before each commit, run
 `git diff --check`, and `cargo fmt --all` when Rust changed.
 
-When Rust or Node source changed, run the deterministic change planner. It classifies the current
-diff using the same policy as GitHub Actions and prints the smallest safe local gate. Skip it for
-docs, CI workflow, or config-only changes: the planner fails closed to the full gate for CI paths,
-and only `CI Gate` can prove a workflow change.
+When Rust or Node source changed, run the deterministic change planner and executor. It uses the
+shared base/head Cargo graph and ownership policy, includes staged, unstaged, untracked, renamed
+and deleted inputs, and recollects their content identity immediately before execution. Unknown
+inputs and root consumers retain the existing full gate. Skip it for docs, CI workflow, or
+config-only changes: use the diff check, and let `CI Gate` prove the workflow.
 
 ```text
-node scripts/agent-plan.mjs
+node scripts/agent-plan.mjs --explain
+node scripts/agent-plan.mjs --run
 ```
+
+`--json` emits a machine-readable plan without executing checks. Saved plans fix the source SHA,
+local contents, base, graph, ownership and requested configuration; changing any of these requires
+a fresh plan. Keep saved JSON under ignored `artifacts/` so the plan file does not become a new
+validation input. See [local validation](ci-local-validation.md) for saved plans, PowerShell/POSIX
+entrypoints, offline metadata, measurements and supported execution conditions.
 
 Common commands are platform-neutral:
 

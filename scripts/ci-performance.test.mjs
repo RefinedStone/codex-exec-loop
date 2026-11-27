@@ -152,3 +152,27 @@ test("measurement cancellation cannot become success when the child handles a si
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
+
+test("Cargo verbose dirty reasons survive chunks and distinguish checking from compilation", () => {
+  const observer = createCargoObserver();
+  observer.feed("\u001b[33m       Di");
+  observer.feed("rty demo v1: the file src/lib.rs has changed\u001b[0m\n    Checking demo v1\n");
+  observer.feed("       Dirty build v1: the env variable INPUT changed\n       Fresh dependency v1\n");
+  observer.finish();
+  assert.equal(observer.state.dirtyUnits, 2);
+  assert.deepEqual(observer.state.dirtyReasons, [
+    "Dirty demo v1: the file src/lib.rs has changed",
+    "Dirty build v1: the env variable INPUT changed",
+  ]);
+  assert.equal(observer.state.checkingUnits, 1);
+  assert.equal(observer.state.compilingUnits, 0);
+  assert.equal(observer.state.freshUnits, 1);
+});
+
+test("verbose dirty reason evidence is bounded while total dirty count stays accurate", () => {
+  const observer = createCargoObserver();
+  for (let index = 0; index < 150; index += 1) observer.feed("Dirty fixture" + index + " v1: changed\n");
+  observer.finish();
+  assert.equal(observer.state.dirtyUnits, 150);
+  assert.equal(observer.state.dirtyReasons.length, 128);
+});

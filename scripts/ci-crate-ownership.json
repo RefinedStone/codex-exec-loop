@@ -1539,5 +1539,13 @@
       ],
       "construction": "inspect; compile-fail external field construction contract"
     }
+  ],
+  "validationOutputs": [
+    {
+      "path": "assets/admin/game/node_modules/",
+      "kind": "npm-ci-install",
+      "manifest": "assets/admin/game/package.json",
+      "lockfile": "assets/admin/game/package-lock.json"
+    }
   ]
 }

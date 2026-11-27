@@ -9,6 +9,25 @@ if [[ -f "${HOME}/.cargo/env" ]]; then
   . "${HOME}/.cargo/env"
 fi
 
+case "${1:-}" in
+  --changed)
+    shift
+    exec node scripts/agent-plan.mjs --run "$@"
+    ;;
+  --full)
+    shift
+    if [[ "$#" -ne 0 ]]; then
+      printf 'The full gate does not accept selective-plan arguments.\n' >&2
+      exit 2
+    fi
+    ;;
+  "") ;;
+  *)
+    printf 'Usage: check_native_pr.sh [--full | --changed <agent-plan arguments>]\n' >&2
+    exit 2
+    ;;
+esac
+
 run_step() {
   local label="$1"
   shift
