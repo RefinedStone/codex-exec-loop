@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { EMPTY_FORK_SNAPSHOT, ForkOutcomeJournal } from "../src/renderer/session/forkOutcomeJournal";
 
 function fixture() {
@@ -80,4 +80,16 @@ describe("fork outcome journal", () => {
     expect(journal.has("source")).toBe(true);
     await expect(journal.begin("source")).rejects.toThrow("storage unavailable");
   });
+});
+
+it("refuses a renderer admission without cross-window locks and writes no marker", async () => {
+  const { storage, data } = fixture();
+  vi.stubGlobal("window", { localStorage: storage, navigator: {} });
+  try {
+    const journal = new ForkOutcomeJournal();
+    await expect(journal.begin("source")).rejects.toThrow("admission lock unavailable");
+    expect(data.size).toBe(0);
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });
