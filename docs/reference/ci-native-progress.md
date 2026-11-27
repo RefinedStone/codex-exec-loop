@@ -22,3 +22,12 @@ job 강제 종료나 전원 손실은 종료 행·artifact 업로드 자체를 �
 진행 계측은 속도 개선 결과가 아니며 실제 시험 단축은 #2864/#2865에서 판단한다.
 
 검증: `node --test scripts/native-rust-contracts.test.mjs scripts/native-contract-progress.test.mjs`.
+
+취소 정리는 직접 자식 하나에만 신호를 보내지 않는다. POSIX에서는 이 실행이 만든 별도 process group을 종료한다.
+Windows에서는 직접 소유한 자식이 살아 있는 동안 부모 환경의 `SystemRoot/System32/taskkill.exe`를 절대경로로
+실행해 `/T /F`로 트리를 종료하고 그 결과까지 확인한다. 이미 Windows 자식이 끝나 후손의 신원을 증명할 수 없으면
+숫자 PID만으로 다른 트리를 겨냥하지 않고 정리 실패를 보고한다.
+
+기본 정리 유예 5초와 출력 배출 1초 이후에도 상속 pipe가 열려 있으면 스트림을 닫고 명시적 실패로 끝낸다.
+정리 실패를 성공이나 정상 취소로 승격하지 않는다. 직접 자식·pipe를 상속한 후손의 실제 종료와,
+부모 종료 뒤 group을 벗어난 writer의 제한된 실패 처리를 Windows와 Linux의 작은 Node fixture로 검증했다.
