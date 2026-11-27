@@ -165,17 +165,6 @@ impl GitOperationService {
         };
         let index = r.pick_index.context("missing pick checkpoint")?;
         let refs = self.history.read_refs(cwd)?.context("not a repository")?;
-        let backup = r
-            .backup_ref
-            .as_deref()
-            .and_then(|b| b.strip_prefix(GIT_BACKUP_REF_PREFIX));
-        if !refs.refs.iter().any(|b| {
-            b.kind == GitGraphRefKind::Backup
-                && Some(b.name.as_str()) == backup
-                && b.target == r.before.commit
-        }) {
-            return Ok(refused("the journal backup is missing or changed"));
-        }
         let head = head_position(&refs).context("missing HEAD")?;
         if head.branch != r.before.branch {
             return Ok(refused("the checked-out branch changed"));
@@ -192,6 +181,37 @@ impl GitOperationService {
                 .is_some_and(|w| same_git_worktree_path(&w.path, &target.path))
         }) {
             return Ok(refused("a turn is running in this worktree"));
+        }
+        let backup_name = r
+            .backup_ref
+            .as_deref()
+            .context("missing backup ref in the sequence journal")?;
+        let backup = backup_name
+            .strip_prefix(GIT_BACKUP_REF_PREFIX)
+            .context("invalid backup ref in the sequence journal")?;
+        let observed_backup = refs
+            .refs
+            .iter()
+            .find(|b| b.kind == GitGraphRefKind::Backup && b.name == backup);
+        match observed_backup {
+            Some(entry) if entry.target == r.before.commit => (),
+            None if index == 0
+                && r.status == GitOperationStatus::Started
+                && head == r.before
+                && condition.operation_in_progress.is_none()
+                && !condition.tracked_changes =>
+            {
+                // Process died after recording intent but before creating its backup; no Git step could have run.
+                if matches!(action, PickAction::Abort) {
+                    r.status = GitOperationStatus::Aborted;
+                    r.finished_at = Some((self.stamp)().0);
+                    self.journal.append(cwd, &r)?;
+                    return Ok(GitOperationOutcome::Done { record: r });
+                }
+                self.workspace
+                    .create_ref(cwd, backup_name, &r.before.commit)?;
+            }
+            _ => return Ok(refused("the journal backup is missing or changed")),
         }
         let receipt = format!("akra-pick-{}-{index}", r.op_id);
         let marker = self.workspace.pick_marker(cwd)?;
