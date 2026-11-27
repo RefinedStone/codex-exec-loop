@@ -166,3 +166,9 @@ recognize(주소의 호스트와 경로) -> 문서(kind, key, url, title_hint) �
 - 처음 여는 아주 긴 스레드는 최근 5,000 아이템만 본다.
 - `akra` 가 PATH 에 없는 환경에서는 에이전트가 `akra mcp`, `akra context` 를 실행하지 못한다.
 - `akra mcp login` 이 app-server 에 `timeoutSecs` 를 넘기지 않아 app-server 의 기본 제한 시간에 먼저 끝난다.
+
+### A03 범위 버전 확인 및 읽음 (첫 조각, #2823)
+
+- `akra/context/refreshScope { cwd, scope }`: 기존 확인 주기와 실패 예산 내에서 연결된 문서의 버전을 갱신한다.
+- `akra/context/markScopeRead { cwd, scope, kind, key, observedVersion }`: 실제 표시한 현재 버전만 그 범위의 읽음으로 기록한다. 누락·낡은 버전은 거절하며 다른 범위의 읽음은 바꾸지 않는다.
+- 기존 스레드 계약과 원격 호스트 차단은 유지한다. task 존재 검사, path prefix 선정 이유와 pin/exclude는 #2823의 후속 범위다.

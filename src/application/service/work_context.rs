@@ -395,6 +395,55 @@ impl WorkContextPort for WorkContextService {
         let scope = self.ledger_scope(request)?;
         self.resources(&scope)
     }
+
+    fn refresh_scope_resources(
+        &self,
+        request: &ContextScopeRequest,
+    ) -> Result<Vec<ContextResource>> {
+        let scope = self.ledger_scope(request)?;
+        self.check_versions(&scope, None)?;
+        self.resources(&scope)
+    }
+
+    fn mark_scope_resource_read(
+        &self,
+        request: &ContextScopeRequest,
+        resource_kind: &str,
+        resource_key: &str,
+        observed_version: &str,
+    ) -> Result<Vec<ContextResource>> {
+        let scope = self.ledger_scope(request)?;
+        // 버전 확인과 읽음 기록을 같은 서비스 잠금으로 직렬화한다.
+        let _version_check = self
+            .version_check
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(link) = self
+            .links(&scope)?
+            .into_iter()
+            .find(|link| link.resource.kind == resource_kind && link.resource.key == resource_key)
+        else {
+            bail!("the scope has no such document");
+        };
+        if observed_version.is_empty()
+            || link
+                .checked_version
+                .as_ref()
+                .is_none_or(|check| check.version != observed_version)
+        {
+            bail!(
+                "the observed document version is no longer current; reload before marking it read"
+            );
+        }
+        self.store.set_read_version(
+            scope.kind,
+            &scope.id,
+            &link.resource,
+            observed_version,
+            true,
+        )?;
+        self.resources(&scope)
+    }
 }
 
 #[cfg(test)]
@@ -1158,6 +1207,51 @@ mod tests {
         assert_eq!(listed[0].confirmed_version.as_deref(), Some("v1"));
         assert_eq!(listed[0].current_version.as_deref(), Some("v2"));
         assert!(listed[0].changed);
+    }
+
+    #[test]
+    fn scoped_refresh_and_read_keep_the_other_scope_and_reject_stale_versions() {
+        let (service, versions, now) = versioned_service("");
+        let service = service.with_repository_identity(Arc::new(FakeRepositories));
+        let repo = scope("/one/main", ContextScope::Repository);
+        let task = scope(
+            "/one/wt",
+            ContextScope::Task {
+                task_id: "T-1".to_string(),
+            },
+        );
+        let url = "https://github.com/a/b/pull/2";
+        versions.set("a/b#2", "v1");
+        service
+            .attach_scope_resource(&attach(repo.clone(), url))
+            .unwrap();
+        service
+            .attach_scope_resource(&attach(task.clone(), url))
+            .unwrap();
+        versions.set("a/b#2", "v2");
+        *now.lock().unwrap() += chrono::Duration::seconds(6 * 60);
+        let refreshed = service.refresh_scope_resources(&task).unwrap();
+        assert!(refreshed[0].changed);
+        assert_eq!(refreshed[0].current_version.as_deref(), Some("v2"));
+        assert!(
+            service
+                .mark_scope_resource_read(&task, "github", "a/b#2", "v1")
+                .is_err()
+        );
+        assert!(
+            service
+                .mark_scope_resource_read(&task, "github", "a/b#3", "v2")
+                .is_err()
+        );
+        assert!(service.scope_resources(&task).unwrap()[0].changed);
+        let read = service
+            .mark_scope_resource_read(&task, "github", "a/b#2", "v2")
+            .unwrap();
+        assert!(!read[0].changed);
+        assert_eq!(read[0].confirmed_version.as_deref(), Some("v2"));
+        let other = service.scope_resources(&repo).unwrap();
+        assert!(other[0].changed);
+        assert_eq!(other[0].confirmed_version.as_deref(), Some("v1"));
     }
 
     #[test]

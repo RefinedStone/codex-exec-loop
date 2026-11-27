@@ -77,4 +77,19 @@ pub trait WorkContextPort: Send + Sync {
 
     /// 범위의 문서 전부이다. 장부의 값만 쓰고 외부 서비스에 묻지 않는다.
     fn scope_resources(&self, request: &ContextScopeRequest) -> Result<Vec<ContextResource>>;
+
+    /// 범위의 버전을 기존 상한과 실패 예산 안에서 확인한다.
+    fn refresh_scope_resources(
+        &self,
+        request: &ContextScopeRequest,
+    ) -> Result<Vec<ContextResource>>;
+
+    /// 사용자가 실제로 본 버전만 기록한다.
+    fn mark_scope_resource_read(
+        &self,
+        request: &ContextScopeRequest,
+        resource_kind: &str,
+        resource_key: &str,
+        observed_version: &str,
+    ) -> Result<Vec<ContextResource>>;
 }
