@@ -153,6 +153,15 @@ impl ProviderWorkApiPort for Api {
         self.begin()?;
         Ok(vec![linear_issue()])
     }
+    fn linear_current_version(
+        &self,
+        _token: &SecretToken,
+        resource_key: &str,
+    ) -> CredentialResult<String> {
+        assert_eq!(resource_key, "team/APP-42");
+        self.begin()?;
+        Ok("2026-11-23T01:02:03.000Z".to_owned())
+    }
     fn linear_issue_prompt(&self, _token: &SecretToken, _id: &str) -> CredentialResult<String> {
         self.begin()?;
         Ok("draft".to_owned())
@@ -232,6 +241,46 @@ fn headless_jira_current_version_needs_no_desktop_session() {
     assert!(service.current_version(&wrong).is_err());
     assert_eq!(api.calls.load(Ordering::SeqCst), 1);
 }
+#[test]
+fn linear_version_provider_skips_missing_connection_and_fences_late_results() {
+    let resource = ExternalResourceRef {
+        kind: "linear".into(),
+        key: "team/APP-42".into(),
+        url: "https://linear.app/team/issue/APP-42/title".into(),
+        title_hint: None,
+    };
+    let (no_linear, creds, api) = fixture(Provider::Jira, None, false);
+    let provider = LinearResourceVersionProvider(no_linear);
+    assert!(!provider.available(&resource));
+    assert!(provider.current_version(&resource).is_err());
+    assert_eq!(creds.reads.load(Ordering::SeqCst), 0);
+    assert_eq!(api.calls.load(Ordering::SeqCst), 0);
+
+    let (service, creds, api) = fixture(Provider::Linear, None, false);
+    let provider = LinearResourceVersionProvider(service);
+    let mut wrong = resource.clone();
+    wrong.key = "other/APP-42".into();
+    assert!(!provider.available(&wrong));
+    assert!(provider.current_version(&wrong).is_err());
+    assert!(provider.available(&resource));
+    assert_eq!(creds.reads.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        provider.current_version(&resource).unwrap(),
+        "2026-11-23T01:02:03.000Z"
+    );
+    assert_eq!(api.calls.load(Ordering::SeqCst), 1);
+
+    let gate = Arc::new(Gate::default());
+    let (service, creds, _) = fixture(Provider::Linear, Some(gate.clone()), false);
+    let task = std::thread::spawn(move || {
+        LinearResourceVersionProvider(service).current_version(&resource)
+    });
+    gate.wait();
+    creds.revision.fetch_add(1, Ordering::SeqCst);
+    gate.release();
+    assert!(task.join().unwrap().is_err());
+}
+
 #[test]
 fn linear_filters_reuse_thirty_item_cache_without_keyring_or_http() {
     let (service, credentials, api) = fixture(Provider::Linear, None, false);

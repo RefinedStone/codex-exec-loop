@@ -22,6 +22,12 @@ pub trait ProviderWorkApiPort: Send + Sync {
     ) -> CredentialResult<String>;
     fn linear_assigned_issues(&self, token: &SecretToken) -> CredentialResult<Vec<LinearIssue>>;
     fn linear_issue_prompt(&self, token: &SecretToken, id: &str) -> CredentialResult<String>;
+    /// Read only the version for the canonical workspace/identifier ledger key.
+    fn linear_current_version(
+        &self,
+        token: &SecretToken,
+        resource_key: &str,
+    ) -> CredentialResult<String>;
 }
 /// Only the native private channel can ask main to open a URL for the current connection.
 pub trait ProviderLinkPort: Send + Sync {

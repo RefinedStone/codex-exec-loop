@@ -376,6 +376,19 @@ impl ExternalResourceRecognizer for GitHubRecognizer {
     }
 }
 
+/// Reuse the exact ledger identity (workspace slug and issue identifier).
+pub fn linear_resource_key_for_url(url: &str) -> Option<String> {
+    if url.len() > 2048
+        || url.contains(['\\', '@'])
+        || url.chars().any(|ch| ch.is_whitespace() || ch.is_control())
+    {
+        return None;
+    }
+    LinearRecognizer
+        .recognize(&https_url_parts(url)?)
+        .map(|resource| resource.key)
+}
+
 struct LinearRecognizer;
 
 impl ExternalResourceRecognizer for LinearRecognizer {

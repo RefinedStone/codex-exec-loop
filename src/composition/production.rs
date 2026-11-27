@@ -538,6 +538,7 @@ pub(crate) fn build_gateway_backend(
                 crate::configuration::akra_home_dir()?,
             )),
             providers.work.clone(),
+            Arc::new(crate::application::service::provider_work::LinearResourceVersionProvider(providers.work.clone())),
             Arc::new(NotionResourceVersionAdapter::new(hub)),
         ])
         .with_repository_identity(Arc::new(

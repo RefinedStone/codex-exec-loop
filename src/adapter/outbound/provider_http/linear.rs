@@ -12,6 +12,8 @@ pub(super) const ISSUES_QUERY: &str = r#"query AkraLinearAssignedIssues {
     }
   }
 }"#;
+pub(super) const VERSION_QUERY: &str =
+    "query AkraLinearVersion($id: String!) { issue(id:$id) { identifier url updatedAt } }";
 pub(super) const DETAIL_QUERY: &str = r#"query AkraLinearIssue($id: String!) {
   issue(id:$id) {
     id identifier title url priority updatedAt branchName
@@ -37,6 +39,20 @@ fn timestamp(value: &Value) -> CredentialResult<String> {
         return Err(ProviderCredentialError::Corrupt);
     }
     Ok(original)
+}
+pub(super) fn version(value: &Value) -> CredentialResult<String> {
+    let original = timestamp(value)?;
+    if original
+        .split_once('.')
+        .is_some_and(|(_, suffix)| suffix.bytes().take_while(u8::is_ascii_digit).count() > 9)
+    {
+        return Err(ProviderCredentialError::Corrupt);
+    }
+    let parsed = chrono::DateTime::parse_from_rfc3339(&original)
+        .map_err(|_| ProviderCredentialError::Corrupt)?;
+    Ok(parsed
+        .with_timezone(&chrono::Utc)
+        .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true))
 }
 fn issue(value: &Value) -> CredentialResult<LinearIssue> {
     object(value)?;

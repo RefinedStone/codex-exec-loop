@@ -272,6 +272,69 @@ fn jira_summary_is_capped_and_version_uses_small_fixed_request() {
     );
 }
 #[test]
+fn linear_resource_version_checks_fixed_query_and_workspace_identity() {
+    let (adapter, http, _) = fixture();
+    let token = SecretToken::from_bytes(Provider::Linear, b"synthetic-linear-version-key".to_vec())
+        .unwrap();
+    for (url, identifier, updated) in [
+        (
+            "https://linear.app/team/issue/APP-42/title",
+            "APP-42",
+            "2026-11-23T01:02:03.123456Z",
+        ),
+        (
+            "https://linear.app/other/issue/APP-42/title",
+            "APP-42",
+            "2026-11-23T01:02:03Z",
+        ),
+        (
+            "https://linear.app/team/issue/APP-42/title",
+            "APP-43",
+            "2026-11-23T01:02:03Z",
+        ),
+        (
+            "https://linear.app/team/issue/APP-42/title",
+            "APP-42",
+            "bad-timestamp",
+        ),
+    ] {
+        http.answer(
+            json!({"data":{"issue":{"url":url,"identifier":identifier,"updatedAt":updated}}}),
+        );
+    }
+    assert_eq!(
+        adapter
+            .linear_current_version(&token, "team/APP-42")
+            .unwrap(),
+        "2026-11-23T01:02:03.123456Z"
+    );
+    for _ in 0..3 {
+        assert_eq!(
+            adapter
+                .linear_current_version(&token, "team/APP-42")
+                .unwrap_err(),
+            ProviderCredentialError::Corrupt
+        );
+    }
+    assert!(
+        adapter
+            .linear_current_version(&token, "team/APP-42?bad")
+            .is_err()
+    );
+    let calls = http.calls.lock().unwrap();
+    assert_eq!(calls.len(), 4);
+    for call in calls.iter() {
+        assert_eq!(call.url, LINEAR_ENDPOINT);
+        assert_eq!(
+            call.body,
+            Some(json!({"query":linear::VERSION_QUERY,"variables":{"id":"APP-42"}}))
+        );
+        assert_eq!(call.limit, VERSION_RESPONSE_LIMIT);
+        assert_eq!(call.timeout, VERSION_TIMEOUT);
+    }
+}
+
+#[test]
 fn linear_query_is_fixed_capped_and_filters_terminal_issues() {
     let (adapter, http, token) = fixture();
     let mut done = issue_value();
