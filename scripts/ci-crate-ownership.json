@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": 2,
+  "revision": 3,
   "baselineSha": "caf1da09aa561d1510b3271cc663b8e5bf3a0690",
   "rootPackage": "akra-ade",
   "packages": [
@@ -464,6 +464,14 @@
       "name": "verification-owner-run-token",
       "owner": "akra-verification",
       "boundary": "retain private construction, redacted Debug and no external deserialization"
+    }
+  ],
+  "validationOutputs": [
+    {
+      "path": "assets/admin/game/node_modules/",
+      "kind": "npm-ci-install",
+      "manifest": "assets/admin/game/package.json",
+      "lockfile": "assets/admin/game/package-lock.json"
     }
   ]
 }
