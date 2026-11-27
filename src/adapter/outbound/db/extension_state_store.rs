@@ -13,9 +13,20 @@ const FILES: DatabaseFiles = DatabaseFiles::new(
     "state.sqlite3-wal",
     "state.sqlite3-shm",
 );
+struct ExtensionScopeLease(File);
+impl Drop for ExtensionScopeLease {
+    fn drop(&mut self) {
+        // A concurrent fork can retain this open file description until exec or exit.
+        // Scope ownership ends with this guard, even while a duplicate handle remains open.
+        if let Err(error) = self.0.unlock() {
+            tracing::warn!(error = %error, "extension state scope lock release failed");
+        }
+    }
+}
 pub(crate) struct SqliteExtensionStateStore {
+    // Fields drop in declaration order: finish closing SQLite before releasing ownership.
     connection: Mutex<PrivateConnection>,
-    _lock: File,
+    _lock: ExtensionScopeLease,
 }
 impl SqliteExtensionStateStore {
     pub fn open(root: &Path) -> Result<Self> {
@@ -37,6 +48,7 @@ impl SqliteExtensionStateStore {
         let lock = options.open(path)?;
         lock.try_lock()
             .context("another extension host owns this scope")?;
+        let lock = ExtensionScopeLease(lock);
         let mut connection = retry_transient(|| {
             crate::private_sqlite::open_or_create(root, FILES, Synchronous::Full)
         })?;
@@ -126,6 +138,30 @@ fn transient(error: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dropping_the_store_releases_ownership_while_a_duplicate_handle_is_open() {
+        let root = crate::test_utils::platform_safe_temp_dir().join(format!(
+            "akra-extension-store-duplicate-{:032x}",
+            rand::random::<u128>()
+        ));
+        let store = SqliteExtensionStateStore::open(&root).unwrap();
+        // A fork inherits the same open file description; cloning makes that lifetime deterministic.
+        let duplicate = store._lock.0.try_clone().unwrap();
+        assert!(SqliteExtensionStateStore::open(&root).is_err());
+        drop(store);
+
+        let next = SqliteExtensionStateStore::open(&root).unwrap();
+        drop(duplicate);
+        assert!(
+            SqliteExtensionStateStore::open(&root).is_err(),
+            "closing the old duplicate must not release the new owner's lock"
+        );
+        drop(next);
+        let last = SqliteExtensionStateStore::open(&root).unwrap();
+        drop(last);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn native_store_is_single_owner_and_recovers_the_saved_identity() {
         let root = crate::test_utils::platform_safe_temp_dir().join(format!(
