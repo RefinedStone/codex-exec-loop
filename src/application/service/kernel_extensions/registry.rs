@@ -37,6 +37,10 @@ pub(crate) trait ExtensionHandler: Send + Sync {
     fn dedupe_key(&self, _action: &str, _input: &Value) -> Result<Option<String>> {
         Ok(None)
     }
+    /// Bounded response budget for this package; progress keeps the host's smaller limit.
+    fn max_output_bytes(&self) -> usize {
+        super::MAX_PAYLOAD
+    }
     /// Upper bound of this extension's active jobs, below the host-wide bound.
     fn max_active_jobs(&self) -> Option<usize> {
         None
