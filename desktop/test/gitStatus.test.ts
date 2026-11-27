@@ -82,6 +82,50 @@ describe("git file actions", () => {
     await expect(readGitFileDiff(root, "a.txt", false, "invalid")).rejects.toThrow();
   });
 
+  it("preserves unstaged rename coordinates and the complete rename patch", async () => {
+    const { root, git, statuses } = repository({ "old.txt": "unchanged\n" });
+    git("mv", "old.txt", "new.txt");
+    git("reset", "-q");
+    git("add", "-N", "new.txt");
+    expect(await statuses()).toMatchObject({ "new.txt": " R" });
+
+    const diff = await readGitFileDiff(root, "new.txt", false, "index_worktree");
+    expect(diff).toMatchObject({
+      kind: "gitDiff",
+      text: expect.stringContaining("rename from old.txt\nrename to new.txt"),
+      snapshot: { source: "index_worktree", originalPath: "old.txt", path: "new.txt" },
+    });
+    if (diff.kind !== "gitDiff") throw new Error("expected rename patch");
+    expect(diff.text).not.toContain("new file mode");
+  });
+
+  it("does not describe a staged rename as a worktree rename", async () => {
+    const { root, git, write } = repository({ "old.txt": "unchanged\n" });
+    git("mv", "old.txt", "new.txt");
+    write("new.txt", "edited after staging\n");
+    expect((await readGitFileDiff(root, "new.txt", false, "head_index")).snapshot?.originalPath).toBe("old.txt");
+    const diff = await readGitFileDiff(root, "new.txt", false, "index_worktree");
+    expect(diff).toMatchObject({
+      kind: "gitDiff",
+      text: expect.stringContaining("+edited after staging"),
+      snapshot: { originalPath: null, path: "new.txt" },
+    });
+  });
+
+  it("marks tracked binary comparisons across all three sources", async () => {
+    const { root, git, write } = repository({ "blob.bin": "base\0binary\n" });
+    write("blob.bin", "stage\0binary\n");
+    git("add", "blob.bin");
+    write("blob.bin", "work\0binary\n");
+    for (const source of ["head_worktree", "head_index", "index_worktree"] as const) {
+      expect(await readGitFileDiff(root, "blob.bin", false, source)).toMatchObject({
+        kind: "gitDiff",
+        text: expect.stringMatching(/^Binary files .* differ$/m),
+        snapshot: { source, contentStatus: "binary" },
+      });
+    }
+  });
+
   it("does not mislabel a first-commit staged diff as a combined comparison", async () => {
     const { root, git, write } = repository({});
     write("a.txt", "initial\n"); git("add", "a.txt");
