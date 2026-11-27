@@ -1,0 +1,197 @@
+{
+  "schemaVersion": 1,
+  "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+  "artifactDirectory": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\inventory-10df53ce",
+  "executedScriptPath": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\compare-final-inventory.mjs",
+  "status": "PASS",
+  "counts": {
+    "before": 6418,
+    "beforeIgnored": 24,
+    "after": 6434,
+    "afterIgnored": 24,
+    "mapped": 6418,
+    "renamed": 134,
+    "explicitlyRetained": 20,
+    "reviewedAdditions": 16,
+    "pendingAdditions": 0
+  },
+  "packages": [
+    {
+      "package": "akra-ade",
+      "target": {
+        "name": "akra_ade",
+        "kind": "lib"
+      },
+      "count": 6291,
+      "ignored": 23
+    },
+    {
+      "package": "akra-issue-core",
+      "target": {
+        "name": "akra_issue_core",
+        "kind": "lib"
+      },
+      "count": 53,
+      "ignored": 0
+    },
+    {
+      "package": "akra-native",
+      "target": {
+        "name": "akra_native",
+        "kind": "lib"
+      },
+      "count": 43,
+      "ignored": 1
+    },
+    {
+      "package": "akra-verification",
+      "target": {
+        "name": "akra_verification",
+        "kind": "lib"
+      },
+      "count": 24,
+      "ignored": 0
+    },
+    {
+      "package": "akra-verification-native",
+      "target": {
+        "name": "akra_verification_native",
+        "kind": "lib"
+      },
+      "count": 23,
+      "ignored": 0
+    }
+  ],
+  "sourceBefore": {
+    "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+    "gitStatus": "",
+    "indexSha256": "305fcdf3f2905151248b744deb32b0ab596941d0ccaed76c1edb634e91cee4ad",
+    "registrySha256": "67681aefd0219cf448df73297244e4a0f05661ee627acb2bda38e728e53f330f",
+    "lockSha256": "e32db16b57863f2614cd6c89d36ba1998d2460895678c85f5504ea57a841603d"
+  },
+  "sourceAfter": {
+    "sourceSha": "10df53cedda2139998f7ee6e5842926537adb472",
+    "gitStatus": "",
+    "indexSha256": "305fcdf3f2905151248b744deb32b0ab596941d0ccaed76c1edb634e91cee4ad",
+    "registrySha256": "67681aefd0219cf448df73297244e4a0f05661ee627acb2bda38e728e53f330f",
+    "lockSha256": "e32db16b57863f2614cd6c89d36ba1998d2460895678c85f5504ea57a841603d"
+  },
+  "captureScriptSha256": "6b88815f81c613c915d6d50474025bd09a2412ed9aa002408b502f1665240e56",
+  "previousEvidenceDirectory": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\attempt2",
+  "files": [
+    {
+      "name": "compare-final-inventory-source.mjs",
+      "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\inventory-10df53ce\\compare-final-inventory-source.mjs",
+      "bytes": 34025,
+      "sha256": "6b88815f81c613c915d6d50474025bd09a2412ed9aa002408b502f1665240e56"
+    },
+    {
+      "name": "inventory-additions-pending.json",
+      "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\inventory-10df53ce\\inventory-additions-pending.json",
+      "bytes": 103,
+      "sha256": "84169e65e65058d16276826aac813bb951a5878d81925bf7d3b43438fd44d11a"
+    },
+    {
+      "name": "inventory-additions-review.json",
+      "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\inventory-10df53ce\\inventory-additions-review.json",
+      "bytes": 11559,
+      "sha256": "93b29e1dd2cfe9d3b1dbe7e4ee55a09d5ffaaed7b588f13e323c9f70e86728f9"
+    },
+    {
+      "name": "inventory-baseline.json",
+      "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\inventory-10df53ce\\inventory-baseline.json",
+      "bytes": 1788427,
+      "sha256": "3257077834382a8863f13dd78ca2245395d86cbcd89d75ed3dfed94384a1cc5f"
+    },
+    {
+      "name": "inventory-capture.json",
+      "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\inventory-10df53ce\\inventory-capture.json",
+      "bytes": 1804282,
+      "sha256": "b58cd0b2ab21ab7136db4ea6a48c5682e5ec16e21b3d1d9ef2c5441905a67e38"
+    },
+    {
+      "name": "inventory-comparison.json",
+      "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\inventory-10df53ce\\inventory-comparison.json",
+      "bytes": 28732,
+      "sha256": "4da4961ae84a7ec5850065d880ff138ab8fb28b0c15401fb16a665b771e6ab0b"
+    },
+    {
+      "name": "inventory-mapping.json",
+      "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\inventory-10df53ce\\inventory-mapping.json",
+      "bytes": 4500680,
+      "sha256": "9998f993adfa84354f173456c87663e0702a6c032499897baafe7cbf6834e009"
+    },
+    {
+      "name": "inventory-retained-root-plan.json",
+      "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\inventory-10df53ce\\inventory-retained-root-plan.json",
+      "bytes": 17232,
+      "sha256": "674ed16d1bac8adc34b3d40147412c0e9ada7d04720c9cf3ff3d595be3dd4153"
+    },
+    {
+      "name": "inventory-summary.md",
+      "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\inventory-10df53ce\\inventory-summary.md",
+      "bytes": 11960,
+      "sha256": "ed392e345ee7272b8712deccb1d92d9270743846d95a556d41186774a84c1a19"
+    },
+    {
+      "name": "inventory-raw/akra-ade--lib--akra_ade.all.txt",
+      "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\inventory-10df53ce\\inventory-raw\\akra-ade--lib--akra_ade.all.txt",
+      "bytes": 790864,
+      "sha256": "ea9b4b7393150852c964e3f73790de9e1c078f19cbab6fbc98d91ae52b383638"
+    },
+    {
+      "name": "inventory-raw/akra-ade--lib--akra_ade.ignored.txt",
+      "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\inventory-10df53ce\\inventory-raw\\akra-ade--lib--akra_ade.ignored.txt",
+      "bytes": 2168,
+      "sha256": "1a5292f89208b15b423dd31dd46f998263fd68cab4aedf550647d7bf693a608b"
+    },
+    {
+      "name": "inventory-raw/akra-issue-core--lib--akra_issue_core.all.txt",
+      "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\inventory-10df53ce\\inventory-raw\\akra-issue-core--lib--akra_issue_core.all.txt",
+      "bytes": 4353,
+      "sha256": "b4e649e5f453960e6f1b5dbbe45d6aa642953f200678c284759c3525d2b5f532"
+    },
+    {
+      "name": "inventory-raw/akra-issue-core--lib--akra_issue_core.ignored.txt",
+      "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\inventory-10df53ce\\inventory-raw\\akra-issue-core--lib--akra_issue_core.ignored.txt",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "inventory-raw/akra-native--lib--akra_native.all.txt",
+      "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\inventory-10df53ce\\inventory-raw\\akra-native--lib--akra_native.all.txt",
+      "bytes": 4135,
+      "sha256": "2998a63f78abfe77bc22f949f04bf5680e07f22d763e580c3dc448871b6358ef"
+    },
+    {
+      "name": "inventory-raw/akra-native--lib--akra_native.ignored.txt",
+      "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\inventory-10df53ce\\inventory-raw\\akra-native--lib--akra_native.ignored.txt",
+      "bytes": 62,
+      "sha256": "7d7dc6112a8a6fb2d3d9e94d0ae62c18831bcf85f94768c5a1f02eacd365fa29"
+    },
+    {
+      "name": "inventory-raw/akra-verification--lib--akra_verification.all.txt",
+      "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\inventory-10df53ce\\inventory-raw\\akra-verification--lib--akra_verification.all.txt",
+      "bytes": 2259,
+      "sha256": "9b3f78639edc2251cadca357729113eaf783404eac39965211d0c3a2690dd8b6"
+    },
+    {
+      "name": "inventory-raw/akra-verification--lib--akra_verification.ignored.txt",
+      "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\inventory-10df53ce\\inventory-raw\\akra-verification--lib--akra_verification.ignored.txt",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "inventory-raw/akra-verification-native--lib--akra_verification_native.all.txt",
+      "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\inventory-10df53ce\\inventory-raw\\akra-verification-native--lib--akra_verification_native.all.txt",
+      "bytes": 2263,
+      "sha256": "2067e26702d4d8d3e7c1fa6824aea550418808861bf5ce1ac6a43d0c177865ea"
+    },
+    {
+      "name": "inventory-raw/akra-verification-native--lib--akra_verification_native.ignored.txt",
+      "path": "C:\\dev\\worktrees\\akra-ci-final-20261127\\artifacts\\ci-final-validation\\inventory-10df53ce\\inventory-raw\\akra-verification-native--lib--akra_verification_native.ignored.txt",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}
