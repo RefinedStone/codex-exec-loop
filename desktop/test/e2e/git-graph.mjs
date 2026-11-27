@@ -16,131 +16,9 @@ import { _electron as electron } from "playwright-core";
 const desktopDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const electronPath = createRequire(import.meta.url)("electron");
 const fake = await import(pathToFileURL(join(desktopDir, "test/fake-gateway/fakeGateway.ts")).href);
-
-// 첫 쪽은 화면보다 훨씬 길다. 패널은 읽은 줄의 끝에서 60 줄 앞에 오면 다음 쪽을 읽는다.
-const FIRST_PAGE_ROWS = 200;
-const SECOND_PAGE_ROWS = 40;
-const sha = (number) => number.toString(16).padStart(40, "0");
-const NOW = Math.floor(Date.now() / 1000);
-
-// 저장소가 바뀐 뒤이다. 맨 위에 새 커밋이 하나 있고 ref 들의 지문이 다르다.
-let repositoryChanged = false;
-// `akra/git/refs` 가 주는 작업 트리의 끝나지 않은 일이다 (#2851).
-let worktreeProgress = { operationInProgress: null, conflictedFiles: 0 };
-const BACKUP_ONLY_ROW = 6;
-
-// 첫 쪽: 머지 커밋 하나, 두 레인, 그 뒤로 한 줄 이력이다. 번호가 클수록 새 커밋이다.
-function firstPage(cwd) {
-  const total = FIRST_PAGE_ROWS + SECOND_PAGE_ROWS;
-  const rows = [
-    { id: sha(total), parents: [sha(total - 2), sha(total - 1)], subject: "Merge topic into main", lane: 0, lanesIn: [], lanesOut: [0, 1], lanesThrough: [] },
-    { id: sha(total - 1), parents: [sha(total - 3)], subject: "Topic work", lane: 1, lanesIn: [1], lanesOut: [1], lanesThrough: [0] },
-    { id: sha(total - 2), parents: [sha(total - 3)], subject: "Main work", lane: 0, lanesIn: [0], lanesOut: [1], lanesThrough: [1] },
-    { id: sha(total - 3), parents: [sha(total - 4)], subject: "Fork point", lane: 1, lanesIn: [1], lanesOut: [1], lanesThrough: [] },
-  ];
-  for (let number = total - 4; rows.length < FIRST_PAGE_ROWS; number -= 1) {
-    rows.push({ id: sha(number), parents: [sha(number - 1)], subject: `Commit ${number}`, lane: 1, lanesIn: [1], lanesOut: [1], lanesThrough: [] });
-  }
-  rows[BACKUP_ONLY_ROW].backupOnly = true;
-  if (repositoryChanged) rows.unshift({ id: sha(total + 1), parents: [sha(total)], subject: "New commit", lane: 0, lanesIn: [], lanesOut: [0], lanesThrough: [] });
-  const head = rows[0].id;
-  return {
-    repository: true,
-    stale: false,
-    head,
-    refsDigest: repositoryChanged ? "d2" : "d1",
-    refs: [
-      { name: "main", kind: "local_branch", target: head, head: true },
-      { name: "origin/main", kind: "remote_branch", target: sha(total), head: false },
-      { name: "origin/topic", kind: "remote_branch", target: sha(total - 1), head: false },
-      { name: "v1.0", kind: "tag", target: sha(total - 3), head: false },
-      { name: "main/op-1", kind: "backup", target: rows[repositoryChanged ? BACKUP_ONLY_ROW + 1 : BACKUP_ONLY_ROW].id, head: false },
-    ],
-    // 열린 스레드의 폴더가 작업 트리이다. 그 작업 트리는 "Topic work" 를 체크아웃했다.
-    worktrees: [{ path: String(cwd).replaceAll("\\", "/"), head: sha(total - 1), branch: "topic" }],
-    rows: rows.map((row, index) => ({ ...row, authorName: "Sample Author", authorTime: NOW - index * 3600 })),
-    next: { skip: FIRST_PAGE_ROWS, lanes: [null, sha(SECOND_PAGE_ROWS)], refsDigest: "sample" },
-  };
-}
-
-const COMMIT_DIFF = ["diff --git a/src/topic.ts b/src/topic.ts", "index 1111111..2222222 100644", "--- a/src/topic.ts", "+++ b/src/topic.ts", "@@ -1,2 +1,3 @@", " export const topic = 1;", "+export const more = 2;", " // end", ""].join("\n");
-
-function commitDetail(commit) {
-  const total = FIRST_PAGE_ROWS + SECOND_PAGE_ROWS;
-  const topic = commit === sha(total - 1);
-  return {
-    commit: {
-      id: commit,
-      parents: topic ? [sha(total - 3)] : [],
-      authorName: "Sample Author",
-      authorEmail: "author@example.com",
-      authorTime: NOW - 3600,
-      committerName: "Sample Committer",
-      committerTime: NOW - 1800,
-      message: topic ? "Topic work\n\nThe body of the topic commit." : commit === sha(total - 3) ? "Fork point" : "Another commit",
-      diff: topic ? COMMIT_DIFF : "",
-      diffTooLarge: false,
-    },
-  };
-}
-
-function secondPage() {
-  const rows = [];
-  for (let number = SECOND_PAGE_ROWS; number >= 1; number -= 1) {
-    rows.push({ id: sha(number), parents: number > 1 ? [sha(number - 1)] : [], subject: `Commit ${number}`, lane: 1, lanesIn: [1], lanesOut: number > 1 ? [1] : [], lanesThrough: [], authorName: "Sample Author", authorTime: NOW - 90 * 86400 });
-  }
-  return { repository: true, stale: false, head: sha(FIRST_PAGE_ROWS + SECOND_PAGE_ROWS), refs: [], rows, next: null };
-}
-
-// ---- G3: 작업 엔진의 가짜 답 ----
-const planRequests = [];
-const executeRequests = [];
-const undoRequests = [];
-const journal = [];
-// 첫 실행은 "저장소가 계획과 다르다"로 답한다. 화면은 새 계획을 보여야 한다.
-let staleAnswers = 1;
-
-function operationPlan(operation, expectation) {
-  const total = FIRST_PAGE_ROWS + SECOND_PAGE_ROWS;
-  return {
-    operation,
-    expectation,
-    branch: "main",
-    before: { commit: sha(total + 1), branch: "main" },
-    after: { commit: operation.target, branch: "main" },
-    impact: { dropped: 4, unreachable: 2, gained: 0 },
-    blockers: [],
-  };
-}
-
-function operationRecord(opId, operation, undoOf, cwd) {
-  const total = FIRST_PAGE_ROWS + SECOND_PAGE_ROWS;
-  return {
-    opId,
-    operation,
-    // 작업을 실행한 폴더이다. 화면은 같은 폴더의 기록에만 되돌리기를 보인다.
-    worktree: cwd,
-    before: { commit: sha(total + 1), branch: "main" },
-    after: { commit: operation.target, branch: "main" },
-    backupRef: `refs/akra/backup/main/${opId}`,
-    status: "done",
-    startedAt: NOW,
-    finishedAt: NOW,
-    error: null,
-    undoOf,
-    undoneBy: null,
-  };
-}
-
-// 첫 조회와 background 갱신에 stale 응답을 주입한다. 정상 페이지 요청 수는 별도로 센다.
-let initialStalePages = 1;
-let holdFirstPagesStale = false;
-let staleFirstPages = 0;
-let onStaleFirstPage = () => {};
-
-const graphRequests = [];
-const commitRequests = [];
-let refsRequests = 0;
+import { graphFixture } from "./fixtures/gitGraphGateway.mjs";
+import { BACKUP_ONLY_ROW, FIRST_PAGE_ROWS, SECOND_PAGE_ROWS, sha } from "./fixtures/gitGraphPages.mjs";
+const { handlers, state, planRequests, executeRequests, undoRequests, journal, graphRequests, commitRequests } = graphFixture();
 // IPC의 실제 git status도 읽을 수 있도록 녹화의 cwd를 격리된 빈 저장소로 바꾼다.
 const fixtureRoot = mkdtempSync(join(tmpdir(), "akra-graph-ui-"));
 const workspace = join(fixtureRoot, "repo");
@@ -151,54 +29,8 @@ const recordings = [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_R
   writeFileSync(target, readFileSync(source, "utf8").replaceAll("/work/example-app", workspace.replaceAll("\\", "/")));
   return target;
 });
-let unborn = false;
 const endpoint = fake.uniqueTestEndpoint();
-const gateway = await fake.startFakeGateway(endpoint, recordings, {
-  gitGraph(params) {
-    if (unborn) return { repository: true, stale: false, head: null, refsDigest: "unborn", refs: [], worktrees: [], rows: [], next: null };
-    if (!params.cursor && (initialStalePages > 0 || holdFirstPagesStale)) {
-      initialStalePages = Math.max(0, initialStalePages - 1);
-      staleFirstPages += 1;
-      onStaleFirstPage();
-      return { repository: true, stale: true, head: sha(FIRST_PAGE_ROWS + SECOND_PAGE_ROWS + 1), refs: [], rows: [], next: null };
-    }
-    graphRequests.push(params);
-    return params.cursor ? secondPage() : firstPage(params.cwd);
-  },
-  gitRefs() {
-    refsRequests += 1;
-    return { repository: true, refsDigest: unborn ? "unborn" : repositoryChanged ? "d2" : "d1", ...worktreeProgress };
-  },
-  gitCommit(params) {
-    commitRequests.push(params.commit);
-    return commitDetail(params.commit);
-  },
-  gitPlan(params) {
-    planRequests.push(params);
-    return operationPlan(params.operation, "seen-at-plan");
-  },
-  gitExecute(params) {
-    executeRequests.push(params);
-    if (staleAnswers > 0) {
-      staleAnswers -= 1;
-      return { status: "stale", plan: operationPlan(params.operation, "seen-after-change") };
-    }
-    const record = operationRecord("20261119T010203Z-0000002a", params.operation, null, params.cwd);
-    journal.unshift(record);
-    return { status: "done", record };
-  },
-  gitOperations() {
-    return { operations: journal };
-  },
-  gitUndo(params) {
-    undoRequests.push(params.opId);
-    const undone = journal.find((record) => record.opId === params.opId);
-    const record = operationRecord("20261119T010300Z-0000002b", { kind: "reset", target: undone.before.commit }, undone.opId, params.cwd);
-    undone.undoneBy = record.opId;
-    journal.unshift(record);
-    return { status: "done", record };
-  },
-});
+const gateway = await fake.startFakeGateway(endpoint, recordings, handlers);
 const env = { ...process.env, AKRA_GATEWAY_ENDPOINT: endpoint, AKRA_DESKTOP_HIDDEN: "1", AKRA_DESKTOP_USER_DATA: join(fixtureRoot, "user-data") };
 delete env.ELECTRON_RUN_AS_NODE;
 
@@ -219,7 +51,7 @@ try {
   await page.getByTestId("git-graph-panel").waitFor({ timeout: 10_000 });
   await page.getByTestId("git-graph-row").first().waitFor({ timeout: 15_000 });
   check("the first page is requested with the folder of the open thread", graphRequests.length === 1 && typeof graphRequests[0].cwd === "string" && graphRequests[0].cwd.length > 0 && graphRequests[0].cursor === undefined);
-  check("an initially stale first page is retried before showing the graph", staleFirstPages === 1);
+  check("an initially stale first page is retried before showing the graph", state.staleFirstPages === 1);
   check("the header shows the checked-out branch", (await page.getByTestId("git-graph-head").innerText()) === "main");
 
   const firstRow = page.getByTestId("git-graph-row").first();
@@ -260,15 +92,15 @@ try {
   // 저장소가 바뀐다. 누르지 않아도 새 커밋이 보이고, 보던 줄은 같은 자리에 남는다.
   await page.getByTestId("git-graph-scroll").evaluate((element) => element.scrollTo(0, 10 * 28));
   const topBefore = await page.getByTestId("git-graph-scroll").evaluate((element) => element.scrollTop);
-  const polledBefore = refsRequests;
+  const polledBefore = state.refsRequests;
   // 연속 stale로 첫 polling 시도가 끝나도 기존 DOM과 읽은 줄 수/스크롤을 유지한다.
   const keptScroll = await page.getByTestId("git-graph-scroll").elementHandle();
-  const staleBefore = staleFirstPages;
+  const staleBefore = state.staleFirstPages;
   const repeatedStale = new Promise((resolve) => {
-    onStaleFirstPage = () => { if (staleFirstPages >= staleBefore + 4) resolve(); };
+    state.onStaleFirstPage = () => { if (state.staleFirstPages >= staleBefore + 4) resolve(); };
   });
-  holdFirstPagesStale = true;
-  repositoryChanged = true;
+  state.holdFirstPagesStale = true;
+  state.repositoryChanged = true;
   let staleTimer;
   await Promise.race([
     repeatedStale,
@@ -277,9 +109,9 @@ try {
   check("a stale first polling page preserves the existing graph rows and scroll node",
     (await page.getByTestId("git-graph-count").innerText()) === `${FIRST_PAGE_ROWS}개 읽음`
       && await keptScroll.evaluate((element, top) => element.isConnected && element.scrollTop === top, topBefore));
-  holdFirstPagesStale = false;
+  state.holdFirstPagesStale = false;
   await page.getByTestId("git-graph-count").filter({ hasText: `${FIRST_PAGE_ROWS + 1}개 읽음` }).waitFor({ timeout: 20_000 });
-  check("the panel watches the refs and reads again without a click", refsRequests > polledBefore && graphRequests.length === 4 && graphRequests[3].cursor === undefined && graphRequests[3].limit === FIRST_PAGE_ROWS);
+  check("the panel watches the refs and reads again without a click", state.refsRequests > polledBefore && graphRequests.length === 4 && graphRequests[3].cursor === undefined && graphRequests[3].limit === FIRST_PAGE_ROWS);
   const topAfter = await page.getByTestId("git-graph-scroll").evaluate((element) => element.scrollTop);
   check("the rows on the screen stay in place after the new commit arrives", topBefore === 10 * 28 && topAfter === 11 * 28);
   await page.getByTestId("git-graph-scroll").evaluate((element) => element.scrollTo(0, 0));
@@ -331,12 +163,26 @@ try {
   // ---- G3 ----
   await find.fill("");
   await page.getByTestId("git-graph-scroll").evaluate((element) => element.scrollTo(0, 0));
-  await rowWith("Fork point").locator(".git-row-time").click();
+  const chooser = page.getByRole("dialog", { name: "선택한 커밋 작업" });
+  await rowWith("Main work").locator(".git-row-time").click();
+  await rowWith("Fork point").locator(".git-row-time").click({ button: "right" });
+  await chooser.waitFor();
+  check("right-click targets the clicked commit, not the previous selection", (await rowWith("Fork point").getAttribute("aria-selected")) === "true" && await chooser.getByTestId("git-action-reset").isVisible());
+  await page.keyboard.press("Escape");
+  await chooser.waitFor({ state: "detached" });
+  const mod = process.platform === "darwin" ? "Meta" : "Control";
+  await page.keyboard.press(mod + "+g");
+  await chooser.waitFor();
+  await chooser.getByRole("button", { name: "닫기" }).click();
+  await page.keyboard.press(mod + "+k");
+  await page.getByTestId("palette").getByRole("button", { name: /선택한 커밋 작업/ }).click();
+  await chooser.waitFor();
+
   const reset = page.getByTestId("git-action-reset");
   await reset.waitFor({ timeout: 10_000 });
   check("the selected commit offers a reset of the checked-out branch", (await reset.innerText()) === "여기로 reset (main)");
   check("no operation log is shown before the first operation", (await page.getByTestId("git-operation-log").count()) === 0);
-  await reset.click();
+  await chooser.getByTestId("git-action-reset").click();
   await page.getByTestId("git-plan").waitFor({ timeout: 10_000 });
   check("a click asks for a plan and changes nothing", planRequests.length === 1 && planRequests[0].operation.kind === "reset" && planRequests[0].operation.target === sha(total - 3) && executeRequests.length === 0);
   const planned = page.getByTestId("git-graph-planned");
@@ -372,7 +218,7 @@ try {
   // ---- #2851: 상태 띠, 최대화, ref 목록 ----
   check("the narrow panel has no ref list", (await page.getByTestId("git-ref-list").count()) === 0 && (await page.getByTestId("right-panel").getAttribute("data-maximized")) === "false");
   check("no status strip while nothing is unfinished", (await page.getByTestId("git-status-strip").count()) === 0);
-  worktreeProgress = { operationInProgress: "rebase", conflictedFiles: 2 };
+  state.worktreeProgress = { operationInProgress: "rebase", conflictedFiles: 2 };
   const strip = page.getByTestId("git-status-strip");
   await strip.waitFor({ timeout: 10_000 });
   check("the status strip writes the unfinished operation and its conflicts in one line",
@@ -399,11 +245,11 @@ try {
   }
   await page.getByTestId("graph-restore").click();
   check("restoring the panel removes the ref list and keeps the graph", (await page.getByTestId("git-ref-list").count()) === 0 && (await page.getByTestId("git-graph-row").count()) > 0);
-  worktreeProgress = { operationInProgress: null, conflictedFiles: 0 };
+  state.worktreeProgress = { operationInProgress: null, conflictedFiles: 0 };
   await strip.waitFor({ state: "detached", timeout: 10_000 });
   check("the status strip leaves when the work is finished", (await strip.count()) === 0);
   // #2851 review: a real unborn repository with two changed files still has a clickable graph row.
-  unborn = true;
+  state.unborn = true;
   writeFileSync(join(workspace, "first.txt"), "first\n");
   writeFileSync(join(workspace, "second.txt"), "second\n");
   await page.getByTestId("review-toggle").click();
@@ -423,6 +269,7 @@ try {
   check("the unborn repository row opens the changes panel", (await workingTree.getByTestId("git-file").count()) === 2);
   check("the panel never starts a turn", !gateway.receivedMethods.includes("turn/start"));
 } catch (error) {
+  console.error(error);
   check(`flow finished without error (${String(error).split("\n")[0]})`, false);
 } finally {
   // 창을 닫으면 앱이 끝난다. app.close() 는 쓰지 않는다 (P2 기록 참고).

@@ -1439,6 +1439,9 @@ The Gateway records the external documents that a thread mentions, without a mod
   further match. The commit that a worktree has checked out carries a badge with the newest thread whose
   folder is in that worktree; the badge opens the thread. A backup ref has a dashed label, and a commit
   reached only from a backup ref is dim. The panel has no path or branch filter.
+  Right-click a row to select it and open the commit action chooser. With a commit selected,
+  Cmd/Ctrl+G or the palette command “선택한 커밋 작업” opens the same chooser. Picking an action only
+  requests its preview. Execute is a separate confirmation in the plan.
   Since #2851 the panel can be maximised (the button next to "패널 닫기"). The maximised panel adds a ref
   list on the left (local, remote, tag, backup, and worktree groups; a click selects that commit); the
   graph and the commit detail below it stay as in the narrow panel, which is unchanged. Above the graph
