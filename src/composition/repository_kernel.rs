@@ -179,6 +179,9 @@ pub(crate) struct RepositoryKernelRegistry {
     idle_notification: Mutex<Option<std::task::Waker>>,
     #[cfg(test)]
     restart_runtime: Option<RestartRuntimeFactory>,
+    /// 붙기가 새 커널을 만들 때 쓰는 시험 런타임이다. 없으면 실제 app-server 를 쓰는 런타임이다.
+    #[cfg(test)]
+    attach_runtime: Option<RestartRuntimeFactory>,
 }
 
 fn is_permanently_invalid_restart_candidate(error: &anyhow::Error) -> bool {
@@ -363,6 +366,47 @@ impl RepositoryKernelRegistry {
             .unwrap_or_else(|p| p.into_inner()) = Some(notification);
     }
 
+    fn build_attached_kernel(&self, workspace_root: &str) -> Result<RepositoryKernel> {
+        #[cfg(test)]
+        if let Some(factory) = &self.attach_runtime {
+            return build_kernel_for_workspace_with(
+                workspace_root,
+                None,
+                |lock, issues, admission| {
+                    assemble_recovered_kernel_with_runtime(
+                        lock,
+                        workspace_root,
+                        issues.clone(),
+                        || factory(workspace_root, issues, admission),
+                    )
+                },
+            );
+        }
+        build_kernel_for_workspace_with_providers(
+            workspace_root,
+            self.app_server.clone(),
+            self.providers.clone(),
+        )
+    }
+
+    /// 새 커널마다 `runtime` 이 만든 런타임을 쓰는 목록이다. 시험이 가짜 app-server 를 넣는다.
+    #[cfg(test)]
+    pub(crate) fn with_attach_runtime_for_test(
+        runtime: impl Fn(
+            &str,
+            Arc<IssueCollectionService>,
+            Arc<IssueBindingAdmission>,
+        ) -> Result<NativeClientRuntime>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self {
+            attach_runtime: Some(Arc::new(runtime)),
+            ..Self::default()
+        }
+    }
+
     /// 커널들이 Gateway upstream app-server 를 Desktop 과 함께 쓴다 (K3-5, Q-K3-6).
     pub(crate) fn sharing_app_server(app_server: SharedAppServer) -> Self {
         Self {
@@ -425,11 +469,7 @@ impl RepositoryKernelRegistry {
         }
         // 호스트 스레드가 끝난 커널은 먼저 버려 잠금을 푼 뒤 다시 만든다.
         *kernel = None;
-        let built = build_kernel_for_workspace_with_providers(
-            &target.workspace_root,
-            self.app_server.clone(),
-            self.providers.clone(),
-        )?;
+        let built = self.build_attached_kernel(&target.workspace_root)?;
         let client = built
             .attach_with_lifetime(transient)
             .context("the new kernel stopped before a client attached")?;
@@ -589,6 +629,20 @@ fn build_kernel_for_workspace_with_providers(
     app_server: Option<SharedAppServer>,
     providers: Option<super::provider_credentials::ProviderServices>,
 ) -> Result<RepositoryKernel> {
+    build_kernel_for_workspace_with(workspace_dir, providers, |lock, issues, admission| {
+        assemble_recovered_kernel(lock, workspace_dir, app_server, issues, admission)
+    })
+}
+
+fn build_kernel_for_workspace_with(
+    workspace_dir: &str,
+    providers: Option<super::provider_credentials::ProviderServices>,
+    assemble: impl FnOnce(
+        RepositoryKernelLock,
+        Arc<IssueCollectionService>,
+        Arc<IssueBindingAdmission>,
+    ) -> Result<RepositoryKernel>,
+) -> Result<RepositoryKernel> {
     // 잠금을 먼저 잡는다. 런타임 조립이 PR 검증 스케줄러 스레드를 시작하기 때문이다.
     let location = crate::adapter::outbound::db::SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace_dir)?;
     let lock =
@@ -603,7 +657,7 @@ fn build_kernel_for_workspace_with_providers(
     // 저장 명령과 관찰자가 같은 서비스의 모드/읽기 epoch 경계를 공유한다.
     let admission = Arc::new(IssueBindingAdmission::new());
     let issues = build_issue_collection_with_providers(workspace_dir, admission.clone(), providers);
-    assemble_recovered_kernel(lock, workspace_dir, app_server, issues, admission)
+    assemble(lock, issues, admission)
 }
 
 fn assemble_recovered_kernel(
