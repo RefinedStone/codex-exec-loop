@@ -46,3 +46,11 @@ Ubuntu 22.04 + 고정 upstream bubblewrap 0.13.1에서 network namespace, root �
 고유 disposable profile의 LPAC, capability 0, creation-time Job, stdio handle allowlist, child/Win32k mitigation을 검증한 뒤에만 headless AMD64 PE32+ Windows-subsystem 이미지를 Resume한다. 승인 바이트 복사와 드라이브 루트·최종 파일 검사 및 형식 제한, 제한 환경, 시간/출력/메모리 제한, Job-empty 및 profile/stage 정리 후 결과 반환을 적용한다. 실패 시 직접 실행하지 않는다.
 
 실제 Windows 10.0.26200.0 x64에서 정상 Passed, 외부 synthetic 파일 차단, loopback host 제어군과 격리 WSAStartup=10107·연결 0, child 생성 거절, timeout/output flood, 사용자 payload 정리와 외부 canary 보존을 확인했다. console subsystem이나 일반 interpreter 지원으로 확대하지 않는다. 실행 중 사용자 취소는 `akra/issue/validation/cancel`로 owned Job을 끝내고 게시를 막는다. 세부 계약·근거·제한은 [Windows 검증기 실행 계약](../reference/issue-validator-windows.md)에 기록한다.
+
+### 취소의 실행 전 경계와 출력 크기 (#2703)
+
+이미 취소된 요청은 실행 파일 조회와 sandbox 준비 전에 중단한다. 준비 중 도착한 취소도 macOS/Linux의 spawn 직전 및 Windows의 suspended token/Job/mitigation 검사 이후 ResumeThread 직전 확인한다. 실행 중 관측된 취소를 종료 결과보다 우선하여 기존 owned-process 정리를 거친다. 이 확인은 명령을 실행하는 OS API와 원자적인 취소 트랜잭션을 뜻하지 않으며, 최종 게시 승인은 기존 서비스의 cancel/finish 원자 판정이 결정한다.
+
+거부 메시지는 보관하는 원시 바이트뿐 아니라 lossy UTF-8 변환 이후에도 4096 byte 이하로 자른다. 문자 중간을 자르지 않는다. Linux/macOS/Windows가 공통 함수를 사용한다.
+
+검증: Windows x64, Rust 1.95.0, prerelease 1d538c2fe 기반 변경에서 issue_code_validator 모듈 16/16 통과. 정상 LPAC 실행, 실제 격리, native 취소·Job 정리, suspended 상태의 취소 및 무효 token 검사, 공통 UTF-8 경계 회귀 포함. Linux/macOS 변경은 이 실행에서 native로 검증하지 않았다. 기존 지원 프로필·미지원 호스트 계약은 바꾸지 않는다.
