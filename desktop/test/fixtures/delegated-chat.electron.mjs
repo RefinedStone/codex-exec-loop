@@ -37,17 +37,29 @@ void app.whenReady().then(async () => {
     assert.equal(host.isManual, true);
     assert.equal(await contents.executeJavaScript(`document.title`), "Login fixture");
     assert.equal(await contents.executeJavaScript(`typeof window.akra + "," + typeof require`), "undefined,undefined");
-    assert.equal(await contents.executeJavaScript(`window.open("https://outside.fixture.invalid/") === null`), true);
-    const navigation = once(contents, "will-frame-navigate");
-    await contents.executeJavaScript(`document.getElementById("escape").click()`);
-    await navigation;
-    assert.equal(contents.getURL(), url);
-    assert.deepEqual(requested, [url]);
     assert.equal(await contents.executeJavaScript(`Notification.requestPermission()`), "denied");
+    // Manual sign-in may open a social sign-in popup in the same partition.
+    const created = once(contents, "did-create-window");
+    assert.equal(await contents.executeJavaScript(`window.open("https://outside.fixture.invalid/popup") !== null`), true);
+    const [popup] = await created;
+    assert.equal(popup.webContents.session, partition);
+    // Manual sign-in may also leave the chat origin for an identity provider.
+    const signIn = once(contents, "did-finish-load");
+    await contents.executeJavaScript(`document.getElementById("escape").click()`);
+    await signIn;
+    assert.equal(contents.getURL(), "https://outside.fixture.invalid/");
     window.close();
     assert.equal(window.isVisible(), false);
     assert.equal(host.isManual, false);
     assert.equal(contents.isDestroyed(), false);
+    assert.equal(popup.isDestroyed(), true);
+    // Automation stays on the chat origin and opens no popups.
+    await contents.loadURL(url);
+    assert.equal(await contents.executeJavaScript(`window.open("https://outside.fixture.invalid/") === null`), true);
+    const blocked = once(contents, "will-frame-navigate");
+    await contents.executeJavaScript(`document.getElementById("escape").click()`);
+    await blocked;
+    assert.equal(contents.getURL(), url);
     console.log("Delegated chat Electron fixture passed");
   } finally {
     host.close();
