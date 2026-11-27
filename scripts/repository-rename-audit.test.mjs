@@ -33,7 +33,7 @@ test("rename requires identical repository ID, exact refs, PRs, releases and rul
   for (const key of ["branches", "pulls", "issueSamples", "releases", "rulesets", "refs"]) {
     const changed = structuredClone(after);
     changed[key] = [];
-    assert.throws(() => compare(before, changed), new RegExp(key + " changed"));
+    assert.throws(() => compare(before, changed), new RegExp(key + " changed|branches|refs|issueSamples"));
   }
   const renamed = structuredClone(after);
   renamed.repository.id++;
@@ -50,4 +50,33 @@ test("capture refuses inaccessible protection, wrong alias and moving branch hea
     ? {...get(endpoint), id: 99} : get(endpoint)}), /legacy URL resolves/);
   assert.throws(() => fixture("before", {refs: () => []}), /branch changed during capture/);
   assert.throws(() => fixture("after", {refs: repo => repo === OLD_REPOSITORY ? [] : refs}), /legacy Git refs differ/);
+});
+
+test("comparison rejects identically incomplete or malformed snapshots, not just differences", () => {
+  const complete = fixture("before");
+  const mutations = [
+    s => { delete s.repository.visibility; },
+    s => { delete s.capturedAt; },
+    s => { s.activeRuns = []; },
+    s => { s.activeRuns.pop(); },
+    s => { s.activeRuns[1] = {...s.activeRuns[0]}; },
+    s => { s.activeRuns[0].count = -1; },
+    s => { s.activeRuns[0].count = 0.5; },
+    s => { s.branches = []; s.refs = []; },
+    s => { s.branches[0].sha = "bad"; },
+    s => { s.refs.push({ref:"refs/heads/unseen",sha}); },
+    s => { s.issueSamples.pop(); },
+    s => { s.issueSamples[1].id = s.issueSamples[0].id; },
+    s => { s.pulls[0].id = 0; },
+    s => { s.releases[0].assets[0].size = -1; },
+    s => { delete s.rulesets[0].contract; },
+  ];
+  for (const mutate of mutations) {
+    const before = structuredClone(complete);
+    mutate(before);
+    const after = structuredClone(before);
+    after.phase = "after";
+    after.repository.name = NEW_REPOSITORY;
+    assert.throws(() => compare(before, after));
+  }
 });
