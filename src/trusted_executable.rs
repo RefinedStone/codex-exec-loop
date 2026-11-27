@@ -1,4 +1,4 @@
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) use akra_native::trusted_executable::resolve_from_path;
 use std::ffi::{OsStr, OsString};
 use std::fs;
