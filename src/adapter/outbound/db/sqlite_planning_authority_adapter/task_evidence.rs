@@ -24,6 +24,8 @@ use super::{
 
 mod delivery;
 mod queries;
+mod quota;
+mod retention;
 mod schema;
 mod verification;
 mod writes;

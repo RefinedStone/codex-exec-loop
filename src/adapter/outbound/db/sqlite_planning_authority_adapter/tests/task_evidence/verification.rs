@@ -10,6 +10,7 @@ mod captured_lease;
 mod durability;
 mod failure_limit;
 mod fences;
+mod retention;
 
 struct HostFixture {
     base: Fixture,
