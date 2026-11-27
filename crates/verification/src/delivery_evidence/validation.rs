@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use super::*;
-use crate::domain::planning::evidence::{
+use crate::evidence::{
     MAX_TASK_EVIDENCE_PAGE, MAX_TASK_EVIDENCE_REVISION, validate_evidence_identifier,
     validate_evidence_request_id, validate_evidence_token,
 };
