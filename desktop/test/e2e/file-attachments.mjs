@@ -166,9 +166,9 @@ try {
       await page.getByTestId("composer-send").click();
       await page.getByTestId("file-message-preview").waitFor({ state: "detached" });
       assert.equal(sent.length, 1);
-      assert.equal(sent[0].params.input[0].text, preview);
       assert.deepEqual(payload.quotedContext.map(item => item.manifestId), [sampleId, newId, oldId]);
       assert.equal(preview.includes("fixture#"), false);
+      assert.equal(sent[0].params.input[0].text, preview);
       assert.equal(await cards.count(), 1);
       assert.equal(await cards.filter({ hasText: "sample.txt:1–1" }).getByLabel("포함").isChecked(), false);
       assert.equal((await git(["diff", "--cached"])).stdout, staged);
