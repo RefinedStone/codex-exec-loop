@@ -9,6 +9,12 @@ use serde_json::Value;
 struct Limits {
     ordinary_usage_allowed: Option<bool>,
     rate_limits: Option<Bucket>,
+    rate_limits_by_limit_id: Option<CodexBuckets>,
+}
+
+#[derive(Deserialize)]
+struct CodexBuckets {
+    codex: Option<Bucket>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,10 +37,17 @@ pub(super) fn admission(reply: Value) -> Result<(), EndReason> {
         None => return Err(EndReason::Unavailable),
         Some(true) => {}
     }
-    let bucket = limits.rate_limits.ok_or(EndReason::Unavailable)?;
-    if bucket.limit_id.as_deref() != Some("codex") {
-        return Err(EndReason::Unavailable);
+    let bucket = match limits
+        .rate_limits_by_limit_id
+        .and_then(|buckets| buckets.codex)
+    {
+        Some(bucket) if matches!(bucket.limit_id.as_deref(), None | Some("codex")) => Some(bucket),
+        Some(_) => None,
+        None => limits
+            .rate_limits
+            .filter(|bucket| bucket.limit_id.as_deref() == Some("codex")),
     }
+    .ok_or(EndReason::Unavailable)?;
     if bucket.spend_control_reached == Some(true) {
         return Err(EndReason::Quota);
     }
@@ -80,5 +93,42 @@ mod tests {
             admission(json!({"ordinaryUsageAllowed":true,"rateLimits":{"limitId":"codex"}})),
             Err(EndReason::Unavailable)
         );
+    }
+
+    #[test]
+    fn codex_key_takes_precedence_and_legacy_is_used_only_when_the_key_is_absent() {
+        let legacy = json!({"limitId": "codex", "primary": {"usedPercent": 10}});
+        let keyed = json!({"primary": {"usedPercent": 20}});
+        for (buckets, fallback, expected) in [
+            (json!({"codex": keyed}), Value::Null, Ok(())),
+            (json!({"codex": keyed}), json!({"limitId": "other"}), Ok(())),
+            (json!({"other": keyed}), legacy.clone(), Ok(())),
+            (
+                json!({"codex": {"secondary": {"usedPercent": 100}}}),
+                legacy.clone(),
+                Err(EndReason::Quota),
+            ),
+            (
+                json!({"codex": {"primary": {"usedPercent": 20}, "spendControlReached": true}}),
+                legacy.clone(),
+                Err(EndReason::Quota),
+            ),
+            (
+                json!({"codex": {"limitId": "other", "primary": {"usedPercent": 20}}}),
+                legacy.clone(),
+                Err(EndReason::Unavailable),
+            ),
+            (json!({"codex": {}}), legacy, Err(EndReason::Unavailable)),
+        ] {
+            assert_eq!(
+                admission(json!({
+                    "ordinaryUsageAllowed": true,
+                    "rateLimits": fallback,
+                    "rateLimitsByLimitId": buckets
+                })),
+                expected,
+                "keyed {buckets}; legacy {fallback}",
+            );
+        }
     }
 }
