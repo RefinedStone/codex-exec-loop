@@ -96,8 +96,10 @@ function FleetCard({ thread, mark, onOpenThread }: { thread: ListedThread; mark:
   );
 }
 
-function KernelAttentionList({ kernel, items, onOpenThread }: { kernel: string | null; items: readonly AttentionItem[] | null; onOpenThread(id: string): void }) {
+function KernelAttentionList({ kernel, items, onOpenItem }: { kernel: string | null; items: readonly AttentionItem[] | null; onOpenItem(item: AttentionItem): void }) {
   const [, update] = useState(0);
+  const [hoverOrder, setHoverOrder] = useState<readonly string[] | null>(null);
+  const phase = useDesktopStore((state) => state.kernel.phase);
   const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
     const refresh = (event: StorageEvent) => { if (isAttentionPreferenceEvent(event.key)) update(value => value + 1); };
@@ -111,17 +113,22 @@ function KernelAttentionList({ kernel, items, onOpenThread }: { kernel: string |
   };
   const rows = (kernel && items ? items.map(item => ({ item, preference: readAttentionPreference(localStorage, kernel, item) })) : [])
     .sort((a, b) => Number(b.preference.pinned) - Number(a.preference.pinned));
+  if (hoverOrder) {
+    const order = new Map(hoverOrder.map((id, index) => [id, index]));
+    rows.sort((a, b) => (order.get(a.item.id) ?? Infinity) - (order.get(b.item.id) ?? Infinity));
+  }
   const now = Date.now();
-  return <section className="fleet-column" data-testid="kernel-attention">
+  return <section className="fleet-column" data-testid="kernel-attention"
+    onMouseEnter={() => setHoverOrder(rows.map(row => row.item.id))} onMouseLeave={() => setHoverOrder(null)}>
     <h3>현재 저장소 · 커널 확인 필요 <span className="muted">{items?.length ?? "—"}</span></h3>
     <p className="muted">읽음·미루기·고정은 이 기기의 개인 표시 설정입니다. 응답을 대신하지 않습니다.</p>
     {notice && <p role="status">{notice}</p>}
-    {items === null && <p className="muted fleet-empty">커널 확인 항목을 아직 읽지 못했습니다.</p>}
+    {items === null && <p className="muted fleet-empty">{phase === "idle" ? "연결된 저장소 커널이 없습니다." : phase === "failed" ? "저장소 커널 연결이 끊겼습니다. 현재 항목은 알 수 없습니다." : "커널 확인 항목을 아직 읽지 못했습니다."}</p>}
     {items?.length === 0 && <p className="muted fleet-empty">없음</p>}
     {rows.map(({ item, preference }) => {
       const snoozed = preference.snoozedUntil !== null && preference.snoozedUntil > now;
       return <div key={item.id} className="fleet-card">
-        <button type="button" className="fleet-card" onClick={() => item.subject.kind === "thread" ? onOpenThread(item.subject.id) : openPanel(item.subject.kind === "issue_decision" ? "issues" : "kernel")}>
+        <button type="button" className="fleet-card" onClick={() => onOpenItem(item)}>
           <span className="fleet-card-title">{item.summary}</span>
           <span className="fleet-card-meta">{item.cause} · {item.subject.kind} · {preference.read ? "읽음" : "안 읽음"}{snoozed ? " · 미룸" : ""}</span>
           <span className="muted">{item.next.map(step => "name" in step ? step.name : step.step).join(" → ")}</span>
@@ -136,31 +143,42 @@ function KernelAttentionList({ kernel, items, onOpenThread }: { kernel: string |
   </section>;
 }
 
-export function Fleet({ onOpenThread }: { onOpenThread(threadId: string): void }) {
+export function Fleet({ onOpenThread, onOpenItem, workspace, onWorkspace }: { onOpenThread(threadId: string): void; onOpenItem(item: AttentionItem): void; workspace: string | null; onWorkspace(path: string): void }) {
   const folders = useDesktopStore((state) => state.folders);
   const marks = useThreadMarks();
   const kernel = useDesktopStore((state) => state.kernel);
-  const items = kernel.phase === "attached" ? kernel.attentionItems : null;
+  const items = kernel.phase === "attached" && kernel.workspace === workspace ? kernel.attentionItems : null;
+  const authoritative = useMemo(() => new Set((items ?? []).filter(item => item.subject.kind === "thread").map(item => item.subject.id)), [items]);
   const threads = useMemo(() => allThreads(folders).map((thread) => ({ thread, mark: threadMark(thread, marks) })), [folders, marks]);
   return (
     <div className="fleet" data-testid="fleet">
       <header className="fleet-header">
         <h1>현황판</h1>
         <span className="muted">모든 작업 폴더의 스레드를 상태별로 봅니다.</span>
+        <label>확인할 저장소
+          <select value={workspace ?? ""} onChange={event => onWorkspace(event.currentTarget.value)} data-testid="attention-workspace">
+            {!workspace && <option value="" disabled>저장소를 선택하세요</option>}
+            {[...new Set([...(workspace ? [workspace] : []), ...folders.map(folder => folder.cwd)])].map(path => <option key={path} value={path}>{path}</option>)}
+          </select>
+        </label>
+        <p className="muted">응답 필요 항목은 선택한 저장소에서만 읽습니다. 다른 저장소의 개수는 아직 확인하지 않았습니다.</p>
       </header>
-      <KernelAttentionList kernel={kernel.kernel} items={items} onOpenThread={onOpenThread} />
+      <KernelAttentionList key={kernel.kernel} kernel={kernel.kernel} items={items} onOpenItem={onOpenItem} />
       <div className="fleet-columns">
         {FLEET_COLUMNS.map((column) => {
-          const items = threads.filter((item) => column.marks.includes(item.mark));
+          // A user turn can share its thread with an older kernel demand. Without the same
+          // turn/request identity only its generic idle card is redundant, not an activity mark.
+          const columnItems = threads.filter((item) => column.marks.includes(item.mark)
+            && !(item.mark === "idle" && item.thread.cwd === workspace && authoritative.has(item.thread.id)));
           return (
             <section key={column.title} className="fleet-column">
               <h3 title={column.hint}>
-                {column.title} <span className="muted">{items.length}</span>
+                {column.title} <span className="muted">{columnItems.length}</span>
               </h3>
-              {items.slice(0, FLEET_COLUMN_LIMIT).map((item) => (
+              {columnItems.slice(0, FLEET_COLUMN_LIMIT).map((item) => (
                 <FleetCard key={item.thread.id} thread={item.thread} mark={item.mark} onOpenThread={onOpenThread} />
               ))}
-              {items.length === 0 && <p className="muted fleet-empty">없음</p>}
+              {columnItems.length === 0 && <p className="muted fleet-empty">없음</p>}
             </section>
           );
         })}

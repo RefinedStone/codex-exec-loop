@@ -1365,6 +1365,11 @@ The Gateway records the external documents that a thread mentions, without a mod
   (`desktop/src/main/windowState.ts`, `desktop/src/main/contextMenuItems.ts`,
   `desktop/src/renderer/session/navHistory.ts`, `desktop/src/renderer/conversation/find.ts`,
   `desktop/src/renderer/session/attention.ts`).
+- Fleet shows the selected repository's kernel attention. Change the repository selector to see another
+  folder; Desktop does not attach to every folder or total their unknown counts. A detached kernel
+  or failed read is not a zero count. The fleet keeps user-turn marks until kernel observation covers
+  those turns. A task opens its exact ID; a decision opens its issue coordinate. The PR link shows
+  the requested PR number and reports when the current validation record no longer matches it.
 - Desktop settings (plan 26 U2): the settings dialog opens from the app menu ("설정…", `Cmd/Ctrl+,`), the
   sidebar footer, and the command palette. It has a search field and these settings: theme, zoom per area, font size
   for the UI, the conversation, code and diffs, and the terminal (10–24 px); OS notifications (off, only when
