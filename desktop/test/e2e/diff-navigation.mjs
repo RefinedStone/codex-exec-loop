@@ -174,6 +174,7 @@ try {
   await page.getByRole("button", { name: "새로 고침", exact: true }).click();
   const fallback = fileEntry("fallback.txt");
   await fallback.locator("summary").first().click();
+  await fallback.getByRole("status").filter({ hasText: "면과 행 번호를 사용하십시오" }).waitFor();
   await fallback.getByRole("button", { name: "다음 표시 구간", exact: true }).waitFor();
   assert.equal(await fallback.locator(".diff-line").count(), 1000);
   await fallback.getByRole("button", { name: "다음 표시 구간", exact: true }).click();
