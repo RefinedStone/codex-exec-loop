@@ -96,8 +96,16 @@ try {
     }, { state, generation, previewAvailable });
     return generation;
   };
-  await showSynthetic({phase:"locked",cause:null}, true);
   const inspectFile = restore.getByLabel("검사할 백업 파일");
+  await showSynthetic({ phase: "held", reason: "locked" }, true);
+  await restore.getByTestId("vault-restore-detail").filter({ hasText: "Vault 잠금을 해제하지 못했습니다." }).waitFor();
+  check("missing local key still offers read-only inspection without plaintext",
+    await inspectFile.count() === 1 && await restore.getByTestId("vault-restored-body").count() === 0);
+  await showSynthetic({ phase: "held", reason: "profile_automation" });
+  await inspectFile.waitFor({ state: "detached" });
+  check("the same held phase does not offer inspection when its profile is blocked",
+    await restore.getByLabel("백업 복구 키").count() === 0);
+  await showSynthetic({phase:"locked",cause:null}, true);
   await inspectFile.setInputFiles({name:"synthetic-invalid.json",mimeType:"application/json",buffer:Buffer.from("invalid")});
   await restore.getByLabel("백업 복구 키").fill("00".repeat(32));
   await restore.getByRole("button", {name:"백업 파일 검사 (읽기 전용)"}).click();
