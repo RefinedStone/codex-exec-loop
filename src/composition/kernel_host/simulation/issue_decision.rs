@@ -425,8 +425,8 @@ fn query(sim: &mut SimKernel, issue: &IssueReference) -> IssueCollectionDetail {
 fn attention_decisions(sim: &mut SimKernel) -> Vec<StoredIssueDecision> {
     let (reply, answer) = mpsc::channel();
     sim.host
-        .handle_input(KernelHostInput::OpenIssueDecisions { reply });
-    answer.recv_timeout(WAIT).unwrap().unwrap()
+        .handle_input(KernelHostInput::LiveAttention { reply });
+    answer.recv_timeout(WAIT).unwrap().unwrap().decisions
 }
 
 fn subscribe(sim: &mut SimKernel) -> Receiver<KernelHostEvent> {

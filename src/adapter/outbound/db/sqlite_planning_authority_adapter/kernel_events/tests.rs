@@ -54,7 +54,7 @@ fn attention_reopens_terminal_receipts_and_clears_only_the_retried_thread() {
             ],
         )
         .unwrap();
-    let before = stored_items(&workspace).unwrap();
+    let before = stored_items(&workspace, vec![]).unwrap();
     assert_eq!(
         before.iter().map(|item| item.cause).collect::<Vec<_>>(),
         [
@@ -62,6 +62,23 @@ fn attention_reopens_terminal_receipts_and_clears_only_the_retried_thread() {
             AttentionCause::TurnInterrupted,
             AttentionCause::TurnLost
         ]
+    );
+    let live_retry = record(
+        5,
+        KernelEvent::TurnStarted {
+            thread_id: "a".into(),
+            turn_id: "retry".into(),
+            op_id: None,
+        },
+    );
+    let live_failure = record(6, ended("e", TurnEndOutcome::Failed));
+    let pending = stored_items(&workspace, vec![live_retry.clone(), live_failure]).unwrap();
+    assert_eq!(
+        pending
+            .iter()
+            .map(|item| item.subject.id.as_str())
+            .collect::<Vec<_>>(),
+        ["b", "d", "e"]
     );
     store
         .append_kernel_events(
@@ -76,7 +93,14 @@ fn attention_reopens_terminal_receipts_and_clears_only_the_retried_thread() {
             )],
         )
         .unwrap();
-    assert_eq!(stored_items(&workspace).unwrap(), before[1..]);
+    assert_eq!(
+        stored_items(
+            &workspace,
+            vec![record(1, ended("a", TurnEndOutcome::Failed)), live_retry]
+        )
+        .unwrap(),
+        before[1..]
+    );
 }
 
 #[test]
