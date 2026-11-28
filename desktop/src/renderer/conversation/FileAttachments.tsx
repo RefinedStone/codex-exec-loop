@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { DiffFeedbackEditor } from "./DiffFeedbackSelection";
 import "./fileAttachments.css";
 import { useUiStore, setFileList } from "../session/uiStore";
 import { readSource, type ManifestRequest } from "./attachmentSource";
@@ -31,6 +32,7 @@ export function FileAttachments({ target, turnId, request, disabled }: {
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   };
   return <section aria-label="파일 첨부" className="file-attachments">
+    <DiffFeedbackEditor target={target} request={request} disabled={disabled} />
     <details><summary>파일·행 첨부 {files.length ? `(${files.length})` : ""}</summary>
       <fieldset disabled={disabled || busy}><legend>작업 파일 범위</legend>
         <label>저장소 상대 경로<input value={path} onChange={e => setPath(e.target.value)} /></label>
@@ -47,12 +49,21 @@ export function FileAttachments({ target, turnId, request, disabled }: {
           </button>))}
       </details>
     </details>
-    {files.map(item => <div key={item.attachmentId}>
+    {files.map((item, index) => <div key={item.attachmentId} className="file-attachment-card" data-testid="file-attachment-card">
       <label><input type="checkbox" checked={item.included} disabled={disabled}
         onChange={() => change(files.map(a => a === item ? { ...a, included: !a.included } : a))} />포함</label>
-      <details><summary>{item.filePath}:{item.startLine}–{item.endLine} · 원래 선택 보기</summary>
+      <details><summary>{item.filePath}:{item.startLine}–{item.endLine} · {item.side === "old" ? "이전" : "이후"} · 원래 선택 보기</summary>
+        <code>{item.sourceKind} · {item.oldPath ?? item.filePath} → {item.filePath}</code>
         <code>{item.origin.hostId} · {item.worktreeId} · {item.snapshotId}</code>
-        <pre>{item.before}{item.selected}{item.after}</pre></details>
+        <pre>{item.before}<mark>{item.selected}</mark>{item.after}</pre></details>
+      {item.sourceKind !== "worktree_file" && <label>피드백 수정<textarea disabled={disabled} value={item.feedback}
+        onChange={e => change(files.map(a => a === item ? { ...a, feedback: e.target.value, draftRevision: Date.now() } : a))} /></label>}
+      {files.length > 1 && ([-1, 1] as const).map(step => <button key={step} type="button"
+        disabled={disabled || index + step < 0 || index + step >= files.length} onClick={() => {
+          const reordered = files.filter(a => a !== item);
+          reordered.splice(index + step, 0, item);
+          change(reordered);
+        }}>{step < 0 ? "위로" : "아래로"}</button>)}
       {item.staleReason && <p role="alert">{item.staleReason}
         <label><input type="checkbox" disabled={disabled} checked={item.useOriginal}
           onChange={() => change(files.map(a => a === item ? { ...a, useOriginal: !a.useOriginal } : a))} />이전 판 기준으로 보내기</label></p>}

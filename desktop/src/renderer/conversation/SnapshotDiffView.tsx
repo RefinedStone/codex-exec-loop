@@ -6,6 +6,7 @@ import type { DiffFile } from "./diff";
 import { diffCoordinates, selectionAt, type DiffCoordinate, type DiffSelection } from "./diffCoordinates";
 import { DiffBody } from "./DiffView";
 import { CONTEXT_REASON, SnapshotContext } from "./SnapshotContext";
+import { DiffFeedbackAction } from "./DiffFeedbackSelection";
 import "./snapshotDiff.css";
 
 /** #2827 consumes source/side/file coordinates through onSelectionChange. This surface never sends a message. */
@@ -111,6 +112,7 @@ export function SnapshotDiffView({ cwd, file, snapshot, git, selection: controll
       </p>;
     })}
     {notice && <p role="status">{notice}</p>}
+    {selection && <DiffFeedbackAction cwd={cwd} snapshot={snapshot} selection={selection} coordinates={coordinates} />}
     <DiffBody file={file} interaction={interaction} />
     {selection && <SnapshotContext key={snapshot.snapshotId} cwd={cwd} snapshot={snapshot} selection={selection} git={git}
       whitespace={whitespace} reveal={revealSelection || controlledSelection !== undefined} />}

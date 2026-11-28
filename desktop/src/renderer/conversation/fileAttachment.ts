@@ -1,4 +1,4 @@
-import type { GitDiffSource, GitFileDiff } from "../../shared/bridge";
+import type { GitDiffSnapshot, GitDiffSource, GitFileDiff } from "../../shared/bridge";
 
 export const ATTACHMENT_LIMIT = { count: 8, lines: 100, bytes: 16_384, totalLines: 300, totalBytes: 49_152 } as const;
 export type DraftTarget = { readonly hostId: string; readonly worktree: string; readonly threadId: string };
@@ -19,11 +19,11 @@ const bytes = (value: string) => new TextEncoder().encode(value).length;
 export class AttachmentError extends Error {}
 const reduceSelection = "첨부 한도를 초과했습니다. 범위를 줄이거나 첨부를 제외하세요.";
 
-export async function captureSelection(diff: GitFileDiff, range: Selection, origin: {
-  target: DraftTarget; turnId: string | null; manifestId: string; draftRevision: number;
-}): Promise<FileAttachment> {
+type CaptureOrigin = Readonly<{ target: DraftTarget; turnId: string | null; manifestId: string; draftRevision: number }>;
+
+export async function captureSelection(diff: GitFileDiff, range: Selection, origin: CaptureOrigin): Promise<FileAttachment> {
   const snapshot = diff.snapshot;
-  if (!snapshot?.worktreeId || !snapshot.repositoryId || snapshot.source !== "worktree_file" ||
+  if (snapshot?.source !== "worktree_file" ||
       snapshot.contentStatus !== "complete" || diff.kind !== "content" || diff.truncated || diff.text.includes("\uFFFD")) {
     throw new AttachmentError("완전한 UTF-8 파일(1 MiB 이하)에서 범위를 선택하세요.");
   }
@@ -36,15 +36,21 @@ export async function captureSelection(diff: GitFileDiff, range: Selection, orig
   if (endLine - startLine + 1 > ATTACHMENT_LIMIT.lines) throw new AttachmentError(reduceSelection);
   const selected = lines.slice(startLine - 1, endLine).join("");
   const before = lines[startLine - 2] ?? "", after = lines[endLine] ?? "";
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(selected));
+  return captureAttachment(snapshot, origin, { ...range, selected, before, after, side: "new", diffExcerpt: "",
+    partial: startLine > 1 || endLine < lines.length, staleReason: null });
+}
+
+export async function captureAttachment(snapshot: GitDiffSnapshot, origin: CaptureOrigin, quote: Pick<FileAttachment,
+  "side" | "startLine" | "endLine" | "before" | "selected" | "after" | "diffExcerpt" | "partial" | "staleReason">): Promise<FileAttachment> {
+  if (!snapshot.repositoryId || !snapshot.worktreeId) throw new AttachmentError("저장소 출처를 확인할 수 없습니다.");
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(quote.selected));
   const attachment: FileAttachment = {
     schemaVersion: 1, attachmentId: crypto.randomUUID(), createdAt: new Date().toISOString(), draftRevision: origin.draftRevision,
     origin: origin.target, turnId: origin.turnId, repositoryId: snapshot.repositoryId, worktreeId: snapshot.worktreeId,
     sourceKind: snapshot.source, snapshotId: snapshot.snapshotId, filePath: snapshot.path, oldPath: snapshot.originalPath,
-    headOid: snapshot.headOid, manifestId: origin.manifestId, side: "new", ...range,
+    headOid: snapshot.headOid, manifestId: origin.manifestId, ...quote,
     fingerprint: Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""),
-    selected, before, after, diffExcerpt: "", feedback: "", partial: startLine > 1 || endLine < lines.length,
-    truncated: false, included: true, staleReason: null, useOriginal: false,
+    feedback: "", truncated: false, included: true, useOriginal: false,
   };
   checkBundle([attachment]);
   return attachment;
