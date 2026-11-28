@@ -24,6 +24,7 @@ use crate::domain::planning::PlanningAuthorityLocation;
 use crate::git_subprocess;
 
 use super::SqlitePlanningAuthorityAdapter;
+pub(crate) mod legacy_diagnosis;
 
 /*
 경로 정책을 나타내는 작은 상수들이다.

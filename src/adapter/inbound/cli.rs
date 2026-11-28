@@ -31,8 +31,11 @@ mod extensions;
 mod issue_form;
 mod kernel;
 mod mcp;
+mod planning_recovery;
 mod reports;
 mod usage;
+
+pub(crate) use planning_recovery::is_command as is_planning_recovery_command;
 
 use self::reports::{
     DoctorReport, PlanningToolErrorReport, ResetReport, render_doctor_report, render_json_line,
@@ -93,6 +96,9 @@ where
         [command, rest @ ..] if command == OsStr::new("kernel") => {
             Ok(Some(kernel::run(rest, stdout)?))
         }
+        [command, rest @ ..] if planning_recovery::is_command(command) => {
+            Ok(Some(planning_recovery::run(rest, stdout)?))
+        }
         [command, rest @ ..] if command == OsStr::new("pr-review-settings") => {
             Ok(Some(kernel::pr_review_settings(rest, stdout)?))
         }
@@ -106,6 +112,7 @@ where
             writeln!(stdout, "{QUEUE_USAGE}")?;
             writeln!(stdout, "{RESET_USAGE}")?;
             writeln!(stdout, "{PLANNING_TOOL_USAGE}")?;
+            writeln!(stdout, "{}", planning_recovery::USAGE)?;
             writeln!(stdout, "{PARALLEL_TICK_USAGE}")?;
             writeln!(stdout, "{CONFIG_USAGE}")?;
             writeln!(stdout, "{MCP_USAGE}")?;
