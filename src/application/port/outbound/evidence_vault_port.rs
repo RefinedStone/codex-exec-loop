@@ -142,8 +142,16 @@ pub trait EvidenceVaultRestorePort: Send + Sync {
 /// 저장 계약의 판이다. 요청, 응답, 오류의 뜻이 바뀌면 올린다.
 pub const EVIDENCE_VAULT_STORE_CONTRACT_VERSION: u32 = 5;
 
-mod lifecycle;
-pub use lifecycle::{VaultCleanupPolicy, VaultCleanupReport, VaultLifecycleAction};
+pub(crate) use crate::application::port::inbound::vault_maintenance_port::{
+    VaultCleanupReport, VaultLifecycleAction,
+};
+
+#[derive(Debug)]
+pub struct VaultCleanupPolicy {
+    pub action: VaultLifecycleAction,
+    /// The publication journal proved these staging records have no remaining reader.
+    pub disposable_intents: Vec<String>,
+}
 
 /// 가린 구간이 있는 이슈의 필드이다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

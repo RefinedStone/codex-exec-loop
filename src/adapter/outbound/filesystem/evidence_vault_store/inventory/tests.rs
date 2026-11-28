@@ -63,6 +63,16 @@ fn retention_removes_expired_records_but_keeps_young_current_and_reconnect_sourc
         }
     }
     inventory.persist(&store, &request.scope).unwrap();
+    let expired_scope = VaultRecordScope {
+        issue: request.scope.issue.clone(),
+        field: VaultRecordField::Body,
+        binding: VaultRecordBinding::ConfirmedVersion(expired.clone()),
+    };
+    let expired_ciphertext = std::fs::read(
+        root.0
+            .join(record_relative_path(&scope_bytes(&expired_scope))),
+    )
+    .unwrap();
 
     let binding = store.begin_binding(request.clone()).unwrap();
     let expected = binding.maintenance_revision().unwrap();
@@ -77,6 +87,10 @@ fn retention_removes_expired_records_but_keeps_young_current_and_reconnect_sourc
         .unwrap();
 
     assert_eq!(report.removed, 1);
+    assert!(
+        !contains_file_bytes(&root.0, &expired_ciphertext),
+        "retention must not leave a recoverable copy in the fixture Vault"
+    );
     let mut binding = store.begin_binding(request).unwrap();
     assert_eq!(
         binding.snapshot().state,
@@ -106,4 +120,16 @@ fn retention_removes_expired_records_but_keeps_young_current_and_reconnect_sourc
             expected
         );
     }
+}
+
+fn contains_file_bytes(root: &std::path::Path, expected: &[u8]) -> bool {
+    std::fs::read_dir(root).unwrap().any(|entry| {
+        let entry = entry.unwrap();
+        let kind = entry.file_type().unwrap();
+        if kind.is_dir() {
+            contains_file_bytes(&entry.path(), expected)
+        } else {
+            kind.is_file() && std::fs::read(entry.path()).unwrap() == expected
+        }
+    })
 }

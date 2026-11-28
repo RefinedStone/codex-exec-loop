@@ -3,11 +3,9 @@ use std::io::{self, BufRead, IsTerminal, Read, Write};
 
 use anyhow::{Context, Result, bail};
 
-use crate::application::port::outbound::evidence_vault_port::{
-    EvidenceVaultStorePort, VaultLifecycleAction, VaultRecordLoadRequest, VaultRecordScope,
+use crate::application::port::inbound::vault_maintenance_port::{
+    VaultLifecycleAction, VaultMaintenancePort,
 };
-use crate::application::port::outbound::issue_publish_intent_journal_port::IssuePublishIntentJournalPort;
-use crate::application::service::evidence_vault_lifecycle;
 use crate::domain::issue_work::{IssueProjectScope, IssueProvider, IssueReference};
 
 pub(super) const USAGE: &str = "Usage: akra vault <retain|delete> <workspace> <github|jira|linear> <server-id> <repository-id> <issue-id>";
@@ -35,24 +33,18 @@ pub(super) fn run(args: &[OsString], output: &mut impl Write) -> Result<i32> {
         bail!("Vault deletion requires interactive confirmation");
     }
     let local = crate::composition::desktop_restore::local_maintenance(coordinate(workspace)?)?;
-    let request_scope = VaultRecordScope::current_version(IssueReference {
+    let issue = IssueReference {
         provider,
         server_id,
         repository_id,
         issue_id: issue_text.to_owned(),
         project_scope: IssueProjectScope {
-            workspace_dir: local.workspace,
+            workspace_dir: local.workspace().to_owned(),
         },
-    });
+    };
     execute(
-        (local.vault.as_ref(), local.journal.as_ref()),
-        Execution {
-            request: VaultRecordLoadRequest {
-                scope: request_scope,
-                key: local.key,
-            },
-            action,
-        },
+        &local,
+        Execution { issue, action },
         (&mut input.lock(), output),
     )
 }
@@ -70,45 +62,36 @@ fn coordinate(value: &OsString) -> Result<&str> {
 }
 
 struct Execution {
-    request: VaultRecordLoadRequest,
+    issue: IssueReference,
     action: VaultLifecycleAction,
 }
 
 fn execute(
-    stores: (
-        &dyn EvidenceVaultStorePort,
-        &dyn IssuePublishIntentJournalPort,
-    ),
+    maintenance: &dyn VaultMaintenancePort,
     operation: Execution,
     io: (&mut impl BufRead, &mut impl Write),
 ) -> Result<i32> {
-    let Execution { request, action } = operation;
+    let Execution { issue, action } = operation;
     let (input, output) = io;
-    let scope = request.scope.issue.clone();
-    let result = evidence_vault_lifecycle::maintain(stores, request, || {
-        if action == VaultLifecycleAction::DeleteIssue {
+    let result = maintenance.maintain(issue.clone(), action, &mut || {
             writeln!(
                 output,
                 "Delete local Vault records for {:?} {}/{}/{} in {}?",
-                scope.provider,
-                scope.server_id,
-                scope.repository_id,
-                scope.issue_id,
-                scope.project_scope.workspace_dir
+                issue.provider,
+                issue.server_id,
+                issue.repository_id,
+                issue.issue_id,
+                issue.project_scope.workspace_dir
             )?;
             writeln!(
                 output,
                 "This blocks restore and import for this issue. Backups and unverified legacy records are not erased."
             )?;
-            writeln!(output, "Type DELETE {} to continue.", scope.issue_id)?;
+            writeln!(output, "Type DELETE {} to continue.", issue.issue_id)?;
             output.flush()?;
             let mut answer = String::new();
             input.take(8192).read_line(&mut answer)?;
-            if answer.trim_end_matches(['\r', '\n']) != format!("DELETE {}", scope.issue_id) {
-                return Ok(None);
-            }
-        }
-        Ok(Some(action))
+            Ok(answer.trim_end_matches(['\r', '\n']) == format!("DELETE {}", issue.issue_id))
     })?;
     let Some(report) = result else {
         writeln!(output, "Cancelled; no Vault records changed.")?;

@@ -8,10 +8,13 @@ use crate::application::port::outbound::evidence_vault_backup_port::{
     VaultBackupProjectApproval, VaultBackupRecoveryMode, VaultRecoveryKey,
 };
 use crate::application::port::outbound::evidence_vault_port::{
-    VaultBindingCommitPolicy, VaultBindingCommitRequest, VaultBindingCommitResult,
-    VaultBindingFields, VaultBindingState, VaultKey, VaultPlaintext, VaultRecordBinding,
-    VaultRecordField, VaultRecordKey, VaultRecordSaveRequest, VaultStoreError,
+    EvidenceVaultStorePort, VaultBindingCommitPolicy, VaultBindingCommitRequest,
+    VaultBindingCommitResult, VaultBindingFields, VaultBindingState, VaultKey, VaultPlaintext,
+    VaultRecordBinding, VaultRecordField, VaultRecordKey, VaultRecordLoadRequest,
+    VaultRecordSaveRequest, VaultRecordScope, VaultStoreError,
 };
+use crate::application::service::evidence_vault_lifecycle::LocalVaultMaintenance;
+use std::sync::Arc;
 
 #[test]
 fn typed_delete_is_scoped_and_retries_after_interruption_without_allowing_backup_restore() {
@@ -20,8 +23,10 @@ fn typed_delete_is_scoped_and_retries_after_interruption_without_allowing_backup
     vault_fs::prepare_writer_root(&vault_root).unwrap();
     let runtime = root.0.join("runtime");
     vault_fs::prepare_writer_root(&runtime).unwrap();
-    let journal = IssuePublishIntentJournalAdapter::new(move |_| Ok(runtime.clone()));
-    let vault = FilesystemEvidenceVaultStoreAdapter::new(vault_root.clone());
+    let journal = Arc::new(IssuePublishIntentJournalAdapter::new(move |_| {
+        Ok(runtime.clone())
+    }));
+    let vault = Arc::new(FilesystemEvidenceVaultStoreAdapter::new(vault_root.clone()));
     let backup = FilesystemEvidenceVaultBackupAdapter::new(vault_root.clone());
     let key = VaultRecordKey {
         key_id: "fixture-key".to_owned(),
@@ -90,12 +95,18 @@ fn typed_delete_is_scoped_and_retries_after_interruption_without_allowing_backup
             recovery_key: recovery_key.clone(),
         })
         .unwrap();
-    let deletion = |vault: &FilesystemEvidenceVaultStoreAdapter, mut input: &[u8]| {
+    let deletion = |vault: &Arc<FilesystemEvidenceVaultStoreAdapter>, mut input: &[u8]| {
         let mut stdout = Vec::new();
+        let maintenance = LocalVaultMaintenance {
+            workspace: first.scope.issue.project_scope.workspace_dir.clone(),
+            vault: vault.clone(),
+            journal: journal.clone(),
+            key: key.clone(),
+        };
         let status = execute(
-            (vault, &journal),
+            &maintenance,
             Execution {
-                request: first.clone(),
+                issue: first.scope.issue.clone(),
                 action: VaultLifecycleAction::DeleteIssue,
             },
             (&mut input, &mut stdout),
@@ -114,7 +125,7 @@ fn typed_delete_is_scoped_and_retries_after_interruption_without_allowing_backup
         interrupted.unwrap_err().downcast_ref::<VaultStoreError>(),
         Some(&VaultStoreError::WriteOutcomeUnknown)
     );
-    let reopened = FilesystemEvidenceVaultStoreAdapter::new(vault_root);
+    let reopened = Arc::new(FilesystemEvidenceVaultStoreAdapter::new(vault_root));
     assert_eq!(
         reopened
             .begin_binding(first.clone())

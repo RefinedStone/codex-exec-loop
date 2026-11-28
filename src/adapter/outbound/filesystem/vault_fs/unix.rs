@@ -36,7 +36,7 @@ pub(super) fn write_outcome_unknown(error: &anyhow::Error) -> bool {
 }
 
 pub(super) fn remove_observed_file(root: &Path, relative: &Path, observed: &str) -> Result<bool> {
-    secure_fs::compare_and_swap_optional_file(root, relative, Some(observed), None)
+    secure_fs::remove_observed_file(root, relative, observed)
 }
 
 #[cfg(test)]
