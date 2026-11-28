@@ -1,13 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { GitDiffSide } from "../../shared/gitDiffContext";
 import type { TurnDiffFileSource } from "./diff";
-import { captureTurnDiff, readTurnDiffContext, type TurnCaptureResult, type TurnContextResult, type TurnDiffScope } from "./turnDiffSnapshot";
+import { captureTurnDiff, readTurnDiffContext, type TurnCaptureResult, type TurnContextResult, type TurnDiffCaptureSource, type TurnDiffScope } from "./turnDiffSnapshot";
 
 export function TurnDiffContext({ source, scope }: { readonly source: TurnDiffFileSource; readonly scope: TurnDiffScope }) {
+  const { origin, input: { kind, text }, file: { path, movePath } } = source;
+  // Streaming message deltas replace display objects without changing the recorded source.
+  const captureSource = useMemo<TurnDiffCaptureSource>(() => ({ origin, input: { kind, text }, file: { path, movePath } }),
+    [origin, kind, text, path, movePath]);
   const [captured, setCaptured] = useState<{
-    readonly source: TurnDiffFileSource; readonly scope: TurnDiffScope; readonly result: TurnCaptureResult;
+    readonly source: TurnDiffCaptureSource; readonly scope: TurnDiffScope; readonly result: TurnCaptureResult;
   } | null>(null);
-  const capture = captured?.source === source && captured.scope === scope ? captured.result : null;
+  const capture = captured?.source === captureSource && captured.scope === scope ? captured.result : null;
   const [result, setResult] = useState<TurnContextResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [side, setSide] = useState<GitDiffSide>("new");
@@ -16,9 +20,9 @@ export function TurnDiffContext({ source, scope }: { readonly source: TurnDiffFi
   useEffect(() => {
     let active = true;
     setCaptured(null); setResult(null); setError(null);
-    void captureTurnDiff(source, scope).then(value => {
+    void captureTurnDiff(captureSource, scope).then(value => {
       if (!active) return;
-      setCaptured({ source, scope, result: value });
+      setCaptured({ source: captureSource, scope, result: value });
       if (value.status === "captured") {
         const initial = value.snapshot.new.firstLine !== null ? "new" : "old";
         setSide(initial);
@@ -29,7 +33,7 @@ export function TurnDiffContext({ source, scope }: { readonly source: TurnDiffFi
       if (active) setError(failure instanceof Error ? failure.message : String(failure));
     });
     return () => { active = false; };
-  }, [source, scope]);
+  }, [captureSource, scope]);
   const valid = typeof start === "number" && typeof end === "number" &&
     Number.isSafeInteger(start) && Number.isSafeInteger(end) && start >= 1 && end >= start;
   const read = () => {

@@ -39,9 +39,10 @@ try {
     response.cwd = root; response.thread.cwd = root;
     response.thread.turns = [response.thread.turns.at(-1)];
     const turn = response.thread.turns[0];
-    turn.status = "completed";
+    turn.status = mode === "items" ? "inProgress" : "completed";
     turn.items = [{ type: "fileChange", id: "received-file-change", status: "completed",
-      changes: [{ path: "file.txt", kind: { type: "update", move_path: null }, diff: patch("ITEM") }] }];
+      changes: [{ path: "file.txt", kind: { type: "update", move_path: null }, diff: patch("ITEM") }] },
+      { type: "agentMessage", id: "streaming-reply", text: "Recorded reply" }];
     const rows = [
       recording[0], recording[1], recording[2], recording[3],
       { direction: "gateway", message: { jsonrpc: "2.0", id: 2, result: response } },
@@ -81,6 +82,18 @@ try {
           await source.getByRole("button", { name: "턴 원문 범위 읽기" }).click();
           assert.equal(await source.getByTestId("turn-source-excerpt").textContent(), `${prefix}_OLD\n${prefix}_SHARED\n`);
           await writeFile(join(root, "file.txt"), `${mode}_${pass}_LATER_DISK\n`);
+          if (mode === "items") {
+            gateway.sendAppServerNotification("item/agentMessage/delta", {
+              threadId: response.thread.id, turnId: turn.id, itemId: "streaming-reply", delta: " with one new delta",
+            });
+            await page.getByTestId("item-agent").getByText("Recorded reply with one new delta").waitFor();
+            assert.equal(await source.getByTestId("turn-source-excerpt").count(), 1, "A streamed reply must not clear the visible recorded range.");
+            assert.equal(await source.getByTestId("turn-source-excerpt").textContent(), `${prefix}_OLD\n${prefix}_SHARED\n`);
+            assert.equal(await source.getByTestId("turn-source-id").textContent(), snapshotId);
+            assert.equal(await source.getByLabel("턴 원문 면").inputValue(), "old");
+            assert.equal(await source.getByLabel("턴 원문 시작 행").inputValue(), "10");
+            assert.equal(await source.getByLabel("턴 원문 끝 행").inputValue(), "11");
+          }
           await source.getByRole("button", { name: "턴 원문 범위 읽기" }).click();
           assert.equal(await source.getByTestId("turn-source-excerpt").textContent(), `${prefix}_OLD\n${prefix}_SHARED\n`);
           await source.getByLabel("턴 원문 면").selectOption("new");

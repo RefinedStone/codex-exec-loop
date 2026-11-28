@@ -1,6 +1,10 @@
 import type { GitDiffContextRequest, GitDiffSide } from "../../shared/gitDiffContext";
 import type { TurnDiffFileSource } from "./diff";
 
+export type TurnDiffCaptureSource = Pick<TurnDiffFileSource, "origin" | "input"> & {
+  readonly file: Pick<TurnDiffFileSource["file"], "path" | "movePath">;
+};
+
 export interface TurnDiffScope {
   readonly hostId: string | null;
   readonly threadId: string;
@@ -92,7 +96,7 @@ function patchLines(text: string): { old: Map<number, string>; new: Map<number, 
 }
 
 /** The input is the turn's data, not a Git revision or a filesystem lookup instruction. */
-export async function captureTurnDiff(source: TurnDiffFileSource, scope: TurnDiffScope): Promise<TurnCaptureResult> {
+export async function captureTurnDiff(source: TurnDiffCaptureSource, scope: TurnDiffScope): Promise<TurnCaptureResult> {
   const { kind, text } = source.input;
   if (text.length > SOURCE_LIMIT || encoder.encode(text).byteLength > SOURCE_LIMIT) {
     return { status: "unavailable", reason: "size_limit" };
