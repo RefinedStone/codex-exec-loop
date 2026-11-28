@@ -72,9 +72,13 @@ try {
 
   // 본문이 150% 일 때도 메뉴는 누른 자리에 열린다.
   await page.locator(".main-view").evaluate((view) => { view.style.zoom = "1.5"; });
-  const box = await message.locator("p").boundingBox();
-  const click = { x: box.x + 5, y: box.y + 5 };
-  await page.mouse.click(click.x, click.y, { button: "right" });
+  // At this zoom the paragraph's top edge can be covered by the compaction bar.
+  // Let Playwright hit the visible paragraph and compare with the actual pointer event.
+  const atPointer = page.evaluate(() => new Promise(resolve => {
+    window.addEventListener("contextmenu", event => resolve({ x: event.clientX, y: event.clientY }), { capture: true, once: true });
+  }));
+  await message.locator("p").click({ button: "right" });
+  const click = await atPointer;
   const zoomed = await page.getByTestId("conversation-menu").evaluate((element) => element.getBoundingClientRect().toJSON());
   check("the menu opens at the click point in a zoomed body", Math.abs(zoomed.left - click.x) < 2 && Math.abs(zoomed.top - click.y) < 2,
     JSON.stringify({ click, zoomed }));
