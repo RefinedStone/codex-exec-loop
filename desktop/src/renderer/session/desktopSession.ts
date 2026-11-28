@@ -352,6 +352,7 @@ export class DesktopSession {
         this.providerVersionScope = "";
         this.store.setConnection(state);
         this.connected = state.phase === "connected";
+        this.isolatedWorkspace.beginResume(this.store.getOpenThreadId());
         this.forkConnectionEpoch++;
         if (!this.connected) this.provisionalTitles.clear();
         this.compaction.connectionChanged(this.connected);
@@ -632,10 +633,11 @@ export class DesktopSession {
     this.assertWritable();
     markStartRequested?.();
     const response = await this.client.request<ThreadStartResponse>("thread/start", { cwd });
-    if (expected && (!response.thread.id || !samePath(response.thread.cwd, expected.workspaceDir)
-      || (response.thread.gitInfo?.branch != null && response.thread.gitInfo.branch !== expected.branch)
-      || generation !== this.conversationGeneration)) {
-      throw new Error("격리 공간과 스레드의 연결을 확인하지 못했습니다. 준비된 공간은 보존됩니다.");
+    if (expected) {
+      if (generation !== this.conversationGeneration) {
+        throw new Error("격리 공간과 스레드의 연결을 확인하지 못했습니다. 준비된 공간은 보존됩니다.");
+      }
+      this.isolatedWorkspace.bind(response.thread, expected);
     }
     this.nextTurnSettings.observeSnapshot(response.thread.id, response.model ?? response.thread.model, response.reasoningEffort ?? response.thread.reasoningEffort,
       undefined, { approvalPolicy: response.approvalPolicy, sandbox: response.sandbox });
@@ -644,7 +646,10 @@ export class DesktopSession {
     this.batcher.clear();
     this.store.setOpenThread(response.thread.id);
     this.store.setTranscript(transcript);
-    this.store.addThreadToFolder(response.thread.cwd, workspaceThread(response.thread, transcript.title));
+    this.store.addThreadToFolder(response.thread.cwd, {
+      ...workspaceThread(response.thread, transcript.title),
+      branch: expected?.branch ?? response.thread.gitInfo?.branch ?? null,
+    });
     if (!this.readOnly && !response.thread.ephemeral && !response.thread.parentThreadId && !isAgentThreadSource(response.thread.threadSource)
         && !this.renamedThreads.has(response.thread.id)) {
       this.provisionalTitles.register(response.thread.id, response.thread.name, response.thread.preview);
@@ -916,6 +921,7 @@ export class DesktopSession {
   }
 
   private assertSubscribed(threadId: string | null): void {
+    if (threadId !== null) this.isolatedWorkspace.assertVerified(threadId);
     if (threadId !== null && threadId === this.writerElsewhereThreadId) {
       throw new Error(WRITER_ELSEWHERE_SEND_ERROR);
     }
@@ -1129,6 +1135,7 @@ export class DesktopSession {
     if (!threadId || !this.connected) {
       return;
     }
+    this.isolatedWorkspace.beginResume(threadId);
     const settingsRevision = this.nextTurnSettings.snapshot(threadId).currentRevision;
     const titleReadRevision = this.titleRevision;
     // 요청마다 버퍼를 따로 둔다. 빠르게 스레드를 바꿔 resume 이 겹쳐도 먼저 끝난 요청이 다음 요청의 버퍼를 지우지 않는다.
@@ -1144,6 +1151,7 @@ export class DesktopSession {
       if (!isCurrent()) {
         return;
       }
+      this.isolatedWorkspace.completeResume(threadId, opened.thread);
       // thread/list 는 분기 계보를 생략할 수 있다. 재연결/재시작 뒤 실제로 연 대화의 서버 응답으로 복원한다.
       if (opened.thread.id === threadId && opened.thread.forkedFromId && !this.removedThreadIds.has(threadId)) {
         this.store.mergeFolders(groupThreadsByCwd([opened.thread]));
@@ -1204,7 +1212,10 @@ export class DesktopSession {
       .map((thread) => {
         const name = this.renamedThreads.get(thread.id);
         const observed = name ?? thread.name;
-        return { ...thread, name: observed, preview: this.provisionalTitles.preview(thread.id, observed, thread.preview) };
+        const branch = this.isolatedWorkspace.branchFor(thread);
+        return { ...thread, ...(branch && !thread.gitInfo?.branch
+          ? { gitInfo: { sha: null, originUrl: null, ...thread.gitInfo, branch } } : {}),
+          name: observed, preview: this.provisionalTitles.preview(thread.id, observed, thread.preview) };
       });
   }
 
