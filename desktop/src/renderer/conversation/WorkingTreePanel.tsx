@@ -105,6 +105,7 @@ function FileActions({ cwd, file, git, lock, onChanged }: { cwd: string; file: G
 }
 
 const SOURCE_LABELS: Record<GitDiffSource, string> = {
+  worktree_file: "작업 파일",
   head_worktree: "HEAD ↔ 작업 트리",
   head_index: "HEAD ↔ 스테이지",
   index_worktree: "스테이지 ↔ 작업 트리",

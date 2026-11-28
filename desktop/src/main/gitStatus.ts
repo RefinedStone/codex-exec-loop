@@ -500,23 +500,29 @@ export async function readGitFileDiff(cwdInput: unknown, path: unknown, untracke
 
 /** Explicitly distinguish HEAD, index and working-copy comparisons. Never reconstruct full files from a patch. */
 async function readSourceDiff(file: RepositoryFile, sourceInput: unknown): Promise<GitFileDiff> {
-  const sources: readonly GitDiffSource[] = ["head_worktree", "head_index", "index_worktree", "untracked"];
+  const sources: readonly GitDiffSource[] = ["head_worktree", "head_index", "index_worktree", "untracked", "worktree_file"];
   if (!sources.includes(sourceInput as GitDiffSource)) throw new Error("지원하지 않는 비교 기준입니다.");
   const source = sourceInput as GitDiffSource;
   const change = await currentChange(file);
-  if (!change || change.directory || change.untracked !== (source === "untracked") || isConflictStatus(change.status)) {
+  if (change?.directory || (change && isConflictStatus(change.status)) ||
+      (source !== "worktree_file" && (!change || change.untracked !== (source === "untracked")))) {
     throw new Error("파일 상태가 변경되었거나 선택한 비교 기준을 사용할 수 없습니다.");
   }
-  const original = change.originalPath ? await repositoryFile(file.root, change.originalPath) : null;
+  const original = change?.originalPath ? await repositoryFile(file.root, change.originalPath) : null;
   if (await anyContentFilter(file.root, [file.relativePath, ...(original ? [original.relativePath] : [])])) {
     throw new Error(FILTER_MESSAGE);
   }
   // A staged rename already has its new path in the index. Only the worktree status
   // column identifies a rename between the index and the working copy.
-  const comparisonOriginal = source === "index_worktree" && !/[RC]/.test(change.status[1] ?? "") ? null : original;
+  const comparisonOriginal = source === "index_worktree" && !/[RC]/.test(change?.status[1] ?? "") ? null : original;
   const before = await snapshotGitFilePlan(file, original);
+  // A clean tracked file has no status entry. An ignored file has neither a
+  // status entry nor an index entry and must not become a composer attachment.
+  if (source === "worktree_file" && !before.indexEntries && !change?.untracked) {
+    throw new Error("추적하거나 변경 목록에 있는 파일을 선택하십시오.");
+  }
   const read = async (): Promise<GitFileDiff> => {
-    if (source === "untracked") return readUntrackedFile(file.root, file.target);
+    if (source === "untracked" || source === "worktree_file") return readUntrackedFile(file.root, file.target);
     if (source === "head_worktree" && before.headOid === null) {
       throw new Error("첫 커밋 전에는 스테이지 또는 작업 트리 비교를 선택하십시오.");
     }
@@ -532,12 +538,15 @@ async function readSourceDiff(file: RepositoryFile, sourceInput: unknown): Promi
   const after = await snapshotGitFilePlan(file, original);
   const updated = await currentChange(file);
   if (JSON.stringify(before) !== JSON.stringify(after) || JSON.stringify(result) !== JSON.stringify(repeat) ||
-      updated?.status !== change.status || updated?.originalPath !== change.originalPath) {
+      updated?.status !== change?.status || updated?.originalPath !== change?.originalPath) {
     throw new Error(CHANGED_SINCE_CONFIRMATION);
   }
-  const snapshotId = createHash("sha256").update(JSON.stringify([file.root, file.relativePath, change.originalPath, source, before, result])).digest("hex");
+  const snapshotId = createHash("sha256").update(JSON.stringify([file.root, file.relativePath, change?.originalPath ?? null, source, before, result])).digest("hex");
+  const common = await runGit(file.root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], 4096);
+  if (common.code !== 0 || common.truncated || common.timedOut) throw new Error("저장소 출처를 확인할 수 없습니다.");
   const binary = result.kind === "binary" || (result.kind === "gitDiff" && /^(Binary files .* differ|GIT binary patch)\r?$/m.test(result.text));
   return { ...result, snapshot: { source, snapshotId, headOid: before.headOid, path: file.relativePath,
+    worktreeId: file.root, repositoryId: common.stdout.trim(),
     originalPath: comparisonOriginal?.relativePath ?? null,
     contentStatus: binary ? "binary" : result.truncated ? "truncated" : result.kind === "content" ? "complete" : "patch_only" } };
 }

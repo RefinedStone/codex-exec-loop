@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,11 +23,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */`;
 
-const builtBundle = readFileSync(
-  resolve(packageRoot, "dist/akra-diorama.js"),
-  "utf8",
-);
+const intermediate = resolve(packageRoot, "dist/akra-diorama.js");
+const builtBundle = readFileSync(intermediate, "utf8");
 writeFileSync(
   resolve(packageRoot, "akra-diorama.js"),
   `${thirdPartyNotice}\n${builtBundle.replace(/[\t ]+$/gm, "")}`,
 );
+// Vite owns this intermediate. Only the promoted bundle is an input to Akra.
+unlinkSync(intermediate);

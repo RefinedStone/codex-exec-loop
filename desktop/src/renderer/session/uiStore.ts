@@ -4,7 +4,8 @@ export type { PanelId } from "../extensions/panelDefinitions";
 import { create } from "zustand";
 
 import { INITIAL_NAV, type NavEntry, type NavHistory, pushNav } from "./navHistory";
-import { saveDraft, storedDrafts } from "./draftStorage";
+import { saveDraft, storedDraftRecords } from "./draftStorage";
+import { checkBundle, type FileAttachment } from "../conversation/fileAttachment";
 export { storedDrafts } from "./draftStorage";
 import type { ZoomFactors } from "../../shared/zoom";
 
@@ -45,6 +46,8 @@ export interface UiState {
   homeWorkspaceMode: "existing" | "isolated";
   /** 입력창에 쓰던 글이다. 키는 스레드 id 이고, 새 스레드 화면은 `HOME_DRAFT` 이다. 보기를 바꿔도 남는다. */
   drafts: Record<string, string>;
+  fileLists: Record<string, readonly FileAttachment[]>;
+  memoryOnly: Record<string, boolean>;
   toasts: Toast[];
   /** 원격 호스트(클라우드 에이전트, plan 25)의 구역을 켰다. 기본값은 꺼짐이고, 꺼져 있으면 접속하지 않는다. */
   remoteAgents: boolean;
@@ -89,6 +92,7 @@ export function chosenTheme(): Theme {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
+const restoredRecords = storedDraftRecords();
 export const useUiStore = create<UiState>(() => ({
   theme: chosenTheme(),
   view: "home",
@@ -104,7 +108,9 @@ export const useUiStore = create<UiState>(() => ({
   zooms: {},
   homeCwd: null,
   homeWorkspaceMode: "existing",
-  drafts: storedDrafts(),
+  drafts: Object.fromEntries(restoredRecords.map((r) => [r.key, r.text])),
+  fileLists: Object.fromEntries(restoredRecords.map((r) => [r.key, r.attachments ?? []])),
+  memoryOnly: {},
   toasts: [],
   remoteAgents: storedRemoteAgents(),
   remoteHost: null,
@@ -178,8 +184,18 @@ export function dotDraftKey(dotId: string): string {
 }
 
 export function setDraft(key: string, text: string): void {
-  set((state) => ({ drafts: { ...state.drafts, [key]: text } }));
-  saveDraft(key, text);
+  saveContents(key, text, useUiStore.getState().fileLists[key] ?? []);
+}
+
+export function setFileList(key: string, files: readonly FileAttachment[]): void {
+  checkBundle(files);
+  saveContents(key, useUiStore.getState().drafts[key] ?? "", files);
+}
+
+function saveContents(key: string, text: string, files: readonly FileAttachment[]): void {
+  const saved = saveDraft(key, text, files);
+  set((state) => ({ drafts: { ...state.drafts, [key]: text }, fileLists: { ...state.fileLists, [key]: files },
+    memoryOnly: { ...state.memoryOnly, [key]: !saved } }));
 }
 
 /** 글을 새 스레드 화면의 입력창에 채운다. 바로 보내지 않는다. */

@@ -15,6 +15,7 @@ import { BrowserPanel } from "./browser/BrowserPanel";
 import { ApprovalPrompt } from "./conversation/ApprovalPrompt";
 import { AreaBoundary } from "./views/AreaBoundary";
 import { appendQuote } from "./conversation/quote";
+import { threadDraftKey } from "./conversation/threadDraftKey";
 import { McpWriteApprovals } from "./conversation/McpWriteApprovals";
 import { pullRequestBadgeClass } from "./conversation/BranchCommits";
 import { Composer, type ComposerActions } from "./conversation/Composer";
@@ -667,7 +668,8 @@ export function App() {
   const quoteIntoDraft = useCallback((text: string) => {
     const threadId = useDesktopStore.getState().openThreadId;
     if (!threadId) return;
-    setDraft(threadId, appendQuote(useUiStore.getState().drafts[threadId] ?? "", text));
+    const key = threadDraftKey(threadId);
+    setDraft(key, appendQuote(useUiStore.getState().drafts[key] ?? "", text));
     requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('[data-testid="composer-input"]')?.focus());
   }, []);
 
@@ -872,6 +874,7 @@ export function App() {
   };
 
   const composerActions: ComposerActions = {
+    manifestRequest: gatewayRequest,
     runCommand: (id) => commandHandlers(undefined, openThread)[id]?.(),
     // `@` 파일 언급은 열린 대화의 폴더, 새 스레드 화면이면 고른 폴더에서 찾는다 (#2837).
     searchFiles: async (query) => {
@@ -895,7 +898,7 @@ export function App() {
       visit({ view: "thread", threadId });
       // 스레드는 이미 만들었다. 첫 메시지가 실패하면 글을 그 스레드의 입력창에 되돌려서 다시 보낼 수 있게 한다.
       await current.sendMessage(text).catch((error: unknown) => {
-        setDraft(threadId, text);
+        setDraft(threadDraftKey(threadId), text);
         toast(`첫 메시지를 보내지 못했습니다: ${errorText(error)}`);
       });
       return true;

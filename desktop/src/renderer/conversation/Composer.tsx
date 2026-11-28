@@ -7,7 +7,10 @@ import type { CommandId, CommandSpec } from "../../shared/commands";
 import type { TurnPlanStep } from "../../shared/protocol/generated/v2/TurnPlanStep";
 import { Icon } from "../design/icons";
 import { useDesktopStore } from "../session/desktopStore";
-import { HOME_DRAFT, setDraft as setDraftFor, useUiStore } from "../session/uiStore";
+import { HOME_DRAFT, setDraft as setDraftFor, setFileList, useUiStore } from "../session/uiStore";
+import { currentFileTarget, reviewFiles, type ManifestRequest } from "./attachmentSource";
+import { AttachmentError, fileMessage, targetKey } from "./fileAttachment";
+import { FileAttachments } from "./FileAttachments";
 import { isSendKey, recallCursor } from "./composerKeys";
 import { slashCommandQuery, matchingSlashCommands } from "./slashCommands";
 import { type ActiveMention, activeMention, applyMention, sameMention } from "./fileMention";
@@ -22,6 +25,7 @@ import type { NextTurnSettingsController } from "../session/nextTurnSettings";
 import { NextTurnSettings } from "./NextTurnSettings";
 
 export interface ComposerActions {
+  manifestRequest?: ManifestRequest;
   /** 팔레트와 같은 앱 명령을 실행한다. 모델 메시지를 보내지 않는다 (#2837). */
   runCommand?(id: CommandId): void;
   /** 대화 폴더의 파일을 찾는다 (#2837). 없으면 `@` 후보를 보이지 않는다. */
@@ -31,7 +35,7 @@ export interface ComposerActions {
   queueMessage?(text: string): void;
   resumeQueuedMessages?(): void;
   /** `images` 는 첨부한 이미지의 data URL 이다 (#2838). */
-  sendMessage(text: string, images?: readonly string[]): Promise<void>;
+  sendMessage(text: string, images?: readonly string[]): Promise<string | void>;
   interrupt(): Promise<void>;
   /** 새 스레드를 만들고 첫 메시지를 보낸다. 사용자가 폴더 고르기를 취소하면 false 이다. */
   startThread(text: string): Promise<boolean>;
@@ -79,6 +83,7 @@ function ContextRing({ percent }: { percent: number }) {
 
 export function Composer({ actions, home = false, above }: { actions: ComposerActions; home?: boolean; above?: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
+  const [receipt, setReceipt] = useState<{ key: string; turn: string; ids: string[] } | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const connected = useDesktopStore((state) => state.connection?.phase === "connected");
   const transcript = useDesktopStore((state) => (home ? null : state.transcript));
@@ -88,8 +93,20 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
   const livePlan = inProgress ? (transcript?.turns.at(-1)?.plan ?? null) : null;
   const percent = contextPercent(transcript);
   // 초안은 화면 저장소에 둔다. 보기를 바꾸거나 업무 패널이 글을 넘겨도 같은 값을 본다.
-  const draftKey = home ? HOME_DRAFT : (transcript?.threadId ?? "");
+  const target = !home && actions.manifestRequest ? currentFileTarget() : null;
+  const legacyKey = home ? HOME_DRAFT : (transcript?.threadId ?? "");
+  const draftKey = target ? targetKey(target) : legacyKey;
   const draft = useUiStore((state) => state.drafts[draftKey] ?? "");
+  const files = useUiStore(s => s.fileLists[draftKey]);
+  const memoryOnly = useUiStore(s => s.memoryOnly[draftKey]);
+  useEffect(() => {
+    if (legacyKey === draftKey) return;
+    const state = useUiStore.getState();
+    if (state.drafts[draftKey] === undefined && state.drafts[legacyKey]) {
+      setDraftFor(draftKey, state.drafts[legacyKey]);
+      if (!useUiStore.getState().memoryOnly[draftKey]) setDraftFor(legacyKey, "");
+    }
+  }, [legacyKey, draftKey]);
   const sending = useComposerRequests((state) => state.pendingKeys.includes(draftKey));
   const setDraft = (text: string) => setDraftFor(draftKey, text);
   const disabled = !connected || (!home && !transcript) || writerElsewhere || sending;
@@ -179,14 +196,36 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
     const text = draft;
     const sent = attachments;
     const images = sent.map((image) => image.url);
-    if ((text.trim().length === 0 && images.length === 0) || disabled) {
+    const included = files?.some(item => item.included);
+    if ((text.trim().length === 0 && images.length === 0 && !included) || disabled) {
       return;
     }
     void run(async () => {
       if (home) {
         if (!(await actions.startThread(text))) return;
       } else {
-        await actions.sendMessage(text, images);
+        let wire = text;
+        if (included && files && target && actions.manifestRequest) {
+          const reviewed = await reviewFiles(actions.manifestRequest, files, target);
+          const live = currentFileTarget(), state = useUiStore.getState();
+          if (!live || targetKey(live) !== draftKey || state.fileLists[draftKey] !== files || (state.drafts[draftKey] ?? "") !== text) {
+            throw new AttachmentError("대상 또는 초안이 바뀌었습니다. 다시 검토하세요.");
+          }
+          if (reviewed.some((item, i) => item !== files[i])) {
+            setFileList(draftKey, reviewed);
+            throw new AttachmentError("원래 선택을 보존했습니다. 변경 내용을 검토하세요.");
+          }
+          if (reviewed.some(item => item.included && item.staleReason && !item.useOriginal)) {
+            throw new AttachmentError("새 범위를 선택하거나 이전 판 기준 전송을 확인하세요.");
+          }
+          wire = fileMessage(text, reviewed);
+        }
+        const turn = await actions.sendMessage(wire, images);
+        if (included && files) {
+          if (!turn) throw new AttachmentError("접수한 턴을 확인하지 못했습니다. 초안을 보존했습니다. 대화 기록을 확인하세요.");
+          setReceipt({ key: draftKey, turn, ids: files.filter(f => f.included).map(f => f.attachmentId) });
+        }
+        if (included && files && files === useUiStore.getState().fileLists[draftKey]) setFileList(draftKey, files.filter(item => !item.included));
         setAttachments((current) => withoutSent(current, sent));
       }
       rememberPrompt(text);
@@ -360,6 +399,11 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
         {livePlan && livePlan.length > 0 && <PlanStrip steps={livePlan} />}
         {!connected && <p className="muted">연결이 끊겨 입력할 수 없습니다.</p>}
         {error && <p className="error">{error}</p>}
+        {receipt?.key === draftKey && <details><summary>첨부 {receipt.ids.length}개 전송 접수 (읽음 확인 아님)</summary>
+          <code>{target?.threadId} · {receipt.turn} · {receipt.ids.join(", ")}</code></details>}
+        {memoryOnly && <p role="alert">이 창에만 보관됨: 저장 공간 또는 본문 한도(20,000자)를 확인하세요.</p>}
+        {target && actions.manifestRequest && <FileAttachments key={draftKey} target={target} request={actions.manifestRequest}
+          turnId={transcript?.turns.at(-1)?.id ?? null} disabled={disabled} />}
         {!home && transcript && actions.modelSettings && <NextTurnSettings key={transcript.threadId}
           controller={actions.modelSettings} threadId={transcript.threadId} disabled={!connected || writerElsewhere} />}
         <div className="composer">
@@ -432,7 +476,7 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
             data-testid="composer-input"
           />
           <div className="composer-bar">
-            {!home && actions.queueMessage && <button type="button" className="subtle-button" disabled={disabled || !draft.trim()} onClick={reserve} data-testid="composer-queue">다음 턴 예약</button>}
+            {!home && actions.queueMessage && <button type="button" className="subtle-button" disabled={disabled || !draft.trim() || files?.some(item => item.included)} onClick={reserve} data-testid="composer-queue">다음 턴 예약</button>}
             <span className="bar-spacer" />
             {percent !== null && <ContextRing percent={percent} />}
             {inProgress && (
@@ -440,7 +484,7 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
                 <span className="stop-square" />
               </button>
             )}
-            <button type="button" className="round-button send" title={sendTitle} aria-label={sendTitle} onClick={send} disabled={disabled || (draft.trim().length === 0 && attachments.length === 0)} data-testid="composer-send">
+            <button type="button" className="round-button send" title={sendTitle} aria-label={sendTitle} onClick={send} disabled={disabled || (draft.trim().length === 0 && attachments.length === 0 && !files?.some(item => item.included))} data-testid="composer-send">
               <Icon name="arrowUp" />
             </button>
           </div>

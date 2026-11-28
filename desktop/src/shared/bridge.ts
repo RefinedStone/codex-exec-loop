@@ -311,7 +311,7 @@ export type GitFileAction = "stage" | "unstage" | "discard";
 /** `cancelled` 는 사용자가 확인 창에서 취소했다는 뜻이다. */
 export type GitActionResult = { ok: true } | { ok: false; message: string; cancelled?: boolean };
 
-export type GitDiffSource = "head_worktree" | "head_index" | "index_worktree" | "untracked";
+export type GitDiffSource = "head_worktree" | "head_index" | "index_worktree" | "untracked" | "worktree_file";
 
 /** Identifies the captured view, not a promise that the worktree is still unchanged. */
 export interface GitDiffSnapshot {
@@ -321,6 +321,8 @@ export interface GitDiffSnapshot {
   path: string;
   originalPath: string | null;
   contentStatus: "patch_only" | "complete" | "truncated" | "binary";
+  worktreeId?: string;
+  repositoryId?: string;
 }
 
 export type GitFileDiff = (
