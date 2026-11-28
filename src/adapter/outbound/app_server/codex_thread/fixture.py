@@ -59,6 +59,9 @@ for line in sys.stdin:
         if scenario == "auth_api_key":
             account = {"type": "apiKey"}
         result = {"account": None if scenario == "auth_missing" else account}
+    elif method == "account/rateLimits/read":
+        assert params == {}
+        result = {"ordinaryUsageAllowed": True, "rateLimits": {"limitId": "codex", "primary": {"usedPercent": 10}}}
     elif method == "config/read":
         assert params["cwd"] == str(cwd)
         store = "file" if scenario == "auth_file_store" else "keyring"
