@@ -116,6 +116,14 @@ pub trait ParallelModeRuntimePort: Send + Sync {
         Err("parallel pool mutation locking is unavailable in this runtime".to_string())
     }
 
+    fn integration_branch_for_workspace(&self, repo_root: &str) -> Result<String, String> {
+        crate::configuration::integration_branch::for_workspace(
+            Path::new(repo_root),
+            |key| self.environment_variable(key),
+            |key| self.run_command("git", &["-C", repo_root, "config", "--get", key], None),
+        )
+    }
+
     fn environment_variable(&self, _name: &str) -> Result<Option<String>, String> {
         Ok(None)
     }

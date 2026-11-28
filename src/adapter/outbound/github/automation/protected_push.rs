@@ -1,6 +1,8 @@
 //! The expected OID comes only from an explicit fetch of the frozen push destination.
 use super::*;
+use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
 use crate::adapter::outbound::git::protection::PolicyStore;
+use crate::application::port::outbound::parallel_mode_runtime_port::ParallelModeRuntimePort;
 use crate::domain::git_protection::{ProtectedBranchPolicy, validate_rule};
 use serde::Serialize;
 
@@ -31,9 +33,9 @@ fn automatic(cwd: &str, url: &str) -> Result<Vec<String>> {
         .lines()
         .find_map(|l| l.strip_prefix("ref: refs/heads/")?.strip_suffix("\tHEAD"))
         .context("remote default branch cannot be verified")?;
-    let integration =
-        crate::application::service::parallel_mode::parallel_mode_integration_branch_for_repo(&crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter::new(),cwd)
-            .map_err(anyhow::Error::msg)?;
+    let integration = GitParallelModeRuntimeAdapter::new()
+        .integration_branch_for_workspace(cwd)
+        .map_err(anyhow::Error::msg)?;
     let mut names = vec![default.to_owned(), integration];
     names.sort();
     names.dedup();
