@@ -56,7 +56,7 @@ try {
   const gateway = await startFakeGateway(endpoint, recordings, { appServer(method, params) {
     if (method === "akra/context/manifest") return { result: { manifest: { id: "fixture-manifest" }, changed: false } };
     if (method === "turn/start" || method === "turn/steer") {
-      sent.push(params);
+      sent.push({ params });
       return { result: { turn: { id: "received-turn" }, turnId: "received-turn" } };
     }
   } });
@@ -142,7 +142,7 @@ try {
       await page.getByTestId("composer-send").click();
       await page.getByTestId("file-message-preview").waitFor({ state: "detached" });
       assert.equal(sent.length, 1);
-      assert.equal(sent[0].input[0].text, preview);
+      assert.equal(sent[0].params.input[0].text, preview);
       assert.equal(await cards.count(), 1);
       assert.equal(await cards.filter({ hasText: "sample.txt:1–1" }).getByLabel("포함").isChecked(), false);
       assert.equal((await git(["diff", "--cached"])).stdout, staged);
