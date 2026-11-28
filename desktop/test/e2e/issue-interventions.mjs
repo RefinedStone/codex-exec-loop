@@ -28,6 +28,8 @@ let conversation = { kind: "draft", shared_copy: { title: "공유 작업 · 검�
 let supersedeAnswer = false;
 let heldDetailReply = null;
 let heldInterventionReply = null;
+let holdForegroundAttention = false;
+const foregroundAttentionReply = Promise.withResolvers();
 let nextInterventionFailure = null;
 const title = "검색 응답을 빠르게 하고 결과를 보존하기";
 const question = "공유된 계획을 기준으로 이 작업을 시작할까요?";
@@ -84,11 +86,15 @@ const commandRequests = (type) => requests.flatMap((entry) => {
   return request?.command?.type === type ? [{ ...entry, request }] : [];
 });
 const kernel = {
-  kernel: "issue-interventions-fixture", queries: {},
+  kernel: "issue-interventions-fixture", queries: { attention: { type: "attention", items: [] } },
   onRequest(method, params) {
     const confirmation = confirmationReply(method, params);
     if (confirmation) return confirmation;
     if (method === "akra/kernel/query") {
+      if (params.query?.type === "attention" && holdForegroundAttention) {
+        holdForegroundAttention = false;
+        return { result: kernel.queries.attention, replyAfter: foregroundAttentionReply.promise };
+      }
       if (params.query?.type === "issue_automation") return { result: state() };
       if (params.query?.type === "issues") return { result: { type: "issues", status: "ready", revision, items: [item()],
         groups: [{ id: "needs-decision", label: "결정이 필요한 이슈", item_indices: [0] }], next_after: null } };
@@ -687,8 +693,10 @@ try {
   await app.evaluate(() => { globalThis.issueInterventionFixture.focused = true; });
   const checks = await app.evaluate(() => globalThis.issueInterventionFixture.focusChecks);
   revision++;
+  holdForegroundAttention = true;
   gateway.sendKernelEvent({ type: "issue_decision", decision: fact(requestDecision("foreground-decision")), revision });
-  await until(async () => (await app.evaluate(() => globalThis.issueInterventionFixture.focusChecks)) > checks);
+  await until(async () => !holdForegroundAttention && (await app.evaluate(() => globalThis.issueInterventionFixture.focusChecks)) > checks,
+    "the foreground focus check and in-flight attention read");
   assert.equal(await page.evaluate(() => window.issueNotifications.length), 0);
   await app.evaluate(() => { globalThis.issueInterventionFixture.focused = false; });
   control = { tracked: true, held: false, taken_over: false, cancelled: false, authorization_epoch: control.authorization_epoch + 1 };
@@ -703,6 +711,11 @@ try {
   assert.equal(notice.options.body, "이슈에 새 결정 요청이 있습니다. 이슈 탭에서 확인해 주세요.");
   assert.ok(!JSON.stringify(notice).includes(question) && !JSON.stringify(notice).includes(title));
   assert.equal(requests.filter((entry) => entry.method === "akra/kernel/query").length, beforeBackgroundReads);
+  // The pending read coalesces both event frames into one metadata refresh, never an issue read.
+  foregroundAttentionReply.resolve();
+  const backgroundReads = () => requests.filter((entry) => entry.method === "akra/kernel/query").slice(beforeBackgroundReads);
+  await until(() => backgroundReads().length > 0, "the coalesced background attention refresh");
+  assert.deepEqual(backgroundReads().map((entry) => entry.params), [{ query: { type: "attention" } }]);
   const otherWorkspace = "/work/other-app";
   await app.evaluate(({ ipcMain }, cwd) => {
     ipcMain.removeHandler("akra:choose-folder");
