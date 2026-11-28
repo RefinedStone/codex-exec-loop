@@ -162,7 +162,7 @@ export function GraphRows({ graph, folders, selected, preview, top, picks, toggl
         <div className="git-graph-rows" style={{ height: virtualizer.getTotalSize() }} role="presentation">
           {items.map((item) => {
             const row = state.rows[item.index]!;
-            const dimmed = row.backupOnly || (matches.length > 0 && !matched.has(item.index));
+            const dimmed = row.outsideFilter || row.backupOnly || (matches.length > 0 && !matched.has(item.index));
             return (
               <div
                 key={item.key}

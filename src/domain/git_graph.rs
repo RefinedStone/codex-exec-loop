@@ -60,6 +60,8 @@ pub struct GitGraphRef {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitGraphRow {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub outside_filter: bool,
     pub id: String,
     pub parents: Vec<String>,
     pub author_name: String,
@@ -159,6 +161,7 @@ impl GitGraphLaneState {
             lanes_out,
             lanes_through,
             backup_only: false,
+            outside_filter: false,
         }
     }
 
@@ -378,3 +381,5 @@ mod tests {
         );
     }
 }
+
+pub mod filter;

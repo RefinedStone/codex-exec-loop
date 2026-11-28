@@ -1440,7 +1440,10 @@ The Gateway records the external documents that a thread mentions, without a mod
   the other rows, and "다음" reads up to 10 further pages of 1,000 rows when the loaded rows have no
   further match. The commit that a worktree has checked out carries a badge with the newest thread whose
   folder is in that worktree; the badge opens the thread. A backup ref has a dashed label, and a commit
-  reached only from a backup ref is dim. The panel has no path or branch filter.
+  reached only from a backup ref is dim. Graph filters apply on the Gateway to full commit messages,
+  authors, literal repository-relative paths, and selected branch ancestry. The local-branch preset
+  includes commits reachable from local branches; the thread preset follows its worktree HEAD.
+  Highlight keeps the unfiltered graph. Hide paginates only matches; changing criteria discards the cursor.
   Right-click a row to select it and open the commit action chooser. With a commit selected,
   Cmd/Ctrl+G or the palette command “선택한 커밋 작업” opens the same chooser. Picking an action only
   requests its preview. Execute is a separate confirmation in the plan.

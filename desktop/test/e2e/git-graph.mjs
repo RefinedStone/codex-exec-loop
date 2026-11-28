@@ -254,6 +254,13 @@ try {
   state.worktreeProgress = { operationInProgress: null, conflictedFiles: 0 };
   await strip.waitFor({ state: "detached", timeout: 10_000 });
   check("the status strip leaves when the work is finished", (await strip.count()) === 0);
+  await page.getByText("그래프 필터", { exact:true }).click();
+  await page.getByLabel("작성자",{exact:true}).fill("needle");
+  await page.getByLabel("일치하지 않는 커밋 숨기기").check();
+  await page.getByRole("button",{name:"필터 적용"}).click();
+  await page.getByTestId("git-graph-count").filter({hasText:/^2개$/}).waitFor();
+  check("hidden rows request later server pages with the same filter", graphRequests.at(-1).cursor && graphRequests.at(-1).filter.author === "needle" && graphRequests.at(-1).filter.hide === true);
+  await page.getByRole("button",{name:"초기화",exact:true}).click();
   // #2851 review: a real unborn repository with two changed files still has a clickable graph row.
   state.unborn = true;
   writeFileSync(join(workspace, "first.txt"), "first\n");
