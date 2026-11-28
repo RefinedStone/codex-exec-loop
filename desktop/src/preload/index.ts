@@ -227,7 +227,7 @@ const bridge: AkraBridge = {
       ipcRenderer.send(IPC_CHANNELS.dotsAllowSend, dotId);
     },
   },
-  isAppFocused: () => ipcRenderer.invoke(IPC_CHANNELS.appFocused) as Promise<boolean>,
+  isAppFocused: (scope) => ipcRenderer.invoke(IPC_CHANNELS.appFocused, scope) as Promise<boolean>,
   zoom: {
     get(): Promise<ZoomFactors> {
       return ipcRenderer.invoke(IPC_CHANNELS.zoomGet) as Promise<ZoomFactors>;
@@ -242,6 +242,7 @@ const bridge: AkraBridge = {
     onChanged: (listener) => listen(IPC_CHANNELS.settingsChanged, listener),
     onOpen: (listener) => listen(IPC_CHANNELS.settingsOpen, listener),
     reportWorking: (working) => ipcRenderer.send(IPC_CHANNELS.reportWorking, working),
+    reportAttention: (kernel, count) => ipcRenderer.send(IPC_CHANNELS.reportAttention, kernel, count),
   },
   vaultRestore: {
     open: (target) => ipcRenderer.invoke(IPC_CHANNELS.vaultRestoreOpen, target),

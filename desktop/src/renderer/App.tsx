@@ -1,4 +1,4 @@
-import { newAttentionCount } from "./kernel/attentionNavigation";
+import { useAttentionSignals } from "./kernel/useAttentionSignals";
 // 화면 틀이다 (R10): 사이드바, 위 막대, 본문(새 스레드 · 현황판 · 대화와 입력창), 터미널, 오른쪽 패널.
 // 모양은 UX 블루프린트(`blueprint/`)를 따른다. 대화 상태는 `DesktopSession` 과 `desktopStore` 가 가진다.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -433,6 +433,7 @@ export function App() {
   // 접속이 끊기면 턴의 상태를 알 수 없다. 그때는 일하는 중으로 치지 않는다: 잠자기 방지가 켜진 채로 남지 않는다.
   const working = useDesktopStore((state) => state.connection?.phase === "connected" && state.activeThreadIds.length > 0);
   useEffect(() => window.akra.settings.reportWorking(working), [working]);
+  useAttentionSignals();
   // 프로젝트(열린 스레드의 폴더)가 바뀌면 이 창이 연 로컬 복원본을 다시 잠근다 (#2427).
   useEffect(() => () => window.akra.vaultRestore.projectChanged(), [openCwd]);
 
@@ -692,11 +693,6 @@ export function App() {
   useEffect(
     () =>
       useDesktopStore.subscribe((state, previous) => {
-        if (state.kernel.kernel === previous.kernel.kernel && state.kernel.phase === "attached"
-          && state.kernel.attentionItems !== previous.kernel.attentionItems) {
-          const count = newAttentionCount(previous.kernel.attentionItems, state.kernel.attentionItems);
-          if (count && document.hasFocus()) toast(`새 응답 필요 항목 ${count}개가 있습니다.`);
-        }
         for (const event of issueDecisionAttentionEvents(previous, state)) {
           notifyIssueDecision(() => { setIssueAttentionTarget({ ...event }); openPanel("issues"); }, `akra:issue-decision:${event.kernel}:${event.decisionId}`,
             event.arbiter ? (event.arbiter.outcome === "applied" ? "arbiter_applied" : "arbiter_waiting") : event.reminderId !== undefined,
