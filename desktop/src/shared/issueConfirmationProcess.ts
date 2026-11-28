@@ -1,6 +1,6 @@
 import type { IssueConfirmationResponse } from "./issueConfirmation";
 
-export type ConfirmationKind = "decision" | "mode" | "autonomy" | "binding_resume" | "criterion_waiver";
+export type ConfirmationKind = "decision" | "mode" | "autonomy" | "binding_resume" | "criterion_waiver" | "comment_request";
 export interface ConfirmationDisplay {
   message: string;
   detail: string;

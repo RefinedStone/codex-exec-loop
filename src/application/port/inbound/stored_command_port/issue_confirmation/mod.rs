@@ -19,6 +19,11 @@ use crate::domain::planning::evidence::{validate_evidence_identifier, validate_e
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum IssueConfirmationTarget {
+    CommentRequest {
+        workspace: String,
+        command_id: String,
+        basis: crate::domain::issue_automation::comment_command::IssueCommentRequestBasis,
+    },
     BindingResume {
         workspace: String,
         command_id: String,
@@ -65,7 +70,8 @@ pub enum IssueConfirmationTarget {
 impl IssueConfirmationTarget {
     pub fn workspace(&self) -> &str {
         match self {
-            Self::BindingResume { workspace, .. }
+            Self::CommentRequest { workspace, .. }
+            | Self::BindingResume { workspace, .. }
             | Self::CriterionWaiver { workspace, .. }
             | Self::Decision { workspace, .. }
             | Self::Mode { workspace, .. }
@@ -83,6 +89,9 @@ impl IssueConfirmationTarget {
             return Err(IssueConfirmationError::Invalid);
         }
         match self {
+            Self::CommentRequest { command_id, .. } => {
+                validate_command_id(command_id).map_err(|_| IssueConfirmationError::Invalid)?;
+            }
             Self::BindingResume {
                 command_id,
                 binding_id,

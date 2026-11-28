@@ -1554,6 +1554,19 @@ impl AppServerConnection {
         self.send_request("account/read", json!({}))
     }
 
+    pub(super) fn read_account_quota(
+        &mut self,
+    ) -> crate::application::port::outbound::issue_account_quota_port::IssueAccountQuota {
+        use crate::application::port::outbound::issue_account_quota_port::IssueAccountQuota;
+        match self
+            .ensure_initialized()
+            .and_then(|()| self.send_request("account/rateLimits/read", json!({})))
+        {
+            Ok(reply) => super::codex_thread::account_limits::admission(reply),
+            Err(_) => IssueAccountQuota::Unknown,
+        }
+    }
+
     pub(super) fn isolated_request(&mut self, method: &str, params: Value) -> Result<Value> {
         self.ensure_initialized()?;
         anyhow::ensure!(

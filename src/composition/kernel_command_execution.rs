@@ -277,7 +277,9 @@ impl KernelCommandPort for CommandOnlyKernel {
         // Reject before runtime preparation, lock acquisition, or any command-history write.
         if matches!(
             kind,
-            KernelCommandKind::RequestTaskVerification | KernelCommandKind::SetIssueBindingPaused
+            KernelCommandKind::RequestTaskVerification
+                | KernelCommandKind::SetIssueBindingPaused
+                | KernelCommandKind::RetryIssueAccountQuota
         ) {
             return unreachable_answer("This command requires the running repository kernel.");
         }
@@ -336,6 +338,7 @@ impl KernelCommandPort for CommandOnlyKernel {
                     StoredCommand::AnswerIssueDecision { .. }
                         | StoredCommand::AskIssueDecision { .. }
                         | StoredCommand::InterveneIssue { .. }
+                        | StoredCommand::ApplyIssueCommentRequest { .. }
                         | StoredCommand::SetIssueAutonomy { .. }
                         | StoredCommand::PrepareEvidence { .. }
                         | StoredCommand::RecordEvidence { .. }

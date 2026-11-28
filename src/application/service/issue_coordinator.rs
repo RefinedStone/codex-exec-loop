@@ -10,6 +10,7 @@ mod auto_delivery;
 mod closure;
 mod delivery;
 mod feedback;
+mod quota;
 mod start;
 use super::issue_policy::{IssuePolicyService, issue_policy_version};
 use super::issue_triage::{IssueTriageService, IssueTriagedFact};
@@ -39,6 +40,7 @@ use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IssueCoordinatorFact {
+    AccountQuotaChanged,
     Triaged(IssueTriagedFact),
     FeedbackPosted(IssueFeedbackEvent),
     Decision {
@@ -114,9 +116,9 @@ fn work_event_reporter<'a>(
                     IssueCoordinatorFact::DecisionReminded(event) => {
                         reported.insert(event.event_id.clone())
                     }
-                    IssueCoordinatorFact::Triaged(_) | IssueCoordinatorFact::Decision { .. } => {
-                        true
-                    }
+                    IssueCoordinatorFact::Triaged(_)
+                    | IssueCoordinatorFact::Decision { .. }
+                    | IssueCoordinatorFact::AccountQuotaChanged => true,
                 })
                 .collect()
         };
@@ -143,6 +145,11 @@ pub struct IssueCoordinatorService {
     execution: Arc<dyn IssueWorkExecutionPort>,
     feedback: Option<Arc<IssueFeedbackService>>,
     arbiter: Option<arbiter::ArbiterRuntime>,
+    account_quota: Option<
+        Arc<
+            dyn crate::application::port::outbound::issue_account_quota_port::IssueAccountQuotaPort,
+        >,
+    >,
     publication_journal: Option<Arc<dyn IssuePublishIntentJournalPort>>,
     issue_binding_admission: Option<Arc<super::issue_binding_admission::IssueBindingAdmission>>,
     /// 한 host의 동시 tick/reconnect 호출을 직렬화한다. 실행기 상태는 소유하지 않는다.
@@ -171,6 +178,7 @@ impl IssueCoordinatorService {
             execution,
             feedback: None,
             arbiter: None,
+            account_quota: None,
             publication_journal: None,
             issue_binding_admission: None,
             tick_gate: Mutex::new(()),
@@ -790,6 +798,18 @@ impl IssueCoordinatorService {
         let execution = self
             .execution
             .snapshot(&self.workspace, &issue_work_order_id(issue));
+        if initial_admission
+            && !matches!(authorization, StartAuthorization::Human(_))
+            && !self.check_account_quota(
+                crate::application::port::outbound::issue_account_quota_port::IssueQuotaLane::Start,
+                cancel,
+                (committed, || {
+                    self.account_quota.as_ref().map(|port| port.read())
+                }),
+            )?
+        {
+            return Ok(());
+        }
         // 승인 직후에도 반드시 원격을 다시 읽는다. 취소 중에는 원격을 취소할 수 없어도 저장/제출은 하지 않는다.
         if !self.revoke_on_current_error(existing.as_ref(), self.fresh_resync(issue, cancel))? {
             return Ok(());

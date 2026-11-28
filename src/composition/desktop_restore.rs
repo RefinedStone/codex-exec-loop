@@ -72,7 +72,7 @@ pub(crate) fn export_backup(
 
 pub(crate) fn local_maintenance(
     workspace: &str,
-) -> Result<crate::application::service::evidence_vault_lifecycle::LocalVaultMaintenance> {
+) -> Result<impl crate::application::port::inbound::vault_maintenance_port::VaultMaintenancePort> {
     use crate::application::port::outbound::vault_restore_workspace_port::VaultRestoreWorkspacePort;
     let workspace = VaultRestoreWorkspaceAdapter
         .canonical_workspace(workspace)

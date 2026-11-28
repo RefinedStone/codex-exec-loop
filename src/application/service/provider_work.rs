@@ -67,6 +67,31 @@ impl ProviderWorkService {
         self.credentials.validate_current(reference)?;
         result
     }
+    pub fn jira_draft_target(
+        &self,
+        reference: &ConnectionRef,
+        key: &str,
+    ) -> CredentialResult<crate::application::port::inbound::issue_draft_port::JiraDraftCoordinate>
+    {
+        Self::require_provider(reference, Provider::Jira)?;
+        if !valid_jira_key(key) {
+            return Err(ProviderCredentialError::InvalidRequest);
+        }
+        let lease = self.credentials.acquire(reference)?;
+        let (cloud_id, project_id, issue_id) =
+            self.api
+                .jira_draft_ids(&lease.metadata, &lease.token, key)?;
+        self.credentials.validate_current(reference)?;
+        Ok(
+            crate::application::port::inbound::issue_draft_port::JiraDraftCoordinate {
+                connection: reference.clone(),
+                cloud_id,
+                project_id,
+                issue_id,
+            },
+        )
+    }
+
     pub fn jira_current_version(
         &self,
         reference: &ConnectionRef,

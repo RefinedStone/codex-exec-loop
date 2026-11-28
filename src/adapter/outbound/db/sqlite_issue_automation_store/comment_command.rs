@@ -4,8 +4,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{SqliteIssueAutomationStoreAdapter, validate_reference_scope};
 use crate::application::port::outbound::issue_comment_command_port::IssueCommentCommandStorePort;
+use crate::domain::issue_automation::collection::IssueCollectionItem;
 use crate::domain::issue_automation::comment_command::{
-    IssueCommentCommandKind, IssueCommentCommandRecord,
+    IssueCommentCommandKind, IssueCommentCommandRecord, IssueCommentRequestAcceptance,
+    IssueCommentRequestBasis, IssueCommentRequestKey, StoredIssueCommentRequest,
 };
 use crate::domain::issue_work::IssueReference;
 
@@ -20,6 +22,19 @@ CREATE TABLE issue_comment_commands (
     intervention_command_id TEXT COLLATE BINARY,
     PRIMARY KEY (workspace_dir, issue_key, comment_id),
     CHECK ((kind = 'hold') = (intervention_command_id IS NOT NULL))
+) STRICT, WITHOUT ROWID
+"#;
+pub(super) const REQUEST_TABLE: &str = "issue_comment_requests";
+pub(super) const REQUEST_SCHEMA: &str = r#"
+CREATE TABLE issue_comment_requests (
+    workspace_dir TEXT COLLATE BINARY NOT NULL,
+    issue_key TEXT COLLATE BINARY NOT NULL,
+    comment_id TEXT COLLATE BINARY NOT NULL,
+    basis_json TEXT NOT NULL,
+    accepted INTEGER NOT NULL DEFAULT 0 CHECK (accepted IN (0, 1, 2, 3)),
+    PRIMARY KEY (workspace_dir, issue_key, comment_id),
+    FOREIGN KEY (workspace_dir, issue_key, comment_id)
+        REFERENCES issue_comment_commands (workspace_dir, issue_key, comment_id)
 ) STRICT, WITHOUT ROWID
 "#;
 
@@ -59,6 +74,125 @@ fn validate_id(value: &str) -> Result<()> {
 }
 
 impl IssueCommentCommandStorePort for SqliteIssueAutomationStoreAdapter {
+    fn current_request_issue(
+        &self,
+        key: &IssueCommentRequestKey,
+    ) -> Result<Option<IssueCollectionItem>> {
+        let workspace = &key.issue.project_scope.workspace_dir;
+        self.with_connection(workspace, |connection, _guard| {
+            let snapshot =
+                connection.transaction_with_behavior(rusqlite::TransactionBehavior::Deferred)?;
+            let item = super::collection::queries::item(&snapshot, workspace, &key.issue)?;
+            snapshot.commit()?;
+            Ok(item)
+        })
+    }
+    fn record_comment_request(
+        &self,
+        record: &IssueCommentCommandRecord,
+        basis: &IssueCommentRequestBasis,
+    ) -> Result<bool> {
+        let workspace = &record.issue.project_scope.workspace_dir;
+        self.with_connection(workspace, |connection, guard| {
+            super::transaction(connection, guard, |transaction| {
+                if !insert_record(transaction, workspace, record)? {
+                    return Ok(false);
+                }
+                transaction.execute(
+                "INSERT INTO issue_comment_requests (workspace_dir, issue_key, comment_id, basis_json)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![workspace, issue_key(&record.issue)?, record.comment_id, serde_json::to_string(basis)?],
+                )?;
+                Ok(true)
+            })
+        })
+    }
+
+    fn request_state(
+        &self,
+        key: &IssueCommentRequestKey,
+    ) -> Result<Option<(IssueCommentRequestBasis, IssueCommentRequestAcceptance)>> {
+        let workspace = &key.issue.project_scope.workspace_dir;
+        validate_reference_scope(workspace, &key.issue)?;
+        self.with_connection(workspace, |connection, _guard| {
+            let state: Option<(String, i64)> = connection
+                .query_row(
+                    "SELECT basis_json, accepted FROM issue_comment_requests
+                 WHERE workspace_dir=?1 AND issue_key=?2 AND comment_id=?3",
+                    params![workspace, issue_key(&key.issue)?, key.comment_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            state
+                .map(|(basis, accepted)| {
+                    let acceptance = match accepted {
+                        0 => IssueCommentRequestAcceptance::Pending,
+                        1 => IssueCommentRequestAcceptance::Accepted,
+                        2 => IssueCommentRequestAcceptance::Refused,
+                        3 => IssueCommentRequestAcceptance::Uncertain,
+                        _ => bail!("unknown comment request acceptance state"),
+                    };
+                    Ok((serde_json::from_str(&basis)?, acceptance))
+                })
+                .transpose()
+        })
+    }
+
+    fn claim_request(&self, request: &StoredIssueCommentRequest) -> Result<bool> {
+        let workspace = &request.key.issue.project_scope.workspace_dir;
+        validate_reference_scope(workspace, &request.key.issue)?;
+        self.with_connection(workspace, |connection, _guard| {
+            Ok(connection.execute(
+                "UPDATE issue_comment_requests SET accepted=1
+                 WHERE workspace_dir=?1 AND issue_key=?2 AND comment_id=?3 AND basis_json=?4 AND accepted=0",
+                params![workspace, issue_key(&request.key.issue)?, request.key.comment_id, serde_json::to_string(&request.basis)?],
+            )? == 1)
+        })
+    }
+
+    fn accepted_requests(&self, workspace: &str) -> Result<Vec<StoredIssueCommentRequest>> {
+        self.with_connection(workspace, |connection, _guard| {
+            let mut statement = connection.prepare(
+                "SELECT issue_key, comment_id, basis_json FROM issue_comment_requests
+                 WHERE workspace_dir=?1 AND accepted=1 ORDER BY issue_key, comment_id",
+            )?;
+            let mut rows = statement.query([workspace])?;
+            let mut requests = Vec::new();
+            while let Some(row) = rows.next()? {
+                requests.push(StoredIssueCommentRequest {
+                    key: IssueCommentRequestKey {
+                        issue: serde_json::from_str(row.get_ref(0)?.as_str()?)?,
+                        comment_id: row.get(1)?,
+                    },
+                    basis: serde_json::from_str(row.get_ref(2)?.as_str()?)?,
+                });
+            }
+            Ok(requests)
+        })
+    }
+    fn close_accepted_request(
+        &self,
+        key: &IssueCommentRequestKey,
+        state: IssueCommentRequestAcceptance,
+    ) -> Result<()> {
+        let state = match state {
+            IssueCommentRequestAcceptance::Refused => 2,
+            IssueCommentRequestAcceptance::Uncertain => 3,
+            IssueCommentRequestAcceptance::Pending | IssueCommentRequestAcceptance::Accepted => {
+                bail!("closing a comment request requires a terminal outcome");
+            }
+        };
+        let workspace = &key.issue.project_scope.workspace_dir;
+        validate_reference_scope(workspace, &key.issue)?;
+        self.with_connection(workspace, |connection, _guard| {
+            connection.execute(
+                "UPDATE issue_comment_requests SET accepted=?4
+                 WHERE workspace_dir=?1 AND issue_key=?2 AND comment_id=?3 AND accepted=1",
+                params![workspace, issue_key(&key.issue)?, key.comment_id, state],
+            )?;
+            Ok(())
+        })
+    }
     fn recorded_requests(
         &self,
         workspace: &str,
@@ -109,29 +243,37 @@ impl IssueCommentCommandStorePort for SqliteIssueAutomationStoreAdapter {
         workspace: &str,
         record: &IssueCommentCommandRecord,
     ) -> Result<bool> {
-        validate_reference_scope(workspace, &record.issue)?;
-        validate_id(&record.comment_id)?;
-        validate_id(&record.author_id)?;
-        if let Some(command_id) = &record.intervention_command_id {
-            validate_id(command_id)?;
-        }
         self.with_connection(workspace, |connection, _guard| {
-            let inserted = connection.execute(
-                "INSERT INTO issue_comment_commands \
-                 (workspace_dir, issue_key, comment_id, author_id, kind, intervention_command_id) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT DO NOTHING",
-                params![
-                    workspace,
-                    issue_key(&record.issue)?,
-                    record.comment_id,
-                    record.author_id,
-                    kind_label(record.kind),
-                    record.intervention_command_id,
-                ],
-            )?;
-            Ok(inserted == 1)
+            insert_record(connection, workspace, record)
         })
     }
+}
+
+fn insert_record(
+    connection: &Connection,
+    workspace: &str,
+    record: &IssueCommentCommandRecord,
+) -> Result<bool> {
+    validate_reference_scope(workspace, &record.issue)?;
+    validate_id(&record.comment_id)?;
+    validate_id(&record.author_id)?;
+    if let Some(command_id) = &record.intervention_command_id {
+        validate_id(command_id)?;
+    }
+    let inserted = connection.execute(
+        "INSERT INTO issue_comment_commands \
+                 (workspace_dir, issue_key, comment_id, author_id, kind, intervention_command_id) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT DO NOTHING",
+        params![
+            workspace,
+            issue_key(&record.issue)?,
+            record.comment_id,
+            record.author_id,
+            kind_label(record.kind),
+            record.intervention_command_id,
+        ],
+    )?;
+    Ok(inserted == 1)
 }
 
 #[cfg(test)]

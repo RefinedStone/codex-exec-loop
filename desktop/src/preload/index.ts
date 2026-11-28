@@ -96,6 +96,7 @@ const bridge: AkraBridge = {
   confirmIssueAutomationMode: (request) => ipcRenderer.invoke(IPC_CHANNELS.confirmIssueAutomationMode, request),
   confirmIssueAutonomy: (request) => ipcRenderer.invoke(IPC_CHANNELS.confirmIssueAutonomy, request),
   confirmIssueBindingResume: (request) => ipcRenderer.invoke(IPC_CHANNELS.confirmIssueBindingResume, request),
+  confirmIssueCommentRequest: (request) => ipcRenderer.invoke(IPC_CHANNELS.confirmIssueCommentRequest, request),
   confirmTaskCriterionWaiver: (request) => ipcRenderer.invoke(IPC_CHANNELS.confirmTaskCriterionWaiver, request),
   gitBranchSummary(cwd: string, fresh: boolean): Promise<GitBranchSummary> {
     return ipcRenderer.invoke(IPC_CHANNELS.gitBranchSummary, cwd, fresh) as Promise<GitBranchSummary>;

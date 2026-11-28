@@ -45,6 +45,23 @@ export class IssueConfirmationService {
     return this.enqueue(request.workspace, request.command);
   }
 
+  confirmCommentRequest(input: unknown): Promise<IssueConfirmationResponse> {
+    if (!isRecord(input) || !onlyFields(input, ["workspace", "issue", "commentId", "key"]) ||
+      !workspace(input.workspace) || !token(input.key, 128) || !token(input.commentId, 256)) throw failure();
+    const issue = input.issue;
+    if (!isRecord(issue) || !onlyFields(issue, ["provider", "server_id", "repository_id", "issue_id", "project_scope"]) ||
+      issue.provider !== "github" || !token(issue.server_id, 4096) || !token(issue.repository_id, 4096) ||
+      !token(issue.issue_id, 4096) || !isRecord(issue.project_scope) || !onlyFields(issue.project_scope, ["workspace_dir"]) ||
+      !workspace(issue.project_scope.workspace_dir)) throw failure();
+    return this.enqueue(input.workspace, {
+      command: { type: "apply_issue_comment_request", comment_id: input.commentId, issue: {
+        provider: issue.provider, server_id: issue.server_id, repository_id: issue.repository_id,
+        issue_id: issue.issue_id, project_scope: { workspace_dir: issue.project_scope.workspace_dir },
+      } },
+      idempotency_key: input.key,
+    });
+  }
+
   confirmCriterionWaiver(input: unknown): Promise<IssueConfirmationResponse> {
     const request = criterionWaiverRequest(input);
     return this.enqueue(request.workspace, request.command);

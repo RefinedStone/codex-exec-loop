@@ -350,6 +350,8 @@ impl CommandRequest {
             | KernelCommand::SetIssueAutomationMode { .. }
             | KernelCommand::SetIssueAutonomy { .. }
             | KernelCommand::SetIssueBindingPaused { .. }
+            | KernelCommand::RetryIssueAccountQuota { .. }
+            | KernelCommand::ApplyIssueCommentRequest { .. }
             | KernelCommand::AnswerIssueDecision { .. }
             | KernelCommand::AskIssueDecision { .. }
             | KernelCommand::HoldIssue { .. }
@@ -577,6 +579,9 @@ pub enum CommandResult {
     IssueBindingPauseRequested {
         command: Box<IssueBindingPauseRequestedState>,
     },
+    IssueAccountQuotaRetryRequested {
+        accepted: bool,
+    },
     IssueAutomationModeChanged {
         previous: Option<IssueAutomationMode>,
         mode: IssueAutomationMode,
@@ -713,6 +718,9 @@ impl CommandResult {
                 changed,
                 autonomy: Box::new(IssueAutonomyState::from_domain(&autonomy)),
             },
+            StoredCommandResult::IssueAccountQuotaRetryRequested { accepted } => {
+                Self::IssueAccountQuotaRetryRequested { accepted }
+            }
             StoredCommandResult::IssueBindingPauseRequested { command } => {
                 Self::IssueBindingPauseRequested {
                     command: Box::new(command.as_ref().into()),
@@ -753,9 +761,13 @@ impl CommandResult {
             KernelCommandKind::SetIssueAutomationMode => Some("issue_automation_mode_changed"),
             KernelCommandKind::SetIssueAutonomy => Some("issue_autonomy_changed"),
             KernelCommandKind::SetIssueBindingPaused => Some("issue_binding_pause_requested"),
+            KernelCommandKind::RetryIssueAccountQuota => {
+                Some("issue_account_quota_retry_requested")
+            }
             KernelCommandKind::AnswerIssueDecision => Some("issue_decision_resolved"),
             KernelCommandKind::AskIssueDecision => Some("issue_decision_requested"),
             KernelCommandKind::HoldIssue
+            | KernelCommandKind::ApplyIssueCommentRequest
             | KernelCommandKind::ReleaseIssue
             | KernelCommandKind::SteerIssue
             | KernelCommandKind::TakeOverIssue
@@ -1099,12 +1111,20 @@ pub enum KernelCommand {
         command_id: String,
         level: IssueAutonomyLevel,
     },
+    ApplyIssueCommentRequest {
+        issue: crate::domain::kernel_event::IssueEventReference,
+        comment_id: String,
+    },
     SetIssueBindingPaused {
         #[schemars(length(min = 1, max = 256), regex(pattern = NON_BLANK))]
         command_id: String,
         #[schemars(length(min = 1, max = 512), regex(pattern = NON_BLANK))]
         binding_id: String,
         paused: bool,
+        expected_revision: u64,
+    },
+    RetryIssueAccountQuota {
+        lane: crate::application::port::outbound::issue_account_quota_port::IssueQuotaLane,
         expected_revision: u64,
     },
     /// 현재 기준과 맞는 열린 결정에 에이전트 답 하나를 저장한다. 사람 확인 증명을 받지 않는다.
@@ -1427,6 +1447,8 @@ impl KernelCommand {
             Self::SetIssueAutomationMode { .. } => KernelCommandKind::SetIssueAutomationMode,
             Self::SetIssueAutonomy { .. } => KernelCommandKind::SetIssueAutonomy,
             Self::SetIssueBindingPaused { .. } => KernelCommandKind::SetIssueBindingPaused,
+            Self::RetryIssueAccountQuota { .. } => KernelCommandKind::RetryIssueAccountQuota,
+            Self::ApplyIssueCommentRequest { .. } => KernelCommandKind::ApplyIssueCommentRequest,
             Self::AnswerIssueDecision { .. } => KernelCommandKind::AnswerIssueDecision,
             Self::AskIssueDecision { .. } => KernelCommandKind::AskIssueDecision,
             Self::HoldIssue { .. } => KernelCommandKind::HoldIssue,
@@ -1469,6 +1491,8 @@ impl KernelCommand {
             | Self::SetIssueAutomationMode { .. }
             | Self::SetIssueAutonomy { .. }
             | Self::SetIssueBindingPaused { .. }
+            | Self::RetryIssueAccountQuota { .. }
+            | Self::ApplyIssueCommentRequest { .. }
             | Self::AnswerIssueDecision { .. }
             | Self::AskIssueDecision { .. }
             | Self::HoldIssue { .. }
@@ -1534,6 +1558,10 @@ impl KernelCommand {
             StoredCommand::InterveneIssue { request } => {
                 issue_intervention::command_from_request(request)
             }
+            StoredCommand::ApplyIssueCommentRequest { key } => Self::ApplyIssueCommentRequest {
+                issue: (&key.issue).into(),
+                comment_id: key.comment_id,
+            },
             StoredCommand::CreateTask { task } => Self::CreateTask {
                 task: TaskFields::from_stored(task),
             },
@@ -1595,6 +1623,13 @@ impl KernelCommand {
             StoredCommand::SetIssueAutonomy { command_id, level } => {
                 Self::SetIssueAutonomy { command_id, level }
             }
+            StoredCommand::RetryIssueAccountQuota {
+                lane,
+                expected_revision,
+            } => Self::RetryIssueAccountQuota {
+                lane,
+                expected_revision,
+            },
             StoredCommand::SetIssueBindingPaused {
                 command_id,
                 binding_id,
@@ -1737,6 +1772,25 @@ impl KernelCommand {
                 IssueInterventionAction::Hold,
                 workspace_directory,
             )?,
+            Self::ApplyIssueCommentRequest { issue, comment_id } => {
+                if comment_id.trim().is_empty()
+                    || comment_id.len() > 256
+                    || comment_id.chars().any(char::is_control)
+                {
+                    return Err(KernelProtocolError::invalid_params("invalid comment_id"));
+                }
+                let issue = KernelQuery::Issue { issue }
+                    .issue_reference(workspace_directory)?
+                    .ok_or_else(|| {
+                        KernelProtocolError::invalid_params("invalid issue reference")
+                    })?;
+                StoredCommand::ApplyIssueCommentRequest {
+                    key: crate::domain::issue_automation::comment_command::IssueCommentRequestKey {
+                        issue,
+                        comment_id,
+                    },
+                }
+            }
             Self::ReleaseIssue { issue, command_id } => issue_intervention::into_stored(
                 issue,
                 command_id,
@@ -1863,6 +1917,13 @@ impl KernelCommand {
                 issue_autonomy::validate_input(&command_id)?;
                 StoredCommand::SetIssueAutonomy { command_id, level }
             }
+            Self::RetryIssueAccountQuota {
+                lane,
+                expected_revision,
+            } => StoredCommand::RetryIssueAccountQuota {
+                lane,
+                expected_revision,
+            },
             Self::SetIssueBindingPaused {
                 command_id,
                 binding_id,
@@ -2030,6 +2091,8 @@ impl KernelCommand {
             | Self::SetIssueAutomationMode { .. }
             | Self::SetIssueAutonomy { .. }
             | Self::SetIssueBindingPaused { .. }
+            | Self::RetryIssueAccountQuota { .. }
+            | Self::ApplyIssueCommentRequest { .. }
             | Self::AnswerIssueDecision { .. }
             | Self::AskIssueDecision { .. }
             | Self::HoldIssue { .. }

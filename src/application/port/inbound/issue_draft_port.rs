@@ -26,9 +26,30 @@ use crate::domain::issue_work::{IssueFieldHash, IssueSharedCopy};
 pub struct IssueDraftTarget {
     /// 프로젝트의 작업 폴더이다. 이슈 정책과 템플릿을 여기서 읽는다.
     pub cwd: String,
-    pub owner: String,
-    pub repository: String,
-    pub number: u64,
+    #[serde(flatten)]
+    pub location: IssueDraftLocation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JiraDraftCoordinate {
+    pub connection: crate::domain::provider_credentials::ConnectionRef,
+    pub cloud_id: String,
+    pub project_id: String,
+    pub issue_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum IssueDraftLocation {
+    Jira {
+        jira: JiraDraftCoordinate,
+    },
+    GitHub {
+        owner: String,
+        repository: String,
+        number: u64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

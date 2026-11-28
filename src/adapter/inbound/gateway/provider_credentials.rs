@@ -367,6 +367,14 @@ fn handle(
             let request: ReadRequest = params(text, method)?;
             value(services.work.jira_summary(&request.connection)?)
         }
+        "akra/providers/jira/draftTarget" => {
+            let request: JiraPromptRequest = params(text, method)?;
+            value(
+                services
+                    .work
+                    .jira_draft_target(&request.connection, &request.key)?,
+            )
+        }
         "akra/providers/jira/issuePrompt" => {
             let request: JiraPromptRequest = params(text, method)?;
             Ok(json!({"text":services.work.jira_issue_prompt(&request.connection, &request.key)?}))

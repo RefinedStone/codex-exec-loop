@@ -42,10 +42,18 @@ use crate::domain::issue_work::{IssueLocator, IssueProvider, IssueReference};
 
 pub(super) fn target() -> IssueCreationTarget {
     let existing = super::super::target();
+    let crate::application::port::inbound::issue_draft_port::IssueDraftLocation::GitHub {
+        owner,
+        repository,
+        ..
+    } = existing.location
+    else {
+        panic!("creation fixture requires GitHub")
+    };
     IssueCreationTarget {
         cwd: existing.cwd,
-        owner: existing.owner,
-        repository: existing.repository,
+        owner,
+        repository,
     }
 }
 
