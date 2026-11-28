@@ -79,8 +79,8 @@ symlink/reparse point, 빈 파일, 크기 초과, 파일 교체와 읽는 동안
 
 파일 한 개는 최대 8 MiB, 기준·scope별 예약은 최대 64개, 저장소 전체 예약/면제 기록은 최대
 4,096개다. 파일 예약은 먼저 최대 8 MiB를 차지하고 기록 성공 시 실제 byte 수로 정산한다.
-장부의 저장 bytes와 미완료 예약 합계는 512 MiB를 넘지 않는다. 실패하거나 중단된 예약은 자동으로
-환불하거나 재활용하지 않는다. 이 한도는 작업자가 incoming에 만드는 임의 파일을 포함하는 OS
+장부의 저장 bytes와 미완료 예약 합계는 512 MiB를 넘지 않는다. 실패하거나 중단된 예약은 아래
+한도 복구 정책에서 명시한 경우에만 환불한다. 이 한도는 작업자가 incoming에 만드는 임의 파일을 포함하는 OS
 디스크 quota가 아니다. 자동 GC나 사용자 artifact 삭제도 이 변경에 포함되지 않는다.
 
 ## 현재 상태
@@ -177,3 +177,19 @@ Desktop 회귀는 표시 상태·페이지 누락·과거 조회의 구분, 증�
 확인한다. fake Gateway Electron 화면에서 키보드 펼침, Pass→Stale→Unavailable 전환, receipt와
 재조회 결과가 다른 경우의 표시, 패널을 닫은 뒤 조회 중단을 검증한다.
 실행 SHA와 검증 결과는 구현 PR에 기록한다.
+
+## 한도 복구: 실제 파일이 없는 종료 예약
+
+`prepare_evidence`와 호스트 검증 예약은 저장소 한도에 도달하면 같은 transaction 안에서
+미사용 charge 하나를 회수한 후 재시도한다. 별도의 파일 삭제 명령은 없다.
+대상 task는 `done` 또는 `cancelled`이고, 현재 lease와 전달 queue가 없어야 한다.
+task 최종 수정과 검증 종료 뒤 모두 30일이 지나고 종료 event의 ACK도 있어야 한다.
+
+- manifest를 저장하기 전에 중단된 호스트 실행은 capture를 만들 수 없으므로 미사용 예약
+  8 MiB와 entry 한 개를 회수할 수 있다.
+- 명시적 `not_run`은 bytes를 이미 환불했으므로 entry 한 개만 회수할 수 있다.
+- `task_evidence_retired_charges`에 기존 event ID, 반환한 bytes와 시각을 영구 기록한다.
+  원 receipt, outbox, ordinal, worker 예약, 실제 sealed 파일은 삭제하거나 수정하지 않는다.
+  같은 charge를 두 번 사용하지 않는다. 새 예약이 실패하면 회수도 되돌린다.
+- 현재 증거나 불확실한 capture만 남으면 `limit`을 유지한다. 한도 복구를 위해 사용자 파일을
+  지우거나 receipt가 가리키는 bytes를 지운 것으로 간주하지 않는다. 기준별 64회 제한은 그대로다.
