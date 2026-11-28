@@ -4,9 +4,10 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { readBranchSummary } from "../src/main/gitBranch";
+import * as gitStatus from "../src/main/gitStatus";
 import { executePullRequest, executePush, planPullRequest, planPush } from "../src/main/gitPublish";
 import type { GhRunner } from "../src/main/githubService";
 import { canCreatePullRequest, canPush, initialPullRequestDraft, type LoadedSummary } from "../src/renderer/conversation/branchPublish";
@@ -64,6 +65,50 @@ describe("push and create a PR", () => {
     // Normal Git would allow this fast-forward. The user's review, not Git's ancestry rule, must refuse it.
     expect((await executePush(reviewed.plan)).ok).toBe(false);
     expect(gitIn(destination, "rev-parse", "refs/heads/feat/x").trim()).toBe(older);
+  });
+
+  it("updates only the reviewed fast-forward even if either ref moves just before push", async () => {
+    const destination = join(base, "atomic.git");
+    const work = join(base, "atomic-work");
+    const branch = "refs/heads/main";
+    gitIn(base, "init", "-q", "--bare", "-b", "main", destination);
+    gitIn(base, "clone", "-q", destination, work);
+    const commit = (message: string) => gitIn(work, "commit", "-q", "--allow-empty", "-m", message);
+    commit("ancestor");
+    const ancestor = gitIn(work, "rev-parse", "HEAD").trim();
+    commit("reviewed destination");
+    gitIn(work, "push", "-qu", "origin", "main");
+    const reviewed = gitIn(work, "rev-parse", "HEAD").trim();
+    commit("reviewed source");
+    gitIn(work, "branch", "--unset-upstream");
+    const plan = await planPush(work);
+    if (!plan.ok) throw new Error(plan.message);
+    expect(plan.plan.observedRemoteCommit).toBe(reviewed);
+    const realGit = gitStatus.runGit;
+    // Schedule a second real writer after all checks, immediately before the actual Git transport.
+    using command = vi.spyOn(gitStatus, "runGit");
+    command.mockImplementation((cwd, args, limit, options) => {
+      if (args.includes("push")) gitIn(destination, "update-ref", branch, ancestor, reviewed);
+      return realGit(cwd, args, limit, options);
+    });
+    expect((await executePush(plan.plan)).ok).toBe(false);
+    expect(gitIn(destination, "rev-parse", branch).trim()).toBe(ancestor);
+
+    gitIn(destination, "update-ref", branch, reviewed, ancestor);
+    // Local movement after validation must not substitute an unreviewed source for the pinned OID.
+    command.mockImplementation((cwd, args, limit, options) => {
+      if (args.includes("push")) gitIn(work, "update-ref", branch, ancestor, plan.plan.commit);
+      return realGit(cwd, args, limit, options);
+    });
+    expect((await executePush(plan.plan)).ok).toBe(true);
+    expect(gitIn(destination, "rev-parse", branch).trim()).toBe(plan.plan.commit);
+    command.mockRestore();
+    expect(gitIn(work, "rev-parse", "--abbrev-ref", "@{upstream}").trim()).toBe("origin/main");
+    const diverged = await planPush(work);
+    if (!diverged.ok) throw new Error(diverged.message);
+    expect(diverged.plan.observedRemoteCommit).toBe(plan.plan.commit);
+    expect((await executePush(diverged.plan)).ok).toBe(false);
+    expect(gitIn(destination, "rev-parse", branch).trim()).toBe(plan.plan.commit);
   });
 
   it("does not publish annotated tags when push.followTags is enabled", async () => {
