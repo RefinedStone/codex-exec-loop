@@ -217,6 +217,10 @@ function stageMainPackage({ outDir, packageVersion }) {
     path.join(mainDir, "README.md"),
   );
   copyProjectLicense(path.join(packageRoot, "..", "LICENSE"), mainDir);
+  const noticesDir = path.join(mainDir, "THIRD_PARTY_NOTICES");
+  copyDir(path.join(packageRoot, "..", "THIRD_PARTY_NOTICES"), noticesDir);
+  const fontNotice = path.resolve(packageRoot, "../assets/admin/fonts/LICENSE-Galmuri.txt");
+  fs.copyFileSync(fontNotice, path.join(noticesDir, "Galmuri-OFL.txt"), fs.constants.COPYFILE_EXCL);
 
   const basePackageJson = JSON.parse(
     fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"),
