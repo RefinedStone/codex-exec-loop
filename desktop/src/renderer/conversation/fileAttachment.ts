@@ -65,9 +65,13 @@ export function checkBundle(items: readonly FileAttachment[]): void {
 }
 
 /** JSON values, never interpolated fence delimiters. The preview is the wire text. */
-export function fileMessage(instruction: string, items: readonly FileAttachment[], target: DraftTarget): string {
-  const included = items.filter((item) => item.included);
-  return included.length ? JSON.stringify({ instruction, target, limits: ATTACHMENT_LIMIT, quotedContext: included }, null, 2) : instruction;
+export function fileMessage(instruction: string, items: readonly FileAttachment[]): string {
+  const quotedContext = items.filter(item => item.included).map(item => ({
+    filePath: item.filePath, sourceKind: item.sourceKind, side: item.side,
+    startLine: item.startLine, endLine: item.endLine, before: item.before, selected: item.selected, after: item.after,
+    diffExcerpt: item.diffExcerpt, feedback: item.feedback, partial: item.partial, useOriginal: item.useOriginal,
+  }));
+  return quotedContext.length ? JSON.stringify({ instruction, quotedContext }, null, 2) : instruction;
 }
 
 const object = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
