@@ -23,6 +23,7 @@ impl GatewayKernelClientRuntime {
             MutationOutcome::ThreadStarted(thread) => {
                 self.conversation.cancel();
                 self.snapshot.conversation = ConversationSnapshot::Ready(thread);
+                self.refresh_conversation_activity();
                 return vec![AppEvent::ConversationChanged {
                     correlation: None,
                     snapshot: self.snapshot.conversation.clone(),
