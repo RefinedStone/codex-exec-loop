@@ -80,6 +80,7 @@ Manual terminal capture stays primitive-sensitive only.
 - `src/adapter/inbound/tui/app/directions_maintenance_ui.rs`
 - `src/adapter/inbound/tui/app/fullscreen_frame_model.rs`
 - `src/adapter/inbound/tui/app/fullscreen_rendering_tests.rs`
+- `src/adapter/inbound/tui/app/fullscreen_rendering_tests/gateway_history.rs`
 - `src/adapter/inbound/tui/app/fullscreen_terminal_adapter.rs`
 - `src/adapter/inbound/tui/app/github_polling/tests.rs`
 - `src/adapter/inbound/tui/app/inline_shell_commands/tests.rs`

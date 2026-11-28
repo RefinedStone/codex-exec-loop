@@ -21,9 +21,8 @@ impl GatewayConversationClient {
         updates: mpsc::Sender<ClientUpdate>,
     ) -> Result<Self> {
         let (requests, incoming) = mpsc::channel::<ConversationLoadCorrelation>();
-        std::thread::Builder::new()
-            .name("akra-tui-conversation-reader".into())
-            .spawn(move || {
+        super::super::core_effect_worker::try_spawn_worker_with_panic_fallback(
+            move || {
                 for correlation in incoming {
                     let result = reader
                         .load_conversation_snapshot(&correlation.requested_thread_id)
@@ -52,8 +51,10 @@ impl GatewayConversationClient {
                         break;
                     }
                 }
-            })
-            .context("failed to start the TUI conversation reader")?;
+            },
+            || tracing::warn!("TUI Gateway history worker stopped unexpectedly"),
+        )
+        .context("failed to start the TUI conversation reader")?;
         Ok(Self {
             requests,
             generation: 0,

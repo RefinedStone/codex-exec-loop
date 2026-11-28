@@ -3349,10 +3349,10 @@ fn native_tui_prompt_log_maintenance_runs_only_inside_the_startup_worker() {
         "purge_expired_app_server_prompt_interaction_records",
     ];
 
-    let production = fs::read_to_string("src/composition/production.rs")
-        .expect("production composition source should load");
+    let production = fs::read_to_string("src/composition/production/tui_kernel_client.rs")
+        .expect("TUI Gateway client composition should load");
     let native_builder_calls =
-        reachable_callable_expression_names(&production, "build_native_tui_application");
+        reachable_callable_expression_names(&production, "build_tui_gateway_client");
     for forbidden in FORBIDDEN_SYNCHRONOUS_MAINTENANCE_CALLS {
         assert!(
             !native_builder_calls.iter().any(|call| call == forbidden),
@@ -3360,13 +3360,10 @@ fn native_tui_prompt_log_maintenance_runs_only_inside_the_startup_worker() {
         );
     }
     assert!(
-        native_builder_calls
+        !native_builder_calls
             .iter()
-            .any(|call| call == "build_shared_ports_with_app_server")
-            && native_builder_calls
-                .iter()
-                .any(|call| call == "with_prompt_log_maintenance"),
-        "native TUI production builder must inject maintenance into StartupService"
+            .any(|call| call == "with_prompt_log_maintenance"),
+        "the Gateway-only TUI must not install a local prompt log maintenance worker"
     );
 
     let shell_entrypoint = fs::read_to_string("src/adapter/inbound/tui/app/shell_entrypoint.rs")
@@ -14404,7 +14401,7 @@ fn forbidden_tui_runtime_capability_references(source: &str) -> Vec<String> {
                 || identifier.ends_with("_repository")
                 || reference.ends_with("CoreInput::EffectCompleted")
                 || (reference.contains("production::build_")
-                    && !reference.ends_with("production::build_native_tui_application"))
+                    && !reference.ends_with("production::build_tui_gateway_client"))
                 || reference == "crate::adapter::outbound"
                 || reference.starts_with("crate::adapter::outbound::")
                 || reference == "std::process"

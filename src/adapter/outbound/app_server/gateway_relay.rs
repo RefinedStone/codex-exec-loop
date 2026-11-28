@@ -22,6 +22,15 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const CONNECT_ATTEMPTS: u32 = 10;
 const CONNECT_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 
+pub(crate) fn start_gateway(command: &mut std::process::Command) -> Result<std::process::Child> {
+    command.spawn().with_context(|| {
+        format!(
+            "start the Akra Gateway at {}",
+            std::path::Path::new(command.get_program()).display()
+        )
+    })
+}
+
 /// 이 사용자의 Gateway 가 접속을 받으면 그 중계를 돌려준다. 없으면 TUI 는 지금처럼 자기 app-server 를 띄운다.
 #[cfg(test)]
 pub(crate) fn reachable_gateway_relay() -> Option<super::SharedAppServer> {

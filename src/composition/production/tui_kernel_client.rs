@@ -1,7 +1,7 @@
 //! Production TUI startup through the local Gateway, never a repository writer.
 
 use std::io::ErrorKind;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -33,7 +33,9 @@ async fn ensure_gateway(endpoint: &str) -> Result<()> {
         Err(error) => return Err(error).context("connect to the local Akra Gateway"),
     }
 
-    let mut child = start_gateway()?;
+    let mut command = gateway_command()?;
+    let mut child =
+        crate::adapter::outbound::app_server::gateway_relay::start_gateway(&mut command)?;
     let startup = tokio::time::timeout(Duration::from_secs(10), async {
         // A concurrent launch can win the Gateway instance lock. Check the endpoint even when
         // our child has exited, since the winner may still be starting.
@@ -54,14 +56,15 @@ async fn ensure_gateway(endpoint: &str) -> Result<()> {
     let exit = child.try_wait().context("check the Akra Gateway process")?;
     if exit.is_none() {
         // The daemon outlives the terminal. Reap it if it happens to stop while the TUI is open.
-        std::thread::Builder::new()
-            .name("akra-tui-gateway-reaper".into())
-            .spawn(move || {
+        super::super::core_effect_worker::try_spawn_worker_with_panic_fallback(
+            move || {
                 if let Err(error) = child.wait() {
                     tracing::warn!(%error, "failed to reap the Akra Gateway process");
                 }
-            })
-            .context("start the Akra Gateway process reaper")?;
+            },
+            || tracing::warn!("Akra Gateway process reaper stopped unexpectedly"),
+        )
+        .context("start the Akra Gateway process reaper")?;
     }
     match startup {
         Ok(result) => result,
@@ -71,7 +74,7 @@ async fn ensure_gateway(endpoint: &str) -> Result<()> {
     }
 }
 
-fn start_gateway() -> Result<Child> {
+fn gateway_command() -> Result<Command> {
     let name = format!("akra-gateway{}", std::env::consts::EXE_SUFFIX);
     let current = std::env::current_exe().context("resolve the TUI executable")?;
     let sibling = current.with_file_name(&name);
@@ -103,7 +106,5 @@ fn start_gateway() -> Result<Child> {
         use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    command
-        .spawn()
-        .with_context(|| format!("start the Akra Gateway at {}", executable.display()))
+    Ok(command)
 }
