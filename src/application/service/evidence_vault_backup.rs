@@ -759,13 +759,18 @@ mod tests {
         let current =
             |issue_id: &str| VaultRecordScope::current_version(issue(LOCAL_PROJECT, issue_id));
 
-        // 첫 레코드를 쓴 직후에 멈춘 가져오기이다.
+        // Interrupt the first durable write, before any binding becomes visible.
         secure_fs::install_after_atomic_replace_error_hook("synthetic interruption");
         assert!(matches!(
             backup_error(local.import(&export.archive, &export.recovery_key)),
             Err(VaultBackupError::Record(VaultStoreError::Storage(_)))
         ));
-        assert_eq!(local.record_files().len(), 1);
+        let staged = local.record_files();
+        assert_eq!(staged.len(), 1);
+        let (_, bytes) = &staged[0];
+        assert!(
+            serde_json::from_slice::<serde_json::Value>(bytes).unwrap()["ciphertext"].is_null()
+        );
         for issue_id in ["I_1", "I_2"] {
             assert_eq!(
                 local.load(current(issue_id)),
@@ -779,7 +784,17 @@ mod tests {
 
         assert_eq!(report.imported.len(), 2);
         assert!(report.kept_local.is_empty());
-        assert_eq!(local.record_files().len(), 6);
+        assert_eq!(
+            local
+                .record_files()
+                .iter()
+                .filter(|(_, bytes)| {
+                    serde_json::from_slice::<serde_json::Value>(bytes).unwrap()["ciphertext"]
+                        .is_string()
+                })
+                .count(),
+            6
+        );
         for issue_id in ["I_1", "I_2"] {
             let local_issue = issue(LOCAL_PROJECT, issue_id);
             let imported_version = local.imported_version(&local_issue, VERSION);
@@ -790,6 +805,14 @@ mod tests {
                     &imported_version
                 )),
                 Ok(TITLE_SPANS.to_string())
+            );
+            assert_eq!(
+                local.load(confirmed(
+                    &local_issue,
+                    VaultRecordField::Body,
+                    &imported_version
+                )),
+                Ok(BODY_SPANS.to_string())
             );
         }
     }

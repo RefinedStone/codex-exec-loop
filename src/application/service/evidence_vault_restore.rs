@@ -476,9 +476,6 @@ impl EvidenceVaultRestoreService {
         let source_version = Self::bound_version(&snapshot)?;
         let spans = Self::bound_spans(binding.as_mut(), &source_version)?;
         self.key(grant)?;
-        binding
-            .retain_reconnect_source(&source_version)
-            .map_err(VaultRestoreHold::RecordUnavailable)?;
         let reviewed_hash = published.field_hash();
         let markers = spans
             .into_iter()
@@ -570,6 +567,11 @@ impl EvidenceVaultRestoreService {
         };
         self.key(grant)?;
         before_commit()?;
+        // Review is read-only. Retain the source before a confirmed attempt can
+        // replace its pointer, so an interrupted commit can replay the approval.
+        binding
+            .retain_reconnect_source(&approval.basis.source_version)
+            .map_err(VaultRestoreHold::RecordUnavailable)?;
         match binding
             .commit(VaultBindingCommitRequest {
                 expected: approval.basis.expected.clone(),

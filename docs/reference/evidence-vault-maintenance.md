@@ -10,7 +10,8 @@ akra vault delete <workspace> <github|jira|linear> <server-id> <repository-id> <
 ```
 
 `retain` removes only inventoried, superseded generations retired for at least 30 days. It does
-not remove the live generation, reviewed reconnect sources, or uncertain staging artifacts.
+not remove the live generation, sources retained by confirmed reconnect attempts, or
+uncertain staging artifacts. Viewing or cancelling a reconnect review does not write to the Vault.
 An unresolved or held publication blocks maintenance for that issue.
 
 `delete` requires a local interactive terminal and the exact `DELETE <issue-id>` response.
