@@ -8,8 +8,9 @@ import { newAttentionCount } from "./attentionNavigation";
 export function useAttentionSignals(): void {
   const badgeKernel = useDesktopStore(state => state.connection?.phase === "connected" && state.kernel.phase === "attached"
     && state.kernel.attentionItems !== null ? state.kernel.kernel : null);
-  const badgeCount = useDesktopStore(state => state.kernel.attentionItems?.length ?? 0);
-  useEffect(() => window.akra.settings.reportAttention(badgeKernel, badgeCount), [badgeKernel, badgeCount]);
+  const badgeItems = useDesktopStore(state => state.kernel.attentionItems);
+  // Even a same-count snapshot is a newer report than a different window's snapshot.
+  useEffect(() => window.akra.settings.reportAttention(badgeKernel, badgeItems?.length ?? 0), [badgeKernel, badgeItems]);
 
   useEffect(() => {
     let timer: number | undefined;

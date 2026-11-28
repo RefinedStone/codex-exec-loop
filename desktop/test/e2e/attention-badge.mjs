@@ -13,7 +13,12 @@ const endpoint = uniqueTestEndpoint();
 const thread = "01a1abfb-8f0a-7581-a8e4-c2953347f470";
 const item = {id:"thread:first", revision:"1", subject:{kind:"thread",id:thread}, cause:"turn_failed", summary:"Thread needs a response", next:[{step:"ask_user"}]};
 let answer = {result:{type:"attention",items:[]}};
+let refreshOnOverview = false;
 const kernel = {kernel:"badge-repo", queries:{}, onRequest(method, params) {
+  if (method === "akra/kernel/query" && params.query.type === "parallel" && refreshOnOverview) {
+    refreshOnOverview = false;
+    return {result:{type:"parallel",enabled:false},events:[{type:"thread_activity",threads:[]}]};
+  }
   if (method === "akra/kernel/query" && params.query.type === "attention") return answer;
 }};
 const gateway = await startFakeGateway(endpoint, [APPROVAL_THREAD_LIST_RECORDING, INTERRUPTED_TURN_RECORDING], {kernel});
@@ -30,25 +35,55 @@ try {
     globalThis.badgeReports = [];
     if (process.platform === "win32") for (const window of BrowserWindow.getAllWindows()) {
       const original = window.setOverlayIcon.bind(window);
-      window.setOverlayIcon = (icon, label) => { original(icon,label); globalThis.badgeReports.push([window.id,label,!!icon && !icon.isEmpty()]); };
+      window.setOverlayIcon = (icon, label) => { original(icon,label); globalThis.badgeReports.push([window.id,label,!!icon && !icon.isEmpty()]); app.emit("test-badge-applied"); };
     } else {
       const original = app.setBadgeCount.bind(app);
-      app.setBadgeCount = n => { const applied = original(n); globalThis.badgeReports.push(n); return applied; };
+      app.setBadgeCount = n => { const applied = original(n); globalThis.badgeReports.push(n); app.emit("test-badge-applied"); return applied; };
     }
   });
-  for (const page of [first,second]) {
+  const waitBadge = count => app.evaluate(({app}, count) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { app.off("test-badge-applied", check); reject(new Error(`Expected badge ${count}; last native call: ${JSON.stringify(globalThis.badgeReports.at(-1))}`)); }, 5000);
+    function check() {
+      const last = globalThis.badgeReports.at(-1);
+      if (process.platform === "win32" ? last?.[1] !== `${count} responses required` || !last[2] : last !== count) return;
+      clearTimeout(timer); app.off("test-badge-applied", check); resolve();
+    }
+    app.on("test-badge-applied", check); check();
+  }), count);
+  const enterFleet = async page => {
     page.setDefaultTimeout(15_000);
     await page.getByTestId("thread-entry").first().click();
     await page.getByRole("button",{name:/현황판/}).click();
-    await page.getByTestId("kernel-attention").getByText("없음",{exact:true}).waitFor();
-  }
+  };
+  const other = {...item,id:"task:second",subject:{kind:"task",id:"second"},cause:"task_proposed",summary:"Task needs an answer"};
+  answer = {result:{type:"attention",items:[item]}};
+  await enterFleet(first);
+  await waitBadge(1);
+  answer = {result:{type:"attention",items:[item,other]}};
+  await enterFleet(second);
+  await waitBadge(2);
+  // Only A opens the overview and receives this event. Its new snapshot still has one demand.
+  answer = {result:{type:"attention",items:[{...item,id:"thread:revised",revision:"2",summary:"A refreshed demand"}]}};
+  refreshOnOverview = true;
+  await first.getByTestId("kernel-toggle").click();
+  await first.getByTestId("kernel-attention").getByText("A refreshed demand").waitFor();
+  await second.getByTestId("kernel-attention").getByText(other.summary).waitFor();
+  await waitBadge(1);
+  // Reload withdraws A's report without closing B; the previous valid count must return.
+  await first.reload();
+  await waitBadge(2);
+  console.log("PASS same kernel: A=1, B=2, refreshed A=1, A detaches and B=2 is restored");
+  answer = {result:{type:"attention",items:[]}};
+  await enterFleet(first);
+  gateway.sendKernelEvent({type:"resync"});
+  for (const page of [first,second]) await page.getByTestId("kernel-attention").getByText("없음",{exact:true}).waitFor();
   const owner = await app.browserWindow(second);
   await owner.evaluate(window => { window.show(); window.focus(); });
   await second.waitForFunction(() => document.hasFocus());
   answer = {result:{type:"attention",items:[item]}};
   gateway.sendKernelEvent({type:"resync"});
   await second.getByTestId("kernel-attention").getByText(item.summary).waitFor();
-  answer = {result:{type:"attention",items:[item,{...item,id:"task:second",subject:{kind:"task",id:"second"},cause:"task_proposed",summary:"Task needs an answer"}]}};
+  answer = {result:{type:"attention",items:[item,other]}};
   gateway.sendKernelEvent({type:"resync"});
   await second.getByText("새 응답 필요 항목 2개가 있습니다.").waitFor();
   await first.getByTestId("kernel-attention").getByText(item.summary).waitFor();

@@ -23,6 +23,7 @@ function overlay(count: number) {
 }
 
 export function reportAttention(owner: BrowserWindow, windows: ReadonlySet<BrowserWindow>, kernel: unknown, count: unknown): void {
+  // Reinsert valid reports at the end: Map.set on an existing key keeps its old position.
   reports.delete(owner);
   if (typeof kernel === "string" && kernel.length > 0 && typeof count === "number" && Number.isSafeInteger(count) && count >= 0) {
     reports.set(owner, {kernel, count});
