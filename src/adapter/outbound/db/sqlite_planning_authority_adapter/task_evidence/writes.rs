@@ -221,6 +221,9 @@ pub(super) fn waive(
 }
 
 impl TaskEvidenceRepositoryPort for SqlitePlanningAuthorityAdapter {
+    fn record_human_review(&self, workspace: &str, review: &HumanEvidenceReview) -> Result<()> {
+        super::review::record(workspace, review)
+    }
     fn load_current_snapshot(
         &self,
         workspace: &str,

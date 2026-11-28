@@ -28,6 +28,8 @@ const STATE_LABEL: Record<TaskCriterionEvidenceState, string> = {
   blocked: "작업자 보고: 막힘",
   stale: "이전 범위의 보고",
   waived: "사람 면제",
+  human_passed: "사람이 증거 확인: 통과",
+  human_failed: "사람이 증거 확인: 실패",
 };
 
 const ERROR_LABEL: Record<TaskEvidenceError, string> = {
@@ -80,7 +82,7 @@ function CriterionRow({ entry, current, unavailable, task, snapshot, freshness, 
   const reported = state === "pass" || state === "fail" || state === "blocked";
   const evidence = entry.evidence?.evidence;
   const waiver = entry.waiver?.waiver;
-  const currentReport = current && reported;
+  const currentReport = current && (reported || state === "human_passed" || state === "human_failed");
   const currentWaiver = current && state === "waived";
   const tone = !current || unavailable ? "work-badge muted"
     : state === "pass" ? "badge badge-ok"
@@ -114,7 +116,7 @@ function CriterionRow({ entry, current, unavailable, task, snapshot, freshness, 
             <dt>파일 크기</dt><dd>{evidence.artifact.size_bytes} 바이트</dd>
             <TreeMetadata tree={evidence.recorded_tree} />
           </dl>
-          {currentReport && entry.evidence && <EvidencePreviewButton key={entry.evidence.event_id} target={{
+          {currentReport && entry.evidence && <EvidencePreviewButton reviewable={entry.criterion.channel !== "command"} key={entry.evidence.event_id} target={{
             kind: "worker", task_id: task.scope.task_id, criterion_id: entry.criterion.id,
             scope_id: task.scope.scope_id, revision: task.scope.acceptance_revision,
             event_id: entry.evidence.event_id, sha256: evidence.artifact.sha256,

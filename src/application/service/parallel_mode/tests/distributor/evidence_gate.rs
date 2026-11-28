@@ -37,6 +37,7 @@ use crate::domain::planning::{
 use std::time::Instant;
 
 const TASK: &str = "task-1";
+mod human_review;
 
 struct GateCall {
     stage: TaskEvidenceDeliveryStage,

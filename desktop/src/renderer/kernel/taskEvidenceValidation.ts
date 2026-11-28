@@ -162,7 +162,7 @@ function criterion(value: unknown, task: ObjectValue & { scope: ObjectValue }, e
     || !identifier(value.criterion.id) || !text(value.criterion.scenario) || !value.criterion.scenario.trim()
     || !named(value.criterion.channel, ["command", "data", "http", "screen"])
     || typeof value.criterion.essential !== "boolean"
-    || (value.state != null && !named(value.state, ["pending", "pass", "fail", "blocked", "stale", "waived"]))) return false;
+    || (value.state != null && !named(value.state, ["pending", "pass", "fail", "blocked", "stale", "waived", "human_passed", "human_failed"]))) return false;
   if (value.criterion.verification_recipe != null
     && (!isTaskVerificationRecipe(value.criterion.verification_recipe) || value.criterion.channel !== "command")) return false;
   if (value.host_verification != null && !hostVerification(value.host_verification, task, value.criterion, evidenceRevision)) return false;
@@ -181,7 +181,8 @@ function criterion(value: unknown, task: ObjectValue & { scope: ObjectValue }, e
   return record(task.source) && record(task.source.tree) && task.unavailable == null && evidenceReceipt(value.evidence)
     && record(value.evidence.evidence.recorded_tree)
     && value.evidence.evidence.recorded_tree.tree_sha === task.source.tree.tree_sha
-    && sameScope(value.evidence.evidence.scope, task.scope) && value.state === value.evidence.evidence.status;
+    && sameScope(value.evidence.evidence.scope, task.scope) && (value.state === value.evidence.evidence.status
+      || (value.criterion.channel !== "command" && named(value.state, ["human_passed", "human_failed"])));
 }
 
 /** 오래된 scope의 영수증은 Stale로 남을 수 있다. 현재 task scope로 덮어써서 검증하지 않는다. */

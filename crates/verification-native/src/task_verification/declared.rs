@@ -10,6 +10,7 @@ use std::time::Instant;
 
 mod consent;
 pub(super) use consent::confirm;
+pub(crate) use consent::confirm_text;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

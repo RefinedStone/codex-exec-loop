@@ -254,6 +254,7 @@ pub(super) fn snapshot() -> (TaskEvidenceStoredSnapshot, StoredTaskVerification)
         planning_revision: 1,
         evidence_revision: 0,
         tasks: vec![TaskEvidenceTaskSnapshot {
+            reviews: vec![],
             task,
             scope,
             leases: vec![lease],

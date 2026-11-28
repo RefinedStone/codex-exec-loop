@@ -24,6 +24,15 @@ pub(in crate::task_verification) fn confirm(
         "executable_sha256": manifest.git_binary_sha256, "environment_sha256": manifest.environment_sha256,
     })).map_err(|_| Reason::InvalidInput)?;
     let text = format!("Run this repository check once?\n\n{details}");
+    confirm_text(cwd, &text, deadline, cancelled)
+}
+
+pub(crate) fn confirm_text(
+    cwd: &std::path::Path,
+    text: &str,
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), Reason> {
     let candidate = dialog_path()?;
     let pin = PinnedNativeExecutable::inspect(&candidate, cwd).map_err(|_| Reason::Unavailable)?;
     let mut dialog = Command::new(pin.path());
@@ -33,7 +42,7 @@ pub(in crate::task_verification) fn confirm(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    configure(&mut dialog, &text)?;
+    configure(&mut dialog, text)?;
     if cancelled() || Instant::now() >= deadline {
         return Err(Reason::Cancelled);
     }

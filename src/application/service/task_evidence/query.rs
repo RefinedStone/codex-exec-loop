@@ -141,11 +141,22 @@ impl TaskEvidenceService {
                         row.state = None;
                         projection.unavailable = Some(error_kind(&error));
                     } else {
-                        row.state = Some(match record.status {
-                            TaskEvidenceStatus::Pass => TaskCriterionEvidenceState::Pass,
-                            TaskEvidenceStatus::Fail => TaskCriterionEvidenceState::Fail,
-                            TaskEvidenceStatus::Blocked => TaskCriterionEvidenceState::Blocked,
-                        });
+                        row.state = Some(
+                            if let Some(review) = task.reviews.iter().find(|r| r.matches(receipt)) {
+                                match review.decision {
+                                crate::domain::planning::evidence::HumanEvidenceDecision::Pass => TaskCriterionEvidenceState::HumanPassed,
+                                crate::domain::planning::evidence::HumanEvidenceDecision::Fail => TaskCriterionEvidenceState::HumanFailed,
+                            }
+                            } else {
+                                match record.status {
+                                    TaskEvidenceStatus::Pass => TaskCriterionEvidenceState::Pass,
+                                    TaskEvidenceStatus::Fail => TaskCriterionEvidenceState::Fail,
+                                    TaskEvidenceStatus::Blocked => {
+                                        TaskCriterionEvidenceState::Blocked
+                                    }
+                                }
+                            },
+                        );
                     }
                 } else {
                     row.state = None;
@@ -206,6 +217,8 @@ impl TaskEvidenceService {
                         TaskCriterionEvidenceState::Pass
                             | TaskCriterionEvidenceState::Fail
                             | TaskCriterionEvidenceState::Blocked
+                            | TaskCriterionEvidenceState::HumanPassed
+                            | TaskCriterionEvidenceState::HumanFailed
                     )
                 ) {
                     row.state = None;

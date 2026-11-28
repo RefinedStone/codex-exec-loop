@@ -31,6 +31,7 @@ impl Fixture {
                 planning_revision: 3,
                 evidence_revision: 0,
                 tasks: vec![TaskEvidenceTaskSnapshot {
+                    reviews: vec![],
                     task,
                     scope,
                     leases: vec![],

@@ -70,6 +70,26 @@ pub(super) fn validate_observation(
             .as_ref()
             .ok_or(TaskDeliveryEvidenceError::Invalid)?;
         match row.state {
+            TaskDeliveryCriterionState::HumanPassed => {
+                if criterion.channel == crate::domain::planning::TaskAcceptanceChannel::Command
+                    || !task.reviews.iter().any(|r| {
+                        r.review_id == *event_id
+                            && r.scope == task.scope
+                            && r.criterion_id == criterion.id
+                            && r.tree_sha == source.source_tree_sha
+                            && r.decision == HumanEvidenceDecision::Pass
+                            && task.evidence.iter().any(|e| {
+                                r.matches(e)
+                                    && e.evidence.status == TaskEvidenceStatus::Pass
+                                    && e.evidence.attempt.session_key == current.queue.session_key
+                                    && e.evidence.attempt.lease_generation
+                                        == binding.lease_generation
+                            })
+                    })
+                {
+                    return Err(TaskDeliveryEvidenceError::Invalid.into());
+                }
+            }
             TaskDeliveryCriterionState::Waived => {
                 if !task.waivers.iter().any(|receipt| {
                     receipt.event_id == *event_id

@@ -904,8 +904,8 @@ ipcMain.handle(IPC_CHANNELS.diagnosticsPreview, (event, versions: unknown) => {
   diagnosticOwner(event);
   return diagnosticsFor(event.sender.id).preview(versions);
 });
-ipcMain.handle(IPC_CHANNELS.evidencePreview, (event, target: unknown) =>
-  openEvidencePreview(diagnosticOwner(event), resolveGatewayExecutable(repositoryRoot()), target));
+ipcMain.handle(IPC_CHANNELS.evidencePreview, (event, target: unknown, review: unknown) =>
+  openEvidencePreview(diagnosticOwner(event), resolveGatewayExecutable(repositoryRoot()), target, review));
 ipcMain.handle(IPC_CHANNELS.diagnosticsDiscard, (event, id: unknown) => {
   diagnosticOwner(event);
   diagnosticsFor(event.sender.id).discard(id);

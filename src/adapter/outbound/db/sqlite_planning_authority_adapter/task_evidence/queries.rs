@@ -116,6 +116,7 @@ pub(super) fn task_snapshot(
         }
     }
     Ok(TaskEvidenceTaskSnapshot {
+        reviews: review::latest(connection, &task)?,
         task,
         scope,
         leases,

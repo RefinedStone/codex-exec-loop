@@ -100,6 +100,7 @@ pub struct TaskEvidenceDeliverySource {
 #[serde(rename_all = "snake_case")]
 pub enum TaskDeliveryCriterionState {
     HostPassed,
+    HumanPassed,
     Waived,
     Blocked,
 }

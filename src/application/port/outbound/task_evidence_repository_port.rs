@@ -54,6 +54,7 @@ pub struct TaskEvidenceTaskSnapshot {
     /// for Stale projection; it must never become current by task/criterion id alone.
     pub evidence: Vec<TaskEvidenceReceipt>,
     pub waivers: Vec<TaskCriterionWaiverReceipt>,
+    pub reviews: Vec<crate::domain::planning::evidence::HumanEvidenceReview>,
     /// Latest host attempt per criterion; worker-reported evidence remains separate.
     pub host_verifications: Vec<StoredTaskVerification>,
 }
@@ -99,6 +100,13 @@ pub struct TaskCriterionWaiverCommit {
 }
 
 pub trait TaskEvidenceRepositoryPort: TaskVerificationRepositoryPort + Send + Sync {
+    fn record_human_review(
+        &self,
+        _workspace: &str,
+        _review: &crate::domain::planning::evidence::HumanEvidenceReview,
+    ) -> Result<()> {
+        anyhow::bail!("human review storage unavailable")
+    }
     fn load_current_snapshot(
         &self,
         workspace: &str,
