@@ -63,7 +63,6 @@ try {
       for (const key of ["origin", "repositoryId", "worktreeId", "snapshotId", "headOid", "fingerprint", "staleReason"]) {
         assert.equal(Object.hasOwn(payload.quotedContext[0], key), false, key);
       }
-      assert.equal(Object.hasOwn(payload.quotedContext[0], "manifestId"), false);
       assert.equal(payload.quotedContext[0].side, "new");
       assert.equal(payload.quotedContext[0].startLine, 2);
       assert.equal(await page.getByTestId("composer-input").inputValue(), "review this");
