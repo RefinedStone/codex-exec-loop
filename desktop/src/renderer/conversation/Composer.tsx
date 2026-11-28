@@ -218,7 +218,7 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
           if (reviewed.some(item => item.included && item.staleReason && !item.useOriginal)) {
             throw new AttachmentError("새 범위를 선택하거나 이전 판 기준 전송을 확인하세요.");
           }
-          wire = fileMessage(text, reviewed, target);
+          wire = fileMessage(text, reviewed);
         }
         const turn = await actions.sendMessage(wire, images);
         if (included && files) {
