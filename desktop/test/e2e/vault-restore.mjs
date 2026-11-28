@@ -57,6 +57,7 @@ try {
   check("the same issue reuses its window", app.windows().length === 2, String(app.windows().length));
 
   // 다시 여는 요청도 실행 프로필을 다시 본다.
+  check("automation profile never asks for a real backup recovery key", await restore.getByLabel("백업 복구 키").count() === 0);
   await restore.getByTestId("vault-restore-unlock").click();
   await restore.locator('#root[data-phase="held"]').waitFor({ timeout: 5_000 });
   check("another unlock is held again", (await restore.getByTestId("vault-restore-heading").textContent()) === "열람 보류");
@@ -87,14 +88,32 @@ try {
   // 화면만 검증하는 합성 fixture이다. 제품에 승인 우회·fake environment·helper 대체 경로는 없다.
   const synthetic = { title: "synthetic local title <b>literal</b>", body: "synthetic-private-body <img src=x onerror=alert(1)> **literal**" };
   let syntheticGeneration = 1_000;
-  const showSynthetic = async (state) => {
+  const showSynthetic = async (state, previewAvailable = false) => {
     const generation = ++syntheticGeneration;
-    await app.evaluate(({ BrowserWindow }, { state, generation }) => {
+    await app.evaluate(({ BrowserWindow }, { state, generation, previewAvailable }) => {
       const window = BrowserWindow.getAllWindows().find((owner) => owner.webContents.getURL().endsWith("vault-restore.html"));
-      window.webContents.send("akra-vault-restore:state", state, generation);
-    }, { state, generation });
+      window.webContents.send("akra-vault-restore:state", state, generation, previewAvailable);
+    }, { state, generation, previewAvailable });
     return generation;
   };
+  const inspectFile = restore.getByLabel("검사할 백업 파일");
+  await showSynthetic({ phase: "held", reason: "locked" }, true);
+  await restore.getByTestId("vault-restore-detail").filter({ hasText: "Vault 잠금을 해제하지 못했습니다." }).waitFor();
+  check("missing local key still offers read-only inspection without plaintext",
+    await inspectFile.count() === 1 && await restore.getByTestId("vault-restored-body").count() === 0);
+  await showSynthetic({ phase: "held", reason: "profile_automation" });
+  await inspectFile.waitFor({ state: "detached" });
+  check("the same held phase does not offer inspection when its profile is blocked",
+    await restore.getByLabel("백업 복구 키").count() === 0);
+  await showSynthetic({phase:"locked",cause:null}, true);
+  await inspectFile.setInputFiles({name:"synthetic-invalid.json",mimeType:"application/json",buffer:Buffer.from("invalid")});
+  await restore.getByLabel("백업 복구 키").fill("00".repeat(32));
+  await restore.getByRole("button", {name:"백업 파일 검사 (읽기 전용)"}).click();
+  await restore.getByText("파일 또는 키를 확인할 수 없습니다. 변경한 항목 없음").waitFor();
+  check("a synthetic visible form cannot bypass the real main-process profile hold", await restore.getByLabel("백업 복구 키").inputValue() === "");
+  await restore.getByRole("button", {name:"검사 취소"}).click();
+  await restore.getByLabel("백업 복구 키").waitFor({state:"detached"});
+  check("cancelling clears the private form without submitting an import", true);
   await showSynthetic({ phase: "restored", ...synthetic, expiresAt: Date.now() + 60_000 });
   await restore.getByTestId("vault-restored-body").waitFor();
   check("synthetic restored state appears only as literal text", await restore.getByTestId("vault-restored-title").textContent() === synthetic.title

@@ -10,6 +10,7 @@ import { BrowserWindow, ipcMain, type IpcMainEvent, type WebContents } from "ele
 
 import { copyVaultRestoreTarget, type VaultRestoreTarget, type VaultRelockCause, type VaultRestoreHold, VAULT_RESTORE_CHANNELS } from "../shared/vaultRestore";
 import { VaultRestoreSession, type VaultRestoreSource } from "./vaultRestoreSession";
+import type { VaultBackupPreview } from "../shared/vaultRestore";
 
 /** 복원본을 연 뒤 다시 잠글 때까지의 시간이다. */
 const VIEWING_SESSION_MS = 5 * 60_000;
@@ -29,11 +30,13 @@ interface Entry {
   minimized: boolean;
   hidden: boolean;
   viewGeneration: number;
+  backup?: AbortController;
   unlockOffered: boolean;
 }
 
 export interface VaultRestoreWindowsDeps {
   source: VaultRestoreSource;
+  inspectBackup?(archive: Uint8Array, key: string, signal: AbortSignal): Promise<VaultBackupPreview>;
   profileHold(): VaultRestoreHold | null;
   preloadPath: string;
   /** 창에 복원본 화면(`vault-restore.html`)을 읽힌다. */
@@ -48,6 +51,15 @@ export class VaultRestoreWindows {
   private readonly powerHolds = new Set<PowerHold>();
 
   constructor(private readonly deps: VaultRestoreWindowsDeps) {
+    ipcMain.handle(VAULT_RESTORE_CHANNELS.backupPreview, async (event, generation: unknown, archive: unknown, key: unknown): Promise<VaultBackupPreview> => {
+      const entry = event.senderFrame === event.sender.mainFrame ? this.entries.get(event.sender.id) : undefined;
+      const allowed = () => entry && this.backupAvailable(entry) && generation === entry.viewGeneration;
+      if (!entry || !allowed() || entry.backup || !(archive instanceof Uint8Array) || archive.byteLength > 8 * 1024 * 1024 || typeof key !== "string" || key.length > 128 || !this.deps.inspectBackup) return {status:"rejected"};
+      const operation = new AbortController(); entry.backup = operation;
+      try { const result = await this.deps.inspectBackup(archive, key, operation.signal); return allowed() && !operation.signal.aborted ? result : {status:"rejected"}; }
+      catch { return {status:"rejected"}; }
+      finally { if (entry.backup === operation) entry.backup = undefined; }
+    });
     ipcMain.on(VAULT_RESTORE_CHANNELS.ready, (event) => {
       const entry = this.entryOf(event);
       if (!entry) return;
@@ -126,10 +138,12 @@ export class VaultRestoreWindows {
         : entry.minimized || entry.hidden ? "window_not_visible" : this.powerHold() ?? this.deps.profileHold(),
       emit: (state) => {
         // Each emitted state supersedes previously rendered unlock, review and reconnect buttons.
+        entry.backup?.abort();
+        entry.backup = undefined;
         entry.viewGeneration += 1;
         entry.unlockOffered = state.phase === "locked" || state.phase === "held";
         if (!contents.isDestroyed()) {
-          try { contents.send(VAULT_RESTORE_CHANNELS.state, state, entry.viewGeneration); } catch { /* 종료된 renderer에 늦은 응답을 보내지 않는다. */ }
+          try { contents.send(VAULT_RESTORE_CHANNELS.state, state, entry.viewGeneration, this.backupAvailable(entry)); } catch { /* 종료된 renderer에 늦은 응답을 보내지 않는다. */ }
         }
       },
       sessionMs: VIEWING_SESSION_MS,
@@ -200,6 +214,10 @@ export class VaultRestoreWindows {
   releasePowerHold(cause: PowerHold): void {
     if (!this.powerHolds.delete(cause)) return;
     for (const entry of this.entries.values()) entry.session.lock(cause);
+  }
+
+  private backupAvailable(entry: Entry): boolean {
+    return Boolean(this.deps.inspectBackup && entry.rendererAvailable && entry.targetActive && !entry.minimized && !entry.hidden && !entry.window.isDestroyed() && !this.powerHold() && !this.deps.profileHold());
   }
 
   private powerHold(): VaultRestoreHold | null {

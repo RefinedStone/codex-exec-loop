@@ -165,12 +165,8 @@ impl EvidenceVaultBackupPort for FilesystemEvidenceVaultBackupAdapter {
         &self,
         request: VaultBackupSelection<'_>,
     ) -> Result<VaultBackupImportPlan<'_>, VaultBackupError> {
-        if request.archive.len() > MAX_ARCHIVE_BYTES {
-            return Err(VaultBackupError::ArchiveTooLarge);
-        }
-        let archive = parse_archive(request.archive)?;
-        let source_key = unwrap_source_key(&archive, request.recovery_key)?;
-        let (staged, unapproved_projects) = stage_import(&archive, &source_key, request.projects)?;
+        let (archive, staged, unapproved_projects) =
+            authenticated_records(request.archive, request.recovery_key, request.projects)?;
         let mut report = VaultBackupImportReport {
             format_version: archive.format_version,
             backup_id: archive.backup_id.clone(),
@@ -200,6 +196,36 @@ impl EvidenceVaultBackupPort for FilesystemEvidenceVaultBackupAdapter {
             Ok(report)
         })))
     }
+}
+
+fn authenticated_records(
+    bytes: &str,
+    key: &VaultRecoveryKey,
+    projects: &[VaultBackupProjectApproval],
+) -> Result<
+    (
+        StoredVaultBackup,
+        Vec<StagedBinding>,
+        Vec<IssueProjectScope>,
+    ),
+    VaultBackupError,
+> {
+    if bytes.len() > MAX_ARCHIVE_BYTES {
+        return Err(VaultBackupError::ArchiveTooLarge);
+    }
+    let archive = parse_archive(bytes)?;
+    let record_key = unwrap_source_key(&archive, key)?;
+    let (staged, unapproved) = stage_import(&archive, &record_key, projects)?;
+    Ok((archive, staged, unapproved))
+}
+
+/// Authenticates records without resolving a destination path, reading credentials, or installing anything.
+pub(crate) fn inspect_archive(
+    bytes: &str,
+    key: &VaultRecoveryKey,
+) -> Result<(u32, Vec<IssueProjectScope>), VaultBackupError> {
+    let (archive, _, projects) = authenticated_records(bytes, key, &[])?;
+    Ok((archive.format_version, projects))
 }
 
 fn stage_import(

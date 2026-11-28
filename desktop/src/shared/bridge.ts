@@ -549,9 +549,10 @@ export function isDotId(dotId: unknown): dotId is string {
 
 /** 복원본 창의 window.akra.vaultRestore 에만 허용하는 함수이다. 일반 창에는 이 권한이 없다. */
 export interface VaultRestoreBridge {
+  previewBackup(generation: number, archive: Uint8Array, recoveryKey: string): Promise<import("./vaultRestore").VaultBackupPreview>;
   /** 수신 함수를 등록했다고 알린다. 처음이면 main 이 확인을 시작한다. 다시 오면 (화면을 다시 불러옴) 잠근다. */
   ready(): void;
-  onState(listener: (state: VaultRestoreViewState, viewGeneration: number) => void): () => void;
+  onState(listener: (state: VaultRestoreViewState, viewGeneration: number, backupAvailable: boolean) => void): () => void;
   /** 현재 화면의 세대에 묶어 다시 사용자 확인을 거쳐 연다. */
   unlock(viewGeneration: number): void;
   lock(): void;

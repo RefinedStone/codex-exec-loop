@@ -73,6 +73,7 @@ enum GatewayCommand {
     DesktopBrowserBridge,
     DesktopConfirmationBridge,
     DesktopRestoreBridge,
+    DesktopBackupPreview,
     ProviderCredentialPrompt,
     ProviderCredentialMigration,
 }
@@ -93,6 +94,7 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         GatewayCommand::DesktopConfirmationBridge => {
             return super::desktop_confirmation_bridge::run().await;
         }
+        GatewayCommand::DesktopBackupPreview => return super::desktop_backup_preview::run(),
         GatewayCommand::DesktopRestoreBridge => {
             return super::desktop_restore_bridge::run().await;
         }
@@ -223,6 +225,9 @@ fn parse_args(args: &[String]) -> Result<GatewayCommand> {
         }
         [command] if command == "desktop-confirmation-bridge" => {
             Ok(GatewayCommand::DesktopConfirmationBridge)
+        }
+        [command] if command == "desktop-backup-preview" => {
+            Ok(GatewayCommand::DesktopBackupPreview)
         }
         [command] if command == "desktop-restore-bridge" => {
             Ok(GatewayCommand::DesktopRestoreBridge)

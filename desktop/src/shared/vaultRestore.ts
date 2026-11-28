@@ -6,6 +6,7 @@ import type { IssueEventReference } from "./kernel-protocol/generated";
 /** 로컬 복원본 창의 preload 만 쓰는 채널이다. main 은 보낸 창이 복원본 창인지 확인한다. */
 export const VAULT_RESTORE_CHANNELS = {
   ready: "akra-vault-restore:ready",
+  backupPreview: "akra-vault-restore:backup-preview",
   state: "akra-vault-restore:state",
   unlock: "akra-vault-restore:unlock",
   lock: "akra-vault-restore:lock",
@@ -170,6 +171,8 @@ const RELOCK_TEXT: Record<VaultRelockCause, string> = {
   project_switch: "프로젝트를 바꿔서 잠갔습니다.",
   agent_working: "에이전트 턴이 시작되어 잠갔습니다.",
 };
+
+export type VaultBackupPreview = {readonly status:"verified"; readonly version:1|2; readonly projects:readonly string[]} | {readonly status:"rejected"};
 
 export type VaultRestoreAction = "unlock" | "lock" | "review";
 

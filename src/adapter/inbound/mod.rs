@@ -14,6 +14,7 @@ pub mod kernel_protocol;
 // Telegram bot은 채팅 업데이트를 planning control 명령과 응답 텍스트로 변환한다.
 pub mod telegram_bot;
 // TUI는 native-first 사용자 흐름의 주 표면이며 app-server 스트림과 planning 상태를 한 화면에 엮는다.
+mod desktop_backup_preview;
 mod desktop_restore_bridge;
 pub mod tui;
 

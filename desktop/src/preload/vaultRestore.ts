@@ -5,9 +5,10 @@ import type { AkraVaultRestoreBridge, VaultRestoreBridge } from "../shared/bridg
 import { type VaultRestoreViewState, VAULT_RESTORE_CHANNELS } from "../shared/vaultRestore";
 
 const bridge: VaultRestoreBridge = {
+  previewBackup: (generation, archive, recoveryKey) => ipcRenderer.invoke(VAULT_RESTORE_CHANNELS.backupPreview, generation, archive, recoveryKey),
   ready: () => ipcRenderer.send(VAULT_RESTORE_CHANNELS.ready),
   onState(listener) {
-    const handler = (_event: IpcRendererEvent, state: VaultRestoreViewState, viewGeneration: number) => listener(state, viewGeneration);
+    const handler = (_event: IpcRendererEvent, state: VaultRestoreViewState, viewGeneration: number, backupAvailable?: boolean) => listener(state, viewGeneration, backupAvailable === true);
     ipcRenderer.on(VAULT_RESTORE_CHANNELS.state, handler);
     return () => ipcRenderer.off(VAULT_RESTORE_CHANNELS.state, handler);
   },

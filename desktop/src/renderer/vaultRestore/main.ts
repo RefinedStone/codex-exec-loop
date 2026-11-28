@@ -17,6 +17,8 @@ if (!root) {
   throw new Error("root element is missing");
 }
 // 이 HTML 은 전용 preload 만 읽는다. 일반 화면의 AkraBridge 를 이 창에 적용하지 않는다.
+import { archivePreview } from "./backupPreview";
+
 const bridge = (window as unknown as { readonly akra: AkraVaultRestoreBridge }).akra.vaultRestore;
 const FIELD_LABEL: Record<VaultField, string> = { title: "제목", body: "본문" };
 const ACTION_LABEL: Record<VaultRestoreAction, string> = { unlock: "확인하고 열기", lock: "잠그기", review: "재연결 검토" };
@@ -77,7 +79,7 @@ function reviewForm(review: VaultReconnectReview, generation: number): HTMLEleme
   ];
 }
 
-function render(state: VaultRestoreViewState, viewGeneration = -1): void {
+function render(state: VaultRestoreViewState, viewGeneration = -1, backupAvailable = false): void {
   const view = vaultRestoreView(state);
   const actions = element("div");
   actions.className = "actions";
@@ -92,6 +94,7 @@ function render(state: VaultRestoreViewState, viewGeneration = -1): void {
     nodes.push(until);
   }
   if (state.phase === "review") nodes.push(...reviewForm(state.review, viewGeneration));
+  if ((state.phase === "locked" || state.phase === "held") && backupAvailable) nodes.push(archivePreview(bridge, viewGeneration));
   nodes.push(actions);
   root!.dataset.phase = state.phase;
   root!.replaceChildren(...nodes);
