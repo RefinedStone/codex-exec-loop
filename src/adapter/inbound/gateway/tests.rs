@@ -40,6 +40,7 @@ mod issue_shared_copy_flow;
 mod provider_credentials;
 mod repository_extensions;
 mod resource_versions;
+mod shared_repository_recovery;
 
 struct EchoUpstream {
     generation: watch::Sender<u64>,
