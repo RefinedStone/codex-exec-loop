@@ -7,9 +7,10 @@ import { useMemo, type ReactNode } from "react";
 import { useUiStore } from "../session/uiStore";
 import { bundledLanguage } from "./diffLanguages";
 import { useDiffStyle } from "./diffStyle";
+import type { DiffInteraction } from "./DiffView";
 
 /** `patch` 를 읽지 못하면 `fallback` (줄을 그대로 그린 것)을 보인다. */
-export default function PatchDiffView({ patch, fallback }: { patch: string; fallback: ReactNode }) {
+export default function PatchDiffView({ patch, fallback, interaction }: { patch: string; fallback: ReactNode; interaction?: DiffInteraction }) {
   const theme = useUiStore((state) => state.theme);
   const diffStyle = useDiffStyle();
   const fileDiff = useMemo(() => {
@@ -23,13 +24,16 @@ export default function PatchDiffView({ patch, fallback }: { patch: string; fall
   const options = useMemo(
     // 파일 이름과 줄 수는 접는 줄(`summary`)이 이미 보인다. 그래서 라이브러리의 파일 머리는 끈다.
     // 덩어리 사이의 줄은 글 없는 선이다. patch 는 파일의 일부라서 "바뀌지 않은 줄 N개"를 펼칠 수 없다.
-    () => ({ diffStyle, themeType: theme, disableFileHeader: true, overflow: "scroll" as const, hunkSeparators: "simple" as const }),
-    [diffStyle, theme],
+    () => ({ diffStyle, themeType: theme, disableFileHeader: true,
+      overflow: interaction?.wrap ? "wrap" as const : "scroll" as const, hunkSeparators: "simple" as const,
+      enableLineSelection: interaction !== undefined, controlledSelection: interaction !== undefined,
+      onLineSelected: interaction?.onLineSelected }),
+    [diffStyle, theme, interaction],
   );
   if (!fileDiff) return fallback;
   return (
     <div className="diff-lines diff-patch" data-testid="diff-lines" data-diff-style={diffStyle}>
-      <FileDiff fileDiff={fileDiff} options={options} disableWorkerPool />
+      <FileDiff fileDiff={fileDiff} options={options} selectedLines={interaction?.selectedLines} disableWorkerPool />
     </div>
   );
 }
