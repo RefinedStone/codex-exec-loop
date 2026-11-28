@@ -13,6 +13,7 @@ use std::sync::Mutex;
 use anyhow::Context;
 use anyhow::Result;
 
+mod retention;
 #[cfg(windows)]
 mod windows;
 
@@ -105,7 +106,7 @@ impl IssuePublishIntentJournalPort for IssuePublishIntentJournalAdapter {
                 Some(existing) => *existing = record.clone(),
                 None => records.push(record.clone()),
             }
-            // shortcut: 끝난 의도도 계속 남는다 (게시 한 번에 한 줄), 파일이 커지면 오래된 끝난 의도를 버린다.
+            retention::trim(&mut records);
             let mut body = String::new();
             for record in &records {
                 body.push_str(&serde_json::to_string(record)?);
@@ -151,6 +152,36 @@ mod tests {
     fn journal(directory: &Path) -> IssuePublishIntentJournalAdapter {
         let resolved = directory.to_path_buf();
         IssuePublishIntentJournalAdapter::new(move |_| Ok(resolved.clone()))
+    }
+
+    #[test]
+    fn reopened_journal_does_not_resurrect_an_evicted_unsent_intent() {
+        let dir = temp_runtime_dir("unsent-retention");
+        let store = journal(&dir);
+        let lease = store.acquire_publication_lease("/work/project").unwrap();
+        let unsent = |seq| {
+            let mut entry = record(
+                &format!("never-sent-{seq}"),
+                IssuePublishIntentState::Abandoned,
+            );
+            entry.sequence = seq;
+            entry.write_attempted = Some(false);
+            entry
+        };
+        for seq in 1..=130 {
+            store.save("/work/project", &unsent(seq)).unwrap();
+        }
+        // A delayed, still inert update must not recreate a row removed in the same transaction.
+        store.save("/work/project", &unsent(1)).unwrap();
+        drop(lease);
+        let sequences: Vec<_> = journal(&dir)
+            .load("/work/project")
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.sequence)
+            .collect();
+        assert_eq!(sequences, (2..=130).collect::<Vec<_>>());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     pub(super) fn record(

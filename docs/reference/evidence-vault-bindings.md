@@ -125,3 +125,12 @@ Windows의 write-through와 파일 flush는 NTFS의 문서화된 파일·메타�
 변경의 검증 결과에 포함하지 않습니다. 실행 명령과 관측 결과는
 [기존 검증 기록](../validation/vault-binding-transactions.md)과
 [Windows Vault 검증](../validation/windows-vault-restore.md)에 분리합니다.
+
+## Publication journal retention
+
+On a journal save, Akra keeps up to 128 superseded records that have positive sequence numbers,
+ended in Conflict or Abandoned, explicitly never sent a write, and have no recorded Vault fields or
+binding attempt. The most recent sequence for each exact issue is always protected. Legacy, Held,
+possibly sent, confirmed, and unresolved entries do not count toward this limit. The protected set
+can exceed 128 entries. Compaction runs in the existing SQLite transaction on Windows or the
+atomic JSONL replacement on Unix. It does not erase Vault records or copies in old backups.
