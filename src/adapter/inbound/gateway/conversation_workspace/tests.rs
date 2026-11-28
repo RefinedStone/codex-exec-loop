@@ -62,3 +62,4 @@ fn conversation_workspace_api_has_only_prepare_and_get_and_rejects_binding_field
         Value::Null
     );
 }
+mod desktop_fixture;
