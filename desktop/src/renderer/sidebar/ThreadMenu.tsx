@@ -6,6 +6,7 @@ import { useFittedMenuPosition } from "../views/menuPosition";
 
 /** 스레드에 대한 요청이다. App 이 열린 세션으로 보낸다. */
 export interface ThreadActions {
+  candidate(threadId: string): string | undefined;
   rename(threadId: string, name: string): Promise<void>;
   archive(threadId: string): Promise<void>;
   unarchive(threadId: string): Promise<void>;
@@ -14,6 +15,7 @@ export interface ThreadActions {
 
 export interface ThreadMenuProps {
   thread: WorkspaceThread;
+  readonly candidate: string | undefined;
   folder: string;
   running: boolean;
   position: { x: number; y: number };
@@ -27,7 +29,7 @@ function copy(text: string): void {
   void navigator.clipboard.writeText(text).catch(() => undefined);
 }
 
-export function ThreadMenu({ thread, folder, running, position, onRename, onArchive, onOpenFolder, onClose }: ThreadMenuProps) {
+export function ThreadMenu({ thread, candidate, folder, running, position, onRename, onArchive, onOpenFolder, onClose }: ThreadMenuProps) {
   const menu = useRef<HTMLUListElement>(null);
   const fitted = useFittedMenuPosition(menu, position);
   useEffect(() => {
@@ -52,7 +54,7 @@ export function ThreadMenu({ thread, folder, running, position, onRename, onArch
   );
   return (
     <ul ref={menu} className="thread-menu" role="menu" aria-label="스레드 메뉴" style={{ left: fitted.x, top: fitted.y }} data-testid="thread-menu">
-      {item("이름 바꾸기", onRename, { testId: "thread-menu-rename" })}
+      {item(candidate === undefined ? "이름 바꾸기" : "임시 제목 검토 및 저장…", onRename, { testId: "thread-menu-rename" })}
       {item("보관", onArchive, running
         ? { disabled: true, title: "진행 중인 턴이 있어 보관할 수 없습니다. 턴이 끝난 뒤에 하십시오.", testId: "thread-menu-archive" }
         : { testId: "thread-menu-archive" })}
@@ -65,18 +67,29 @@ export function ThreadMenu({ thread, folder, running, position, onRename, onArch
 }
 
 /** 이름 바꾸기 칸이다. Enter 로 보내고 Escape 나 포커스를 잃으면 취소한다. */
-export function ThreadRenameInput({ title, onSubmit, onCancel }: { title: string; onSubmit(name: string): void; onCancel(): void }) {
-  const [value, setValue] = useState(title);
+export function ThreadRenameInput({ title, candidate, onSubmit, onCancel }: {
+  readonly title: string;
+  readonly candidate: string | undefined;
+  onSubmit(name: string, candidate: string | undefined): void;
+  onCancel(): void;
+}) {
+  const [initial] = useState({ title, candidate });
+  const [value, setValue] = useState(candidate ?? title);
+  const current = title === initial.title && candidate === initial.candidate;
+  useEffect(() => { if (!current) onCancel(); }, [current, onCancel]);
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (value.trim() && value.trim() !== title) onSubmit(value);
+    if (current && value.trim() && (candidate !== undefined || value.trim() !== title)) onSubmit(value, initial.candidate);
     else onCancel();
   };
   return (
     <form className="thread-rename" onSubmit={submit}>
       <input autoFocus aria-label="스레드 이름" value={value} maxLength={200} data-testid="thread-rename-input"
         onChange={(event) => setValue(event.target.value)} onBlur={onCancel}
-        onKeyDown={(event) => { if (event.key === "Escape") onCancel(); }} onFocus={(event) => event.target.select()} />
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)) event.preventDefault();
+          if (event.key === "Escape") onCancel();
+        }} onFocus={(event) => event.target.select()} />
     </form>
   );
 }

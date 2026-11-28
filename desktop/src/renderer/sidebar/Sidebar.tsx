@@ -61,8 +61,9 @@ function ThreadRow({ thread, folder, actions, onArchived, onOpenThread }: {
   if (renaming && actions) {
     return (
       <li className="thread-row">
-        <ThreadRenameInput title={thread.title} onCancel={() => setRenaming(false)} onSubmit={(name) => {
+        <ThreadRenameInput title={thread.title} candidate={actions.candidate(thread.id)} onCancel={() => setRenaming(false)} onSubmit={(name, candidate) => {
           setRenaming(false);
+          if (actions.candidate(thread.id) !== candidate) return;
           actions.rename(thread.id, name).catch((cause: unknown) => toast(`이름을 바꾸지 못했습니다: ${failure(cause)}`));
         }} />
       </li>
@@ -71,7 +72,7 @@ function ThreadRow({ thread, folder, actions, onArchived, onOpenThread }: {
   return (
     <li className="thread-row">
       {menu && actions && (
-        <ThreadMenu thread={thread} folder={folder} running={turnActive} position={menu} onClose={closeMenu}
+        <ThreadMenu thread={thread} candidate={actions.candidate(thread.id)} folder={folder} running={turnActive} position={menu} onClose={closeMenu}
           onRename={() => setRenaming(true)}
           onArchive={() => actions.archive(thread.id).then(() => onArchived(thread), (cause: unknown) => toast(`보관하지 못했습니다: ${failure(cause)}`))}
           onOpenFolder={() => actions.openFolder(folder).then((opened) => { if (!opened) toast("폴더를 열지 못했습니다."); })} />

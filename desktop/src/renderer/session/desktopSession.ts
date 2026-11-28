@@ -530,16 +530,22 @@ export class DesktopSession {
     const input = userInput(trimmed, images);
     const transcript = this.store.getTranscript();
     const activeTurn = isTurnInProgress(transcript) ? transcript?.turns.at(-1) : undefined;
-    if (activeTurn) {
-      await this.client.request("turn/steer", { threadId, input, expectedTurnId: activeTurn.id });
+    const expectedTurnId = activeTurn?.id ?? this.acknowledgedTurnStarts.get(threadId);
+    if (expectedTurnId) {
+      await this.client.request("turn/steer", { threadId, input, expectedTurnId });
+      this.displayAcceptedTitle(threadId, trimmed);
     } else {
-      const acknowledgedTurnId = this.acknowledgedTurnStarts.get(threadId);
-      if (acknowledgedTurnId) {
-        await this.client.request("turn/steer", { threadId, input, expectedTurnId: acknowledgedTurnId });
-      } else {
-        await this.startTextTurn(threadId, trimmed, images);
-      }
+      await this.startTextTurn(threadId, trimmed, images);
     }
+  }
+
+  titleCandidate(threadId: string): string | undefined { return this.provisionalTitles.candidate(threadId); }
+
+  private displayAcceptedTitle(threadId: string, text: string): void {
+    const title = this.provisionalTitles.accepted(threadId, text);
+    if (title === null) return;
+    this.store.renameThread(threadId, title);
+    this.store.updateTranscript(current => current.threadId === threadId ? { ...current, title } : current);
   }
 
   queueMessage(text: string): void {
@@ -587,11 +593,7 @@ export class DesktopSession {
       const response = await this.client.request<TurnStartResponse>("turn/start", { threadId, input, ...settings.params });
       if (typeof response?.turn?.id === "string" && response.turn.id.length > 0) {
         this.nextTurnSettings.accepted(settings);
-        const title = this.provisionalTitles.accepted(threadId, text);
-        if (title !== null) {
-          this.store.renameThread(threadId, title);
-          this.store.updateTranscript(current => current.threadId === threadId ? { ...current, title } : current);
-        }
+        this.displayAcceptedTitle(threadId, text);
         this.nextTurnQueue.started(threadId, response.turn.id);
         if (generation === this.conversationGeneration && this.nextTurnQueue.snapshot(threadId).waitingTurnId === response.turn.id) {
           this.acknowledgedTurnStarts.set(threadId, response.turn.id);
