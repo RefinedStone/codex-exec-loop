@@ -48,8 +48,8 @@ impl KernelCommandPort for KernelCommandService {
     ) -> Result<Value> {
         let params = json!({ "command": input, "idempotency_key": idempotency_key });
         let reply = self.gateway.request("akra/kernel/command", params, false)?;
-        // A store command runs under the repository lock without the Gateway kernel. The lock owner
-        // tells that path whether a TUI holds the kernel. A runtime command needs the Gateway kernel.
+        // Without a Gateway answer, a store command must acquire the writer lock and record its
+        // operation. A transport error may conceal acceptance and never reaches that path.
         match (reply, kind.spec().state) {
             (KernelGatewayReply::Answer(answer), _) => Ok(answer),
             (_, CommandState::Store) => self.command_only.command(kind, input, idempotency_key),

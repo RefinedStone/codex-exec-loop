@@ -123,10 +123,10 @@ tasks page showed. When the kernel rejects a change (`planning_revision_stale`,
 `planning_locked`), the admin answers 409, not 500: the JSON routes answer
 `{ "reason", "message" }`, and the forms answer the tasks page again with the message as its
 notice and the current values. Another failure of these routes is a 500 that carries its cause
-(`{ "message" }`, or the tasks page with the cause as its notice). Two cases are not recorded:
-a folder that cannot have a repository kernel (a repository without a primary checkout, a
-parallel slot worktree) changes tasks directly, and a repository whose kernel a TUI holds runs
-the command without a record. Creating, saving, and validating a draft in the admin still runs
+(`{ "message" }`, or the tasks page with the cause as its notice). A folder that cannot have a
+repository kernel (a repository without a primary checkout, a parallel slot worktree) can still
+change tasks directly. In a kernel-capable repository, an existing writer lock blocks standalone
+mutations, including when an old TUI owns the lock. Creating, saving, and validating a draft in the admin still runs
 directly: a draft is a file that the operator edits, not planning data.
 
 The file commands have no input. `export_planning_files` writes the stored support file into

@@ -185,12 +185,12 @@ fn failure_text(error: &anyhow::Error) -> String {
 }
 
 /*
- * 일의 끝을 답으로 바꾼다. `op_id` 는 기록한 명령의 번호이다. 기록하지 않은 명령(TUI 가 커널을 쥔 저장소)은 없다.
+ * 일의 끝을 답으로 바꾼다. `op_id` 는 기록한 명령의 번호이다.
  * 초기화의 실패는 오류이다 (K4-9a 의 입구가 그 글을 보인다). 저장 명령의 실패는 답의 `failure` 이다.
  */
-fn work_answer(end: WorkEnd, is_reset: bool, op_id: Option<i64>) -> Result<Value> {
+fn work_answer(end: WorkEnd, is_reset: bool, op_id: i64) -> Result<Value> {
     let receipt = |rejection| {
-        op_id.map(|op_id| OperationReceipt {
+        Some(OperationReceipt {
             op_id,
             rejection,
             replayed: false,
@@ -302,14 +302,16 @@ impl KernelCommandPort for CommandOnlyKernel {
         };
         let location =
             SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(&self.workspace)?;
-        let lock = match acquire_command_lock(location, &self.workspace) {
-            Ok(lock) => Some(lock),
+        let _lock = match acquire_command_lock(location, &self.workspace) {
+            Ok(lock) => lock,
             Err(error)
                 if error
                     .downcast_ref::<RepositoryKernelLockHeld>()
                     .is_some_and(|held| held.owner == Some(RepositoryKernelOwner::Tui)) =>
             {
-                None
+                return unreachable_answer(
+                    "The repository kernel owns this workspace. Stop the legacy TUI and send this command through the Akra Gateway.",
+                );
             }
             /*
              * Gateway 가 커널을 쥐고 있는데 이 명령은 여기로 왔다. 그 Gateway 가 이 명령을 받지 않았다는 뜻이다.
@@ -326,28 +328,7 @@ impl KernelCommandPort for CommandOnlyKernel {
             }
             Err(error) => return Err(error),
         };
-        // K6 까지의 예외이다: TUI 가 커널을 쥐 저장소에서는 직접 실행한다. 기록에 남지 않는다.
         let is_reset = matches!(work, CommandOnlyWork::Reset { .. });
-        if lock.is_none() {
-            // 결정 답과 개입은 영수증과 함께 실행한다. 기존 TUI 직접 실행 예외를 적용하지 않는다.
-            if let CommandOnlyWork::Stored(command) = &work
-                && matches!(
-                    command.as_ref(),
-                    StoredCommand::AnswerIssueDecision { .. }
-                        | StoredCommand::AskIssueDecision { .. }
-                        | StoredCommand::InterveneIssue { .. }
-                        | StoredCommand::SetIssueAutonomy { .. }
-                        | StoredCommand::PrepareEvidence { .. }
-                        | StoredCommand::RecordEvidence { .. }
-                        | StoredCommand::WaiveCriterion { .. }
-                )
-            {
-                return unreachable_answer(
-                    "The repository kernel owns this workspace. Send this stored command through that kernel.",
-                );
-            }
-            return work_answer(self.run(work), is_reset, None);
-        }
         let mut descriptor = descriptor.context("stored mutation must have a descriptor")?;
         descriptor.caller = Some(self.caller.to_string());
         let log = super::production::kernel_event_log_port();
@@ -490,7 +471,7 @@ impl KernelCommandPort for CommandOnlyKernel {
         ) {
             self.drain_task_evidence_outbox(log.as_ref(), &mut last_sequence);
         }
-        work_answer(end, is_reset, Some(op_id))
+        work_answer(end, is_reset, op_id)
     }
 
     fn query(&self, input: Value, wait: bool) -> Result<Value> {
@@ -1261,7 +1242,7 @@ mod tests {
     }
 
     #[test]
-    fn command_owner_blocks_mutation_and_tui_uses_only_legacy_reset() {
+    fn command_and_legacy_tui_owners_both_block_direct_reset() {
         let (_directory, kernel) = fixture();
         let location =
             SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(&kernel.workspace)
@@ -1283,6 +1264,10 @@ mod tests {
         )
         .unwrap();
         let answer = reset(&kernel, "legacy").unwrap();
+        assert_eq!(
+            answer["rejection"]["reason"], "kernel_unreachable",
+            "{answer}"
+        );
         assert!(answer.get("operation").is_none());
         assert!(kernel.records(log.as_ref()).unwrap().is_empty());
     }
@@ -1568,38 +1553,34 @@ mod tests {
     }
 
     #[test]
-    fn a_stored_command_under_a_tui_runs_directly_without_records() {
-        // Until K6: the TUI holds the repository lock, so the command cannot be recorded by a kernel.
+    fn a_stored_command_under_a_legacy_tui_never_mutates_the_store() {
         let (_directory, kernel) = fixture();
         let location =
             SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(&kernel.workspace)
                 .unwrap();
-        let _tui = RepositoryKernelLockAdapter::acquire_for_owner(
+        let revision = planning_revision(&kernel);
+        let tui = RepositoryKernelLockAdapter::acquire_for_owner(
             location,
             &kernel.workspace,
             RepositoryKernelOwner::Tui,
         )
         .unwrap();
-        let created = stored(
-            &kernel,
-            KernelCommandKind::CreateTask,
-            json!({"type":"create_task","task":task("Made beside a TUI")}),
+        let input = json!({"type":"create_task","task":task("Only with a writer lock")});
+        let refused = stored(&kernel, KernelCommandKind::CreateTask, input.clone());
+        assert_eq!(
+            refused["rejection"]["reason"], "kernel_unreachable",
+            "{refused}"
         );
-        assert_eq!(created["result"]["type"], "task_created");
-        assert!(created.get("operation").is_none());
-        // A failed command answers with `failure`, as it does when this assembly holds the lock.
-        let failed = stored(
-            &kernel,
-            KernelCommandKind::DeleteTask,
-            json!({
-                "type":"delete_task","task_id":"no-such-task",
-                "expected_planning_revision":created["result"]["planning_revision"],"confirm":true
-            }),
-        );
-        let failure = failed["failure"].as_str().expect("a failure text");
-        assert!(failure.contains("was not found"), "{failure}");
+        assert!(refused.get("operation").is_none());
+        assert_eq!(planning_revision(&kernel), revision);
         let log = super::super::production::kernel_event_log_port();
         assert!(kernel.records(log.as_ref()).unwrap().is_empty());
+
+        drop(tui);
+        let created = stored(&kernel, KernelCommandKind::CreateTask, input);
+        assert_eq!(created["result"]["type"], "task_created");
+        assert!(created["operation"]["op_id"].is_i64(), "{created}");
+        assert!(planning_revision(&kernel) > revision);
     }
 
     #[test]
