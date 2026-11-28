@@ -220,6 +220,9 @@ fn error_response(id: Value, code: i64, message: &str) -> String {
 }
 
 #[cfg(test)]
+mod cursor_tests;
+
+#[cfg(test)]
 mod tests {
     use anyhow::Result;
 
