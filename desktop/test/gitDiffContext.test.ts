@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -89,6 +89,28 @@ describe("immutable diff context", () => {
     expect(view.contents?.new).toMatchObject({ status: "complete", lineCount: 0 });
     expect(await readGitDiffContext(root, range(view, "old"))).toMatchObject({ text: "base\nunchanged\nlast\n" });
     expect(await readGitDiffContext(root, range(view, "new", 1, 1))).toEqual({ status: "unavailable", reason: "range_limit" });
+  });
+
+  it("does not expose a recreated untracked file in staged-deletion comparisons", async () => {
+    const { root, git, write } = repository();
+    git("rm", "-q", "한글 file.txt");
+    write("untracked replacement\n");
+    for (const source of ["head_worktree", "index_worktree"] as const) {
+      const view = await snapshot(root, source);
+      expect(await readGitDiffContext(root, range(view, "new", 1, 1))).toEqual({ status: "unavailable", reason: "range_limit" });
+    }
+  });
+
+  it("returns cached context as stale when its parent directory becomes a file", async () => {
+    const { root, git, write } = repository();
+    mkdirSync(join(root, "dir"));
+    write("original\n", "dir/file.txt");
+    git("add", "."); git("commit", "-qm", "nested file");
+    write("edited\n", "dir/file.txt");
+    const view = await snapshot(root, "head_worktree", "dir/file.txt");
+    rmSync(join(root, "dir"), { recursive: true });
+    write("replacement\n", "dir");
+    expect(await readGitDiffContext(root, range(view, "old", 1, 1))).toMatchObject({ text: "original\n", current: false });
   });
 
   it("captures unborn staged and untracked files without inventing an old side", async () => {
