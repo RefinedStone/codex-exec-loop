@@ -1,6 +1,8 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use akra_verification_native::git_command;
 
 struct Fixture(PathBuf);
 
@@ -10,6 +12,15 @@ impl Drop for Fixture {
             eprintln!("failed to remove recovery fixture: {error}");
         }
     }
+}
+
+fn init_checkout(workspace: &Path, branch: &str) {
+    let git = git_command::command(["init", "--quiet", "--initial-branch", branch])
+        .env("GIT_MASTER", "1")
+        .current_dir(workspace)
+        .output()
+        .expect("run git init");
+    assert!(git.status.success(), "{git:?}");
 }
 
 #[test]
@@ -22,13 +33,7 @@ fn occupied_published_namespace_is_reported_without_initializing_authority() {
     let fixture = Fixture(root);
     let workspace = fixture.0.join("Published Workspace");
     fs::create_dir(&workspace).expect("create fixture checkout");
-    let git = Command::new("git")
-        .args(["init", "--quiet"])
-        .env("GIT_MASTER", "1")
-        .current_dir(&workspace)
-        .output()
-        .expect("run git init");
-    assert!(git.status.success(), "{git:?}");
+    init_checkout(&workspace, "original");
     let workspace = workspace.canonicalize().expect("canonical checkout path");
     // Independent reproduction of the v1.3.5 path fixture, including its unsanitized label.
     let hash = workspace
@@ -46,6 +51,9 @@ fn occupied_published_namespace_is_reported_without_initializing_authority() {
     let database = runtime.join("planning-authority.db");
     let sentinel = b"metadata probe must not open this as SQLite";
     fs::write(&database, sentinel).expect("write disposable test bytes");
+    fs::rename(workspace.join(".git"), fixture.0.join("original-git"))
+        .expect("move original Git metadata away from the checkout");
+    init_checkout(&workspace, "replacement");
 
     let output = Command::new(env!("CARGO_BIN_EXE_akra"))
         .args(["planning-recovery", "diagnose"])
