@@ -80,7 +80,7 @@ export function fileMessage(instruction: string, items: readonly FileAttachment[
     filePath: item.filePath, sourceKind: item.sourceKind, side: item.side,
     startLine: item.startLine, endLine: item.endLine, before: item.before, selected: item.selected, after: item.after,
     diffExcerpt: item.diffExcerpt, feedback: item.feedback, partial: item.partial, useOriginal: item.useOriginal,
-    manifestId: item.manifestId,
+    ...(/^[a-f0-9]{64}$/.test(item.manifestId) ? { manifestId: item.manifestId } : {}),
   }));
   return quotedContext.length ? JSON.stringify({ instruction, quotedContext }, null, 2) : instruction;
 }
