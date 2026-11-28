@@ -246,56 +246,8 @@ fn each_operation_changes_the_repository_and_its_undo_restores_every_ref() {
     let _ = std::fs::remove_dir_all(&directory);
 }
 
-#[test]
-fn uncommitted_changes_and_an_unfinished_merge_block_a_reset() {
-    let directory = temp_repository("blocked");
-    let repository = directory.display().to_string();
-    let base = commit_file(&directory, "a.txt", "one\n", "base");
-    commit_file(&directory, "a.txt", "two\n", "second");
-    let engine = engine();
-    let reset = GitOperation::Reset {
-        target: base.clone(),
-    };
-
-    std::fs::write(directory.join("a.txt"), "edited\n").unwrap();
-    let dirty = engine.plan(&repository, reset.clone()).unwrap();
-    assert_eq!(
-        dirty
-            .blockers
-            .iter()
-            .map(|blocker| blocker.code)
-            .collect::<Vec<_>>(),
-        [GitOperationBlockerCode::UncommittedChanges]
-    );
-    // 막는 이유가 있는 계획은 실행하지 않는다. 파일은 그대로이다.
-    let outcome = engine
-        .execute(&repository, reset.clone(), dirty.expectation)
-        .unwrap();
-    assert!(matches!(outcome, GitOperationOutcome::Stale { .. }));
-    assert_eq!(
-        std::fs::read_to_string(directory.join("a.txt")).unwrap(),
-        "edited\n"
-    );
-
-    // 추적하지 않는 파일은 막지 않는다.
-    git(&directory, &["checkout", "--quiet", "--", "a.txt"]);
-    std::fs::write(directory.join("untracked.txt"), "mine\n").unwrap();
-    assert!(
-        engine
-            .plan(&repository, reset.clone())
-            .unwrap()
-            .blockers
-            .is_empty()
-    );
-
-    std::fs::write(directory.join(".git/MERGE_HEAD"), format!("{base}\n")).unwrap();
-    let merging = engine.plan(&repository, reset).unwrap();
-    assert_eq!(
-        merging.blockers[0].code,
-        GitOperationBlockerCode::OperationInProgress
-    );
-    let _ = std::fs::remove_dir_all(&directory);
-}
+#[path = "workspace/paused_tests.rs"]
+mod paused_tests;
 
 #[test]
 fn a_reset_stops_before_it_overwrites_an_untracked_file() {

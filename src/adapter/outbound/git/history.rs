@@ -12,7 +12,7 @@ use std::process::Stdio;
 
 use anyhow::{Context, Result, bail};
 
-use super::workspace::IN_PROGRESS_MARKERS;
+use super::progress_markers::IN_PROGRESS_MARKERS;
 use crate::application::port::outbound::git_history_port::{
     GitHistoryPort, GitHistoryRefs, GitWorktreeProgress,
 };
