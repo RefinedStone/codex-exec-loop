@@ -95,18 +95,7 @@ impl NativeTuiApp {
             active_parallel_agent_count,
         )
     }
-    /// Gateway 의 커널에 붙은 TUI 는 아직 읽기만 한다 (plan 18 K6-2a). 대화와 명령을 거절하고 이유를 보인다.
-    pub(super) fn refuse_in_gateway_kernel_client(&mut self) -> bool {
-        if !self.runtime.client_runtime.is_gateway_kernel_client() {
-            return false;
-        }
-        let reason = self.shell.tui_language.inline_command_availability_reason(
-            InlineShellCommandAvailabilityReason::KernelClientReadsOnly,
-        );
-        self.show_gateway_kernel_client_refusal(reason.to_string());
-        true
-    }
-    fn show_gateway_kernel_client_refusal(&mut self, text: String) {
+    pub(super) fn show_gateway_kernel_client_refusal(&mut self, text: String) {
         // The status line is hidden on the empty welcome frame, so the reason also goes to the transcript.
         if let ConversationState::Ready(conversation) =
             &mut self.conversation.lifecycle.conversation_state
@@ -221,6 +210,10 @@ impl NativeTuiApp {
         self.dispatch_shell_chrome(ShellChromeEvent::OverlayClosed);
     }
     pub(super) fn open_new_conversation_shell(&mut self) {
+        if self.runtime.client_runtime.is_gateway_kernel_client() {
+            self.dispatch_client_event(CoreInput::Command(AppCommand::CreateGatewayConversation));
+            return;
+        }
         self.dispatch_conversation_intent(ConversationIntentEvent::NewDraftRequested);
     }
     pub(super) fn execute_inline_shell_command_input(
@@ -698,6 +691,10 @@ impl NativeTuiApp {
         });
     }
     fn handle_stop_shell_command(&mut self) {
+        if self.runtime.client_runtime.is_gateway_kernel_client() {
+            self.dispatch_client_event(CoreInput::Command(AppCommand::RequestStopAllSessions));
+            return;
+        }
         self.dispatch_auto_follow_controls(AutoFollowControlEvent::AutoFollowPaused);
         self.close_parallel_mode_automation_epoch();
         self.invalidate_parallel_mode_supervisor_snapshot();

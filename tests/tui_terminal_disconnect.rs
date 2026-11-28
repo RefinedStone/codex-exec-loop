@@ -49,9 +49,17 @@ fn native_tui_opens_its_conversation_through_a_running_gateway() {
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     let mut output = Vec::new();
     let mut opened_sessions = false;
+    let mut terminal = vt100::Parser::new(30, 100, 0);
     let mut opened_history = false;
+    let mut started_thread = false;
+    let mut requested_again = false;
+    let mut paused = false;
+    let mut attempted_offline = false;
+    let mut resumed = false;
     loop {
+        let before = output.len();
         read_terminal_output(&mut master, &mut output);
+        terminal.process(&output[before..]);
         assert!(
             child.try_wait().is_none(),
             "native TUI exited before terminal startup; output: {}",
@@ -60,26 +68,65 @@ fn native_tui_opens_its_conversation_through_a_running_gateway() {
         let terminal_started = output
             .windows(b"Akra".len())
             .any(|window| window == b"Akra");
-        let rendered = String::from_utf8_lossy(&output);
-        if terminal_started && !opened_sessions && rendered.contains("READY") {
+        let rendered = terminal.screen().contents();
+        if terminal_started && !started_thread && rendered.contains("READY") {
+            master.write_all(b"\x14").expect("Ctrl+T creates a session");
+            started_thread = true;
+            output.clear();
+        } else if started_thread && !paused && rendered.contains("outcome unknown") {
+            gateway.set_online(false);
+            paused = true;
+            output.clear();
+        } else if paused && !attempted_offline && rendered.contains("BLOCKED") {
+            master
+                .write_all(b"\x14")
+                .expect("try creation during outage");
+            attempted_offline = true;
+            output.clear();
+        } else if attempted_offline && !resumed && rendered.contains("nothing was sent") {
+            assert_eq!(
+                gateway
+                    .methods()
+                    .iter()
+                    .filter(|method| *method == "thread/start")
+                    .count(),
+                1
+            );
+            gateway.set_online(true);
+            resumed = true;
+            output.clear();
+        } else if resumed && !requested_again && rendered.contains("READY") {
+            master
+                .write_all(b"\x14")
+                .expect("try creation again after reconnect");
+            requested_again = true;
+            output.clear();
+        } else if requested_again && !opened_sessions && rendered.contains("Creation still unknown")
+        {
             master
                 .write_all(b"\x0f")
                 .expect("Ctrl+O opens session list");
             opened_sessions = true;
-        }
-        if opened_sessions && !opened_history && rendered.contains("Gateway PTY session") {
+            output.clear();
+        } else if opened_sessions && !opened_history && rendered.contains("Gateway PTY session") {
+            assert!(!rendered.contains("Foreign recovery decoy"));
+            assert!(
+                !gateway
+                    .methods()
+                    .iter()
+                    .any(|method| method == "thread/read")
+            );
             master.write_all(b"\r").expect("open the selected session");
             opened_history = true;
-        }
-        if rendered.contains("gateway-pty-history") {
+        } else if rendered.contains("gateway-pty-history") {
             break;
         }
         assert!(
             Instant::now() < deadline,
-            "native TUI did not start through the Gateway; Gateway methods: {:?}; own app-server methods: {:?}; output: {}",
+            "Gateway recovery stalled (started: {started_thread}, paused: {paused}, offline attempt: {attempted_offline}, resumed: {resumed}, repeated: {requested_again}, sessions: {opened_sessions}, selection: {opened_history}); Gateway methods: {:?}; own app-server methods: {:?}; screen: {}",
             gateway.methods(),
             fixture.logged_app_server_methods(),
-            String::from_utf8_lossy(&output)
+            terminal.screen().contents()
         );
         thread::sleep(Duration::from_millis(10));
     }
@@ -93,6 +140,58 @@ fn native_tui_opens_its_conversation_through_a_running_gateway() {
             .iter()
             .any(|method| method == "thread/read")
     );
+    assert_eq!(
+        gateway
+            .methods()
+            .iter()
+            .filter(|method| *method == "thread/start")
+            .count(),
+        1
+    );
+    assert!(
+        gateway
+            .methods()
+            .iter()
+            .any(|method| method == "thread/list")
+    );
+
+    output.clear();
+    master
+        .write_all(b"fixture-only prompt\r")
+        .expect("submit one prompt through the Gateway");
+    let deadline = Instant::now() + STARTUP_TIMEOUT;
+    let mut repeated_prompt = false;
+    loop {
+        let before = output.len();
+        read_terminal_output(&mut master, &mut output);
+        terminal.process(&output[before..]);
+        let rendered = terminal.screen().contents();
+        if repeated_prompt && rendered.contains("Unknown outcome: command not sent") {
+            break;
+        }
+        if !repeated_prompt && rendered.contains("outcome unknown") {
+            assert_eq!(gateway.prompt_commands().len(), 1);
+            master.write_all(b"\r").expect("try the same draft again");
+            repeated_prompt = true;
+            output.clear();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the dropped mutation reply must reach the operator: {:?}",
+            gateway.methods()
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        gateway.prompt_commands(),
+        vec![serde_json::json!({
+            "type": "submit_prompt",
+            "thread_id": "gateway-pty",
+            "prompt": "fixture-only prompt"
+        })],
+        "one operator submission reaches the fake kernel exactly once"
+    );
+    assert!(fixture.app_server_pids().is_empty());
 
     drop(master);
     let (status, stderr) = child
@@ -142,11 +241,13 @@ fn count_cursor_queries(output: &[u8]) -> usize {
 /// itself, as the real Gateway relays them to its upstream.
 struct FakeGateway {
     state: std::sync::Arc<std::sync::Mutex<FakeGatewayState>>,
+    online: tokio::sync::watch::Sender<bool>,
 }
 
 #[derive(Default)]
 struct FakeGatewayState {
     methods: Vec<String>,
+    prompt_commands: Vec<serde_json::Value>,
     open_sessions: usize,
 }
 
@@ -157,6 +258,7 @@ impl FakeGateway {
         let workspace = workspace.to_string_lossy().into_owned();
         let state = std::sync::Arc::new(std::sync::Mutex::new(FakeGatewayState::default()));
         let served = state.clone();
+        let (online, mut online_changes) = tokio::sync::watch::channel(true);
         let (ready, bound) = std::sync::mpsc::channel();
         thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
@@ -171,16 +273,24 @@ impl FakeGateway {
                     let Ok((stream, _)) = listener.accept().await else {
                         return;
                     };
+                    if !*online_changes.borrow_and_update() {
+                        continue;
+                    }
                     tokio::spawn(serve_gateway_session(
                         stream,
                         served.clone(),
                         workspace.clone(),
+                        online_changes.clone(),
                     ));
                 }
             });
         });
         bound.recv().expect("fake Gateway should start");
-        Self { state }
+        Self { state, online }
+    }
+
+    fn set_online(&self, online: bool) {
+        self.online.send(online).expect("fake listener stays alive");
     }
 
     fn methods(&self) -> Vec<String> {
@@ -190,12 +300,17 @@ impl FakeGateway {
     fn open_sessions(&self) -> usize {
         self.state.lock().unwrap().open_sessions
     }
+
+    fn prompt_commands(&self) -> Vec<serde_json::Value> {
+        self.state.lock().unwrap().prompt_commands.clone()
+    }
 }
 
 async fn serve_gateway_session(
     stream: tokio::net::UnixStream,
     state: std::sync::Arc<std::sync::Mutex<FakeGatewayState>>,
     workspace: String,
+    mut online: tokio::sync::watch::Receiver<bool>,
 ) {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
@@ -205,7 +320,10 @@ async fn serve_gateway_session(
         return;
     };
     state.lock().unwrap().open_sessions += 1;
-    while let Some(Ok(message)) = socket.next().await {
+    while let Some(Ok(message)) = tokio::select! {
+        _ = online.changed() => None,
+        message = socket.next() => message,
+    } {
         let Message::Text(text) = message else {
             continue;
         };
@@ -220,6 +338,13 @@ async fn serve_gateway_session(
                 serde_json::json!({"id":request["id"],"result":{"attached":true}})
             }
             "akra/kernel/command" => {
+                let command = &request["params"]["command"];
+                if command["type"] == "submit_prompt" {
+                    assert!(request["params"]["idempotency_key"].as_str().is_some());
+                    state.lock().unwrap().prompt_commands.push(command.clone());
+                    // Simulate the write reaching the kernel, then lose the reply.
+                    break;
+                }
                 serde_json::json!({"id":request["id"],"result":{"processed":true}})
             }
             "akra/kernel/query" => {
@@ -250,9 +375,21 @@ async fn serve_gateway_session(
                 "requiresOpenAIAuth": false,
             }}),
             "thread/list" => {
-                serde_json::json!({"id": request["id"], "result": {"data": [], "nextCursor": null}})
+                assert_eq!(request["params"]["cwd"], workspace);
+                serde_json::json!({"id": request["id"], "result": {"data": [{
+                    "id":"gateway-pty","name":"Gateway PTY session","cwd":workspace,
+                    "preview":"","source":"cli","modelProvider":"openai","updatedAt":1700000000,
+                    "path":null,"status":{"type":"idle"},"gitInfo":null
+                }, {
+                    "id":"foreign-pty","name":"Foreign recovery decoy","cwd":"/other-workspace",
+                    "preview":"","source":"cli","modelProvider":"openai","updatedAt":1700000001,
+                    "path":null,"status":{"type":"idle"},"gitInfo":null
+                }], "nextCursor": null}})
             }
-            "thread/read" => serde_json::json!({"id":request["id"],"result":{"thread":{
+            "thread/start" => break,
+            "thread/read" => {
+                assert_eq!(request["params"]["threadId"], "gateway-pty");
+                serde_json::json!({"id":request["id"],"result":{"thread":{
                 "id":"gateway-pty","name":"Gateway PTY session","cwd":workspace,
                 "preview":"","source":"cli","modelProvider":"openai","updatedAt":1700000000,
                 "path":null,"status":{"type":"idle"},"gitInfo":null,"turns":[{
@@ -260,7 +397,8 @@ async fn serve_gateway_session(
                         {"type":"agentMessage","id":"saved-item","text":"gateway-pty-history"}
                     ]
                 }]
-            }}}),
+                }}})
+            }
             other => serde_json::json!({"id": request["id"], "error": {
                 "message": format!("unexpected fixture method {other}"),
             }}),

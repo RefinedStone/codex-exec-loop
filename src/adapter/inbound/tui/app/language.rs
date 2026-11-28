@@ -1081,14 +1081,8 @@ impl TuiLanguage {
             (Self::English, InlineShellCommandAvailabilityReason::KernelProtocolMissing) => {
                 "not in the kernel protocol yet; use Akra Desktop or the admin web"
             }
-            (Self::English, InlineShellCommandAvailabilityReason::KernelClientReadsOnly) => {
-                "read-only Gateway kernel client"
-            }
             (Self::Korean, InlineShellCommandAvailabilityReason::KernelProtocolMissing) => {
                 "커널 프로토콜에 아직 없습니다. Akra Desktop 이나 admin 웹을 쓰세요"
-            }
-            (Self::Korean, InlineShellCommandAvailabilityReason::KernelClientReadsOnly) => {
-                "Gateway 커널에 붙은 TUI 는 아직 읽기만 합니다"
             }
         }
     }

@@ -71,6 +71,7 @@ pub enum AppCommand {
         fallback_workspace_directory: String,
     },
     InvalidateConversationLoad,
+    CreateGatewayConversation,
     LoadParallelPeekConversation {
         thread_id: String,
     },

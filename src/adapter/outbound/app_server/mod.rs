@@ -655,6 +655,63 @@ pub(crate) enum SharedAppServer {
 }
 
 impl CodexAppServerAdapter {
+    pub(crate) fn list_gateway_threads_for_recovery(&self, cwd: &str) -> Result<SessionCatalog> {
+        anyhow::ensure!(
+            self.connection_config.uses_gateway_relay(),
+            "thread recovery requires a Gateway relay"
+        );
+        let workspace = protected_thread_workspace(cwd)?;
+        let mut connection = self.open_connection()?;
+        connection.initialize()?;
+        let result = connection.list_threads(ThreadListParams {
+            cwd: Some(workspace.cwd.clone()),
+            limit: Some(MAX_SESSION_CATALOG_ITEMS),
+            ..ThreadListParams::default()
+        })?;
+        let items = result
+            .data
+            .into_iter()
+            .filter(|thread| thread.cwd == workspace.cwd)
+            .take(MAX_SESSION_CATALOG_ITEMS)
+            .map(to_session_summary)
+            .collect();
+        Ok(SessionCatalog::ready(
+            SessionCatalogTier::ProviderBackedCatalog,
+            RecentSessions {
+                items,
+                warnings: vec![
+                    "Thread creation outcome unknown. Select the intended session explicitly."
+                        .to_string(),
+                ],
+                next_cursor: None,
+            },
+        ))
+    }
+
+    /// Start an empty thread through the Gateway. This path must never retry or start a turn.
+    pub(crate) fn start_gateway_thread_once(&self, cwd: &str) -> Result<ConversationSnapshot> {
+        anyhow::ensure!(
+            self.connection_config.uses_gateway_relay(),
+            "thread start requires a Gateway relay"
+        );
+        let workspace = protected_thread_workspace(cwd)?;
+        let mut connection = self.open_connection()?;
+        connection.initialize()?;
+        let response = connection.start_thread(ThreadStartParams {
+            cwd: Some(workspace.cwd.clone()),
+            approval_policy: Some(self.execution_policy.approval_policy),
+            approvals_reviewer: self.execution_policy.approvals_reviewer,
+            sandbox: Some(self.execution_policy.sandbox_mode),
+            config: Some(workspace.config),
+            ..ThreadStartParams::default()
+        })?;
+        anyhow::ensure!(
+            !response.thread.id.is_empty() && response.thread.cwd == workspace.cwd,
+            "the Gateway returned a thread outside the requested workspace"
+        );
+        Ok(to_conversation_snapshot(response.thread, Vec::new()))
+    }
+
     /// 이 adapter 의 연결이 자기 app-server 대신 Gateway 의 app-server 에 붙는다.
     pub(crate) fn through_shared_app_server(mut self, shared: SharedAppServer) -> Self {
         let transport = match shared {

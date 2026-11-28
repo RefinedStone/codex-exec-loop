@@ -3,10 +3,13 @@ use std::sync::{Arc, mpsc};
 
 use anyhow::{Context, Result};
 
+use super::commands::GatewayCommands;
 use super::conversation::GatewayConversationClient;
 use super::{ClientUpdate, GatewayKernelClientRuntime, TUI_KERNEL_CLIENT_NAME};
 use crate::adapter::outbound::app_server::{CodexAppServerAdapter, SharedAppServer};
-use crate::adapter::outbound::gateway_kernel_client::spawn_kernel_value_watcher;
+use crate::adapter::outbound::gateway_kernel_client::{
+    GatewayKernelClientAdapter, spawn_kernel_value_watcher,
+};
 use crate::core::app::{AppSnapshot, SessionCatalogSnapshot};
 
 impl GatewayKernelClientRuntime {
@@ -23,7 +26,15 @@ impl GatewayKernelClientRuntime {
                 endpoint: crate::gateway_endpoint::client_endpoint()?,
             }),
         );
-        let conversation = GatewayConversationClient::new(reader, sender.clone())?;
+        let conversation = GatewayConversationClient::new(reader.clone(), sender.clone())?;
+        let commands = GatewayCommands::new(
+            Arc::new(GatewayKernelClientAdapter::new(
+                workspace_directory.clone(),
+                TUI_KERNEL_CLIENT_NAME.to_string(),
+            )),
+            Some(reader),
+            sender.clone(),
+        )?;
         let refresh = spawn_kernel_value_watcher(
             workspace_directory.clone(),
             TUI_KERNEL_CLIENT_NAME,
@@ -31,6 +42,7 @@ impl GatewayKernelClientRuntime {
         )?;
         let mut client = Self::with_updates(workspace_directory, updates, conversation);
         client.refresh = Some(refresh);
+        client.commands = Some(commands);
         Ok(client)
     }
 
@@ -44,12 +56,14 @@ impl GatewayKernelClientRuntime {
         Self {
             workspace_directory,
             snapshot,
+            thread_activity: Vec::new(),
             startup_generation: 0,
             startup_workspace: None,
             synchronized: false,
             refresh: None,
             updates,
             conversation,
+            commands: None,
         }
     }
 }

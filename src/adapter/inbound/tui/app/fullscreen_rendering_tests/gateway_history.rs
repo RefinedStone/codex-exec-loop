@@ -8,9 +8,14 @@ fn gateway_kernel_client_opens_saved_history_from_the_selected_session() {
 
     let client = kernel_client_with_history(
         "/repo",
-        vec![json!({"type":"sessions","status":"ready","sessions":[
-            {"thread_id":"thread-1","title":"Saved history for thread-1","workspace":"/repo","updated_at_epoch":7}
-        ]})],
+        vec![
+            json!({"type":"sessions","status":"ready","sessions":[
+                {"thread_id":"thread-1","title":"Saved history for thread-1","workspace":"/repo","updated_at_epoch":7}
+            ]}),
+            json!({"type":"thread_activity","threads":[
+                {"thread_id":"thread-1","running":true,"active_turn_id":"turn-1","auto_follow_active":false}
+            ]}),
+        ],
         vec![("thread-1".into(), conversation("thread-1"))],
     );
     let mut app = NativeTuiApp::new_gateway_kernel_client(Box::new(client));
@@ -37,6 +42,18 @@ fn gateway_kernel_client_opens_saved_history_from_the_selected_session() {
     };
     assert_eq!(conversation.thread_id, "thread-1");
     assert_eq!(conversation.cwd, "/repo");
+    assert_eq!(
+        conversation
+            .runtime_snapshot()
+            .active_turn
+            .as_ref()
+            .and_then(|turn| turn.turn_id.as_deref()),
+        Some("turn-1")
+    );
+    assert_eq!(
+        conversation.runtime_snapshot(),
+        &app.runtime.client_runtime.snapshot().conversation_runtime
+    );
 }
 
 /*
@@ -98,7 +115,7 @@ fn gateway_kernel_client_draws_kernel_sessions_and_refuses_locked_screens_with_t
     let refused = render(&mut app, 100, 24);
     println!("--- prompt in the Gateway kernel client ---\n{refused}");
     assert!(
-        refused.contains("read-only Gateway kernel client"),
+        refused.contains("Select a session and send text only"),
         "{refused}"
     );
 

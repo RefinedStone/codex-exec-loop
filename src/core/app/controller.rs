@@ -511,6 +511,7 @@ impl CoreController {
                     snapshot: self.shared_snapshot(),
                 }
             }
+            CoreInput::Command(AppCommand::CreateGatewayConversation) => self.unchanged_outcome(),
             CoreInput::Command(AppCommand::SubmitTurn(request)) => {
                 let admission = self.conversation_turn.admit_turn_submission(&request);
                 let effects = match &admission {

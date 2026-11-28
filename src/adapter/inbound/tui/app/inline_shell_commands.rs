@@ -55,16 +55,11 @@ pub(crate) enum InlineShellCommandAvailabilityReason {
     NoActiveParallelAgents,
     // Gateway 의 커널에 붙은 TUI 에서 그 화면의 조회나 명령이 커널 프로토콜에 아직 없다 (plan 18 Q-M5-1).
     KernelProtocolMissing,
-    // Gateway 의 커널에 붙은 TUI 는 아직 읽기만 한다 (plan 18 K6-2a). 대화와 명령은 다음 조각이다.
-    KernelClientReadsOnly,
 }
 
 impl InlineShellCommandAvailabilityReason {
     pub(crate) const fn is_gateway_kernel_client_lock(self) -> bool {
-        matches!(
-            self,
-            Self::KernelProtocolMissing | Self::KernelClientReadsOnly
-        )
+        matches!(self, Self::KernelProtocolMissing)
     }
 }
 
@@ -192,7 +187,7 @@ fn inline_shell_command_availability(
 fn gateway_kernel_client_lock_reason(
     command: InlineShellCommand,
 ) -> Option<InlineShellCommandAvailabilityReason> {
-    use InlineShellCommandAvailabilityReason::{KernelClientReadsOnly, KernelProtocolMissing};
+    use InlineShellCommandAvailabilityReason::KernelProtocolMissing;
     match command {
         InlineShellCommand::Work
         | InlineShellCommand::Parallel
@@ -203,10 +198,10 @@ fn gateway_kernel_client_lock_reason(
         | InlineShellCommand::Doctor
         | InlineShellCommand::PlanningInit
         | InlineShellCommand::Reset => Some(KernelProtocolMissing),
-        InlineShellCommand::Turns | InlineShellCommand::Stop | InlineShellCommand::NewDraft => {
-            Some(KernelClientReadsOnly)
-        }
-        InlineShellCommand::Diagnostics
+        InlineShellCommand::NewDraft
+        | InlineShellCommand::Turns
+        | InlineShellCommand::Stop
+        | InlineShellCommand::Diagnostics
         | InlineShellCommand::Activity
         | InlineShellCommand::Sessions
         | InlineShellCommand::Model

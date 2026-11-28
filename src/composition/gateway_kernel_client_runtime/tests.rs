@@ -6,6 +6,89 @@ use std::time::{Duration, Instant};
 
 use super::*;
 
+#[test]
+fn a_lost_gateway_mutation_reply_is_not_replayed_on_reconnect() {
+    use crate::application::port::outbound::kernel_gateway_port::{
+        KernelGatewayPort, KernelGatewayReply,
+    };
+    use std::sync::mpsc;
+
+    struct GatewayFixture(mpsc::Sender<Value>);
+    impl KernelGatewayPort for GatewayFixture {
+        fn request(
+            &self,
+            method: &str,
+            params: Value,
+            wait: bool,
+        ) -> anyhow::Result<KernelGatewayReply> {
+            assert_eq!(method, "akra/kernel/command");
+            assert!(!wait);
+            self.0.send(params).unwrap();
+            anyhow::bail!("fixture accepted the write and lost the reply")
+        }
+    }
+    let (mut client, updates) = super::fixture::client_fixture("/repo", Vec::new());
+    let (invoked, requests) = mpsc::channel();
+    client.commands = Some(
+        super::commands::GatewayCommands::new(
+            Arc::new(GatewayFixture(invoked)),
+            None,
+            updates.clone(),
+        )
+        .unwrap(),
+    );
+    let write = || {
+        NativeClientEvent::core(CoreInput::Command(AppCommand::SetAutoFollowMaxTurns {
+            value: 5,
+        }))
+    };
+    let offline = events(vec![client.dispatch_client_event(write())]);
+    assert!(
+        matches!(&offline[..], [AppEvent::GatewayCommandStatus(message)] if message.contains("nothing was sent"))
+    );
+    updates
+        .send(KernelClientUpdate::Synchronized.into())
+        .unwrap();
+    let _sync = client.run_host_cycle(Instant::now(), Duration::ZERO, 1);
+    let _admission = client.dispatch_client_event(write());
+    let submitted = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(
+        submitted["command"],
+        json!({"type":"set_auto_follow_max_turns","value":5})
+    );
+    assert!(
+        submitted["idempotency_key"]
+            .as_str()
+            .is_some_and(|key| key.len() == 32)
+    );
+    let lost = events(client.run_host_cycle(Instant::now(), Duration::from_secs(2), 1));
+    assert!(
+        matches!(&lost[..], [AppEvent::GatewayCommandStatus(message)] if message.contains("outcome unknown") && message.contains("not replayed"))
+    );
+
+    updates
+        .send(KernelClientUpdate::Disconnected("fixture dropped connection".to_string()).into())
+        .unwrap();
+    let _disconnect = client.run_host_cycle(Instant::now(), Duration::ZERO, 1);
+    let during_outage = events(vec![client.dispatch_client_event(write())]);
+    assert!(
+        matches!(&during_outage[..], [AppEvent::GatewayCommandStatus(message)] if message.contains("nothing was sent"))
+    );
+    updates
+        .send(KernelClientUpdate::Synchronized.into())
+        .unwrap();
+    let _reconnect = client.run_host_cycle(Instant::now(), Duration::ZERO, 1);
+    let duplicate = events(vec![client.dispatch_client_event(write())]);
+    assert!(
+        matches!(&duplicate[..], [AppEvent::GatewayCommandStatus(message)] if message.contains("not sent again"))
+    );
+    drop(client);
+    assert_eq!(
+        requests.recv_timeout(Duration::from_secs(2)),
+        Err(mpsc::RecvTimeoutError::Disconnected)
+    );
+}
+
 /// Build a client with fake Kernel values and no provider history.
 pub(crate) fn kernel_client_with_values(
     workspace_directory: &str,
@@ -98,6 +181,55 @@ fn kernel_values_become_the_session_list_thread_activity_and_auto_follow_setting
             .map(|request| request.summary.as_str()),
         Some("run tests")
     );
+}
+
+#[test]
+fn viewed_gateway_turn_and_approval_follow_only_current_thread_activity() {
+    let (mut client, _) = super::fixture::client_fixture("/repo", Vec::new());
+    let activity = json!({"type":"thread_activity","threads":[
+        {"thread_id":"t-1","running":true,"active_turn_id":"turn-1","auto_follow_active":false,
+         "approval":{"approval_id":"a-1","server_request_id":"7","summary":"run tests","details":[]}}
+    ]});
+    client.apply_value(activity.clone());
+    assert!(client.snapshot.conversation_runtime.active_turn.is_none());
+    assert!(client.snapshot.conversation_runtime.approval.is_none());
+
+    for id in ["t-2", "t-1"] {
+        client.apply_mutation(
+            commands::MutationOutcome::ThreadStarted(Box::new(
+                super::fixture::conversation(id).into(),
+            )),
+            None,
+        );
+        let runtime = &client.snapshot.conversation_runtime;
+        assert_eq!(runtime.active_turn.is_some(), id == "t-1");
+        assert_eq!(runtime.approval.is_some(), id == "t-1");
+    }
+    let started_at = client
+        .snapshot
+        .conversation_runtime
+        .active_turn
+        .as_ref()
+        .unwrap()
+        .started_at;
+    client.apply_value(activity.clone());
+    assert_eq!(
+        client
+            .snapshot
+            .conversation_runtime
+            .active_turn
+            .as_ref()
+            .unwrap()
+            .started_at,
+        started_at
+    );
+
+    client.apply_kernel(KernelClientUpdate::Disconnected("closed".to_string()));
+    assert!(client.snapshot.conversation_runtime.active_turn.is_none());
+    assert!(client.snapshot.conversation_runtime.approval.is_none());
+    client.apply_value(activity);
+    assert!(client.snapshot.conversation_runtime.active_turn.is_some());
+    assert!(client.snapshot.conversation_runtime.approval.is_some());
 }
 
 #[test]
