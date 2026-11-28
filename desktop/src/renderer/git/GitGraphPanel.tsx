@@ -141,6 +141,9 @@ export function GitGraphPanel({ request, cwd, maximized, changes, onOpenChanges,
   // 다른 폴더의 선택은 쓰지 않는다. sha 는 저장소마다 뜻이 다르다.
   const selected = selection !== null && selection.cwd === cwd ? selection.commit : null;
   const select = useCallback((commit: string) => cwd && setSelection({ cwd, commit }), [cwd]);
+  const [picksByFolder, setPicks] = useState<{ cwd: string | null; ids: readonly string[] }>({ cwd, ids: [] });
+  const picks = picksByFolder.cwd === cwd ? picksByFolder.ids : [];
+  const togglePick = (id: string) => setPicks((prior) => { const ids = prior.cwd === cwd ? prior.ids : []; return { cwd, ids: ids.includes(id) ? ids.filter((c) => c !== id) : [...ids, id] }; });
   const detail = useCommitDetail(request, cwd, selected);
   const [preview, setPreview] = useState<GitOperationPlan | null>(null);
   // 저장소가 아닌 폴더의 일지는 읽지 않는다. Gateway 는 일지를 읽을 때 그 폴더의 runtime 디렉터리를 만든다.
@@ -200,7 +203,7 @@ export function GitGraphPanel({ request, cwd, maximized, changes, onOpenChanges,
       <div className="git-graph-columns">
         {maximized && state.phase === "loaded" && state.repository && <RefList refs={state.refs} worktrees={state.worktrees} selected={selected} onSelect={select} />}
         <div className="git-graph-main">
-          {repositoryCwd !== null && <OperationLogView log={log} cwd={repositoryCwd} busyReason={busyReason} />}
+          {repositoryCwd !== null && <OperationLogView request={request} log={log} cwd={repositoryCwd} busyReason={busyReason} />}
           {state.phase === "loaded" && !state.repository && <p className="muted work-section">이 폴더는 git 저장소가 아닙니다.</p>}
           {state.phase === "loaded" && state.repository && state.rows.length === 0 && (
             <>
@@ -211,6 +214,7 @@ export function GitGraphPanel({ request, cwd, maximized, changes, onOpenChanges,
           {state.phase === "loaded" && state.repository && state.rows.length > 0 && (
             <GraphRows
               graph={{ ...graph, state }}
+              picks={picks} togglePick={togglePick}
               folders={folders}
               selected={selected}
               preview={preview}
@@ -223,7 +227,7 @@ export function GitGraphPanel({ request, cwd, maximized, changes, onOpenChanges,
             <CommitDetail
               commit={selected}
               state={detail}
-              actions={state.phase === "loaded" && cwd && <CommitActionsView key={selected} request={request} cwd={cwd} commit={selected} refs={state.refs} head={state.head} worktrees={state.worktrees} busyReason={busyReason} log={log} onPreview={setPreview} />}
+              actions={state.phase === "loaded" && cwd && <CommitActionsView key={JSON.stringify([cwd, selected, picks])} picks={picks} request={request} cwd={cwd} commit={selected} refs={state.refs} head={state.head} worktrees={state.worktrees} busyReason={busyReason} log={log} onPreview={setPreview} />}
               onSelect={select}
               onClose={() => setSelection(null)}
             />

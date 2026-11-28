@@ -1444,6 +1444,12 @@ The Gateway records the external documents that a thread mentions, without a mod
   Right-click a row to select it and open the commit action chooser. With a commit selected,
   Cmd/Ctrl+G or the palette command “선택한 커밋 작업” opens the same chooser. Picking an action only
   requests its preview. Execute is a separate confirmation in the plan.
+  Select up to 32 full commit IDs for cherry-pick. The plan orders ancestors first, excludes
+  patch-equivalent commits, lists predicted conflict paths, and marks later predictions as dependent
+  on resolution. Merge commits are rejected. Git executes one pick at a time under the repository
+  queue. The operation journal records its worktree, original ref and last verified tip. After a
+  conflict, continue, skip or abort it from the operation log. A completed sequence can be undone
+  only while the recorded branch and tip still match.
   Since #2851 the panel can be maximised (the button next to "패널 닫기"). The maximised panel adds a ref
   list on the left (local, remote, tag, backup, and worktree groups; a click selects that commit); the
   graph and the commit detail below it stay as in the narrow panel, which is unchanged. Above the graph

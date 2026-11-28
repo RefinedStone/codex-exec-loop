@@ -29,6 +29,7 @@ export function graphFixture() {
     },
     gitPlan(params) {
       planRequests.push(params);
+      if (params.operation.kind === "cherry_pick") return { ...operationPlan(params.operation, "seen-at-plan"), after: null, picks: params.operation.commits.map((commit, i) => ({ commit, prediction: i === 0 ? { status: "clean" } : { status: "conflict", paths: ["a.txt"] } })) };
       return operationPlan(params.operation, "seen-at-plan");
     },
     gitExecute(params) {

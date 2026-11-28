@@ -30,6 +30,32 @@ pub struct GitConversationWorktree {
 }
 
 pub trait GitWorkspacePort: Send + Sync {
+    fn preview_picks(
+        &self,
+        _cwd: &str,
+        _head: &str,
+        _commits: &[String],
+    ) -> Result<Vec<crate::domain::git_operation::cherry_pick::PickPreview>> {
+        anyhow::bail!("cherry-pick is unavailable")
+    }
+    fn pick_one(&self, _cwd: &str, _commit: &str, _receipt: &str) -> Result<()> {
+        anyhow::bail!("cherry-pick is unavailable")
+    }
+    fn finish_pick(
+        &self,
+        _cwd: &str,
+        _action: crate::domain::git_operation::cherry_pick::PickAction,
+        _receipt: &str,
+    ) -> Result<()> {
+        anyhow::bail!("cherry-pick is unavailable")
+    }
+    fn pick_marker(&self, _cwd: &str) -> Result<Option<String>> {
+        anyhow::bail!("cherry-pick is unavailable")
+    }
+    fn pick_completed(&self, _cwd: &str, _parent: &str, _receipt: &str) -> Result<bool> {
+        anyhow::bail!("cherry-pick is unavailable")
+    }
+
     /// 사용자 요청 전용 공간을 새 브랜치에 만든다. 기존 목적지/브랜치를 채택하거나 지우지 않는다.
     fn create_conversation_worktree(
         &self,
@@ -66,6 +92,10 @@ pub trait GitWorkspacePort: Send + Sync {
 
     /// ref 를 새로 쓴다. 이미 있으면 실패한다. `full_ref` 는 `refs/` 로 시작하는 전체 이름이다.
     fn create_ref(&self, repository_dir: &str, full_ref: &str, commit: &str) -> Result<()>;
+
+    fn release_backup(&self, _cwd: &str, _reference: &str, _expected: &str) -> Result<()> {
+        anyhow::bail!("releasing a pinned backup is unavailable")
+    }
 
     fn delete_ref(&self, repository_dir: &str, full_ref: &str) -> Result<()>;
 

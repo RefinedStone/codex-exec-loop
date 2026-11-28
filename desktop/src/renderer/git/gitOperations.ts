@@ -10,6 +10,7 @@ export const GIT_UNDO_METHOD = "akra/git/undo";
 
 /** 작업 하나이다. 커밋은 전체 sha 이다. */
 export type GitOperation =
+  | { kind: "cherry_pick"; commits: readonly string[] }
   | { kind: "reset"; target: string }
   | { kind: "move_branch"; branch: string; target: string }
   | { kind: "checkout_branch"; branch: string }
@@ -37,6 +38,7 @@ export interface GitOperationBlocker {
 }
 
 export interface GitOperationPlan {
+  pickLines?: readonly string[];
   operation: GitOperation;
   /** 계획을 만들 때 본 상태이다. 내용을 보지 않고 실행 요청에 그대로 돌려보낸다. */
   expectation: unknown;
@@ -48,7 +50,7 @@ export interface GitOperationPlan {
   blockers: GitOperationBlocker[];
 }
 
-export type GitOperationStatus = "started" | "done" | "failed";
+export type GitOperationStatus = "started" | "paused" | "aborted" | "done" | "failed";
 
 export interface GitOperationRecord {
   opId: string;
@@ -70,6 +72,7 @@ export interface GitOperationRecord {
 
 export type GitOperationOutcome =
   | { status: "done"; record: GitOperationRecord }
+  | { status: "paused"; record: GitOperationRecord }
   | { status: "failed"; record: GitOperationRecord }
   | { status: "stale"; plan: GitOperationPlan }
   | { status: "refused"; message: string };
@@ -86,6 +89,7 @@ function operationFrom(value: unknown): GitOperation | null {
   const item = (value ?? {}) as Record<string, unknown>;
   const target = text(item.target);
   const branch = text(item.branch);
+  if (item.kind === "cherry_pick" && Array.isArray(item.commits) && item.commits.every((c): c is string => typeof c === "string")) return { kind: "cherry_pick", commits: item.commits };
   if (item.kind === "reset" && target) return { kind: "reset", target };
   if (item.kind === "move_branch" && branch && target) return { kind: "move_branch", branch, target };
   if (item.kind === "checkout_branch" && branch) return { kind: "checkout_branch", branch };
@@ -107,6 +111,7 @@ export function planFrom(result: unknown): GitOperationPlan {
   const impact = plan.impact as Record<string, unknown> | null | undefined;
   return {
     operation,
+    ...(operation.kind === "cherry_pick" ? { pickLines: readPickPreviews(plan.picks) } : {}),
     expectation: plan.expectation ?? null,
     branch: text(plan.branch),
     before: positionFrom(plan.before),
@@ -120,7 +125,22 @@ export function planFrom(result: unknown): GitOperationPlan {
   };
 }
 
-const STATUSES: readonly GitOperationStatus[] = ["started", "done", "failed"];
+function readPickPreviews(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new Error("cherry-pick 예측을 읽을 수 없습니다.");
+  return value.map((p) => {
+    if (typeof p?.commit !== "string") throw new Error("커밋 sha가 없습니다.");
+    const prefix = shortSha(p.commit) + ": ";
+    switch (p.prediction?.status) {
+      case "clean": return prefix + "적용 가능";
+      case "already_applied": return prefix + "이미 적용됨 · 제외";
+      case "conflict": return prefix + "충돌 예상: " + p.prediction.paths.join(", ");
+      case "after_conflict": return prefix + "앞선 충돌 해결 뒤 결정";
+      default: throw new Error("알 수 없는 cherry-pick 예측입니다.");
+    }
+  });
+}
+
+const STATUSES: readonly GitOperationStatus[] = ["started", "paused", "aborted", "done", "failed"];
 
 /** 일지의 기록 하나를 읽는다. 읽지 못한 기록은 `null` 이다. */
 export function recordFrom(value: unknown): GitOperationRecord | null {
@@ -140,7 +160,7 @@ export function outcomeFrom(result: unknown): GitOperationOutcome {
   if (outcome.status === "stale") return { status: "stale", plan: planFrom(outcome.plan) };
   if (outcome.status === "refused") return { status: "refused", message: text(outcome.message) ?? "" };
   const record = recordFrom(outcome.record);
-  if ((outcome.status === "done" || outcome.status === "failed") && record) return { status: outcome.status, record };
+  if ((outcome.status === "done" || outcome.status === "paused" || outcome.status === "failed") && record) return { status: outcome.status, record };
   throw new Error("git 작업 결과의 형식을 알 수 없습니다.");
 }
 
@@ -206,6 +226,7 @@ export function commitActions(commit: string, refs: readonly GitRef[], head: str
 /** 작업을 한 줄로 쓴다: "작업: 무엇 → 어디". 이름 뒤에 조사를 붙이지 않는다. 이름의 끝 글자를 알 수 없다. */
 export function operationTitle(operation: GitOperation, branch: string | null): string {
   switch (operation.kind) {
+    case "cherry_pick": return `cherry-pick: 커밋 ${operation.commits.length}개`;
     case "reset":
       return `reset: ${branch ?? "현재 브랜치"} → ${shortSha(operation.target)}`;
     case "move_branch":
@@ -219,7 +240,7 @@ export function operationTitle(operation: GitOperation, branch: string | null): 
 
 /** 계획의 영향을 문장들로 쓴다. 브랜치를 옮기지 않는 작업은 자리의 변화만 쓴다. */
 export function planSummary(plan: GitOperationPlan): string[] {
-  const lines: string[] = [];
+  const lines: string[] = [...(plan.pickLines ?? [])];
   if (plan.before && plan.after) {
     const place = (position: GitHeadPosition) => (plan.branch === null && position.branch ? `${position.branch} (${shortSha(position.commit)})` : shortSha(position.commit));
     lines.push(`${plan.branch ?? "HEAD"}: ${place(plan.before)} → ${place(plan.after)}`);
@@ -265,7 +286,7 @@ export function recordTitle(record: GitOperationRecord): string {
   return record.undoOf === null ? title : `되돌리기 (${title})`;
 }
 
-const STATUS_TEXT: Record<GitOperationStatus, string> = { started: "끝을 적지 못함", done: "완료", failed: "실패" };
+const STATUS_TEXT: Record<GitOperationStatus, string> = { started: "끝을 적지 못함", paused: "중단됨", aborted: "취소됨", done: "완료", failed: "실패" };
 
 export function recordStatus(record: GitOperationRecord): string {
   return record.undoneBy !== null ? "되돌림" : STATUS_TEXT[record.status];
@@ -284,6 +305,7 @@ export function noticeFrom(outcome: GitOperationOutcome, undo: boolean): Operati
   switch (outcome.status) {
     case "done":
       return { text: `${recordTitle(outcome.record)} · 완료`, failed: false, record: outcome.record };
+    case "paused": return { text: `cherry-pick 중단: ${outcome.record.error ?? "작업 기록에서 이어 가십시오."}`, failed: false, record: outcome.record };
     case "failed":
       // git 이 파일을 쓰다가 멈췄을 수 있다 (다른 프로그램이 파일을 잡고 있었다). 작업 트리를 보게 한다.
       return { text: `${recordTitle(outcome.record)} · 실패. ${outcome.record.error ?? ""} 터미널에서 git status 로 작업 트리를 확인하십시오.`.replace(/\s+/g, " "), failed: true, record: null };

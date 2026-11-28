@@ -215,6 +215,12 @@ try {
   check("undo names the operation of the notice", undoRequests.length === 1 && undoRequests[0] === "20261119T010203Z-0000002a");
   check("an undo and an undone operation offer no further undo", (await page.getByTestId("git-operation-undo").count()) === 0 && (await page.getByTestId("git-operation-entry").count()) === 2 && (await page.getByTestId("git-operation-entry").locator("button").count()) === 0);
 
+  await rowWith("Main work").getByRole("checkbox").check();
+  await rowWith("Fork point").getByRole("checkbox").check();
+  await page.getByRole("button", { name: "cherry-pick 계획 (2)" }).click();
+  await page.getByTestId("git-plan-line").filter({ hasText: "충돌 예상: a.txt" }).waitFor();
+  check("multi-select previews the submitted commits without execution", planRequests.at(-1).operation.commits.join(",") === [sha(total - 2),sha(total - 3)].join(",") && executeRequests.length === 2);
+  await page.getByTestId("git-plan-cancel").click();
   // ---- #2851: 상태 띠, 최대화, ref 목록 ----
   check("the narrow panel has no ref list", (await page.getByTestId("git-ref-list").count()) === 0 && (await page.getByTestId("right-panel").getAttribute("data-maximized")) === "false");
   check("no status strip while nothing is unfinished", (await page.getByTestId("git-status-strip").count()) === 0);

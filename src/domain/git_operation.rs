@@ -5,6 +5,9 @@
  * 본다. 브랜치를 옮기는 작업은 먼저 백업 ref 를 쓴다 (§3.2). 끝난 작업은 일지에 남고, 저장소가 작업 후의 상태와
  * 같을 때만 되돌린다 (§4.2).
  */
+pub mod cherry_pick;
+use cherry_pick::PickPreview;
+
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -26,14 +29,26 @@ const OPERATION_ID_TIME_FORMAT: &str = "%Y%m%dT%H%M%SZ";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum GitOperation {
+    CherryPick {
+        commits: Vec<String>,
+    },
     /// 현재 브랜치를 `target` 으로 옮긴다. 작업 트리도 그 커밋이 된다.
-    Reset { target: String },
+    Reset {
+        target: String,
+    },
     /// 어느 작업 트리도 체크아웃하지 않은 브랜치를 `target` 으로 옮긴다. 작업 트리를 건드리지 않는다.
-    MoveBranch { branch: String, target: String },
+    MoveBranch {
+        branch: String,
+        target: String,
+    },
     /// 브랜치를 체크아웃한다.
-    CheckoutBranch { branch: String },
+    CheckoutBranch {
+        branch: String,
+    },
     /// 커밋을 브랜치 없이 체크아웃한다.
-    CheckoutCommit { target: String },
+    CheckoutCommit {
+        target: String,
+    },
 }
 
 /// HEAD 나 브랜치의 자리이다.
@@ -113,6 +128,8 @@ impl GitOperationBlocker {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitOperationPlan {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub picks: Vec<PickPreview>,
     pub operation: GitOperation,
     pub expectation: GitOperationExpectation,
     /// 옮기는 브랜치이다. 체크아웃은 없다.
@@ -132,6 +149,8 @@ pub struct GitOperationPlan {
 pub enum GitOperationStatus {
     /// 시작을 적었고 끝을 적지 못했다. 데몬이 그 사이에 죽었다.
     Started,
+    Paused,
+    Aborted,
     Done,
     Failed,
 }
@@ -140,6 +159,9 @@ pub enum GitOperationStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitOperationRecord {
+    /// Last journalled index in an ordered cherry-pick. `after` is the last verified tip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pick_index: Option<usize>,
     pub op_id: String,
     pub operation: GitOperation,
     /// 작업을 실행한 폴더이다.
@@ -178,9 +200,11 @@ impl GitOperationRecord {
     /// 이 작업을 되돌리는 작업이다.
     pub fn inverse(&self) -> GitOperation {
         match (&self.operation, &self.before.branch) {
-            (GitOperation::Reset { .. }, _) => GitOperation::Reset {
-                target: self.before.commit.clone(),
-            },
+            (GitOperation::Reset { .. } | GitOperation::CherryPick { .. }, _) => {
+                GitOperation::Reset {
+                    target: self.before.commit.clone(),
+                }
+            }
             (GitOperation::MoveBranch { branch, .. }, _) => GitOperation::MoveBranch {
                 branch: branch.clone(),
                 target: self.before.commit.clone(),
@@ -207,7 +231,9 @@ impl GitOperationRecord {
         branch_commit: Option<&str>,
     ) -> bool {
         match &self.operation {
-            GitOperation::Reset { .. } => head == Some(&self.after),
+            GitOperation::Reset { .. } | GitOperation::CherryPick { .. } => {
+                head == Some(&self.after)
+            }
             GitOperation::MoveBranch { .. } => branch_commit == Some(self.after.commit.as_str()),
             // 체크아웃한 브랜치에 커밋을 더해도 되돌릴 수 있다. 돌아가도 잃는 것이 없다.
             GitOperation::CheckoutBranch { .. } => {
@@ -334,6 +360,7 @@ mod tests {
         after: GitHeadPosition,
     ) -> GitOperationRecord {
         GitOperationRecord {
+            pick_index: None,
             op_id: op_id.to_string(),
             operation,
             worktree: "/repo".to_string(),
