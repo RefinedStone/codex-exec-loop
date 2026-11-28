@@ -26,6 +26,38 @@ fn reviewed_rule_and_exact_lease_bind_the_disposable_destination() {
     let plan = protected_push::plan(cwd, "origin", "topic").unwrap();
     assert_eq!(plan.remote_sha, remote_tip);
     assert!(plan.lost.contains("remote work"));
+    // Changing the integration branch after review must protect the new target on both paths.
+    git(
+        &f.repo,
+        &["config", "akra.parallelIntegrationBranch", "topic"],
+    );
+    assert!(
+        protected_push::plan(cwd, "origin", "topic")
+            .unwrap_err()
+            .to_string()
+            .contains("automatically protected")
+    );
+    assert!(
+        protected_push::execute(cwd, &plan)
+            .unwrap_err()
+            .to_string()
+            .contains("automatically protected")
+    );
+    git(
+        &f.repo,
+        &["config", "akra.parallelIntegrationBranch", "invalid branch"],
+    );
+    assert!(
+        protected_push::plan(cwd, "origin", "topic")
+            .unwrap_err()
+            .to_string()
+            .contains("fallback is disabled")
+    );
+    assert_eq!(git_stdout(&f.remote, &["rev-parse", "topic"]), remote_tip);
+    git(
+        &f.repo,
+        &["config", "--unset", "akra.parallelIntegrationBranch"],
+    );
     let seen = protected_push::destination(cwd, "origin").unwrap();
     protected_push::edit(cwd, &seen, "add", Some("top*")).unwrap();
     assert!(protected_push::execute(cwd, &plan).is_err());
