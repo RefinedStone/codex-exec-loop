@@ -250,6 +250,17 @@ test("stage-npm-packages copies only runtime assets into platform vendors", () =
     assert.equal(mainPackageJson.version, "0.1.0");
     assert.equal(mainPackageJson.license, "SEE LICENSE IN LICENSE");
     assert(fs.existsSync(path.join(outDir, "main", "LICENSE")));
+    for (const [name, source] of [
+      ["README.md", "THIRD_PARTY_NOTICES/README.md"],
+      ["PixiJS-MIT.txt", "THIRD_PARTY_NOTICES/PixiJS-MIT.txt"],
+      ["rust-crates.txt", "THIRD_PARTY_NOTICES/rust-crates.txt"],
+      ["Galmuri-OFL.txt", "assets/admin/fonts/LICENSE-Galmuri.txt"],
+    ]) {
+      assert.deepEqual(
+        fs.readFileSync(path.join(outDir, "main", "THIRD_PARTY_NOTICES", name)),
+        fs.readFileSync(path.join(repoRoot, source)),
+      );
+    }
     assert.deepEqual(
       mainPackageJson.optionalDependencies,
       Object.fromEntries(
