@@ -28,7 +28,9 @@ async function windowScenario(action, gatewayEndpoint = endpoint) {
     if (process.env.AKRA_QA_SCREENSHOT) await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive());
     await action(page);
   } finally {
+    const child = app.process();
     await app.close();
+    assert.ok(child.exitCode !== null || child.signalCode !== null, "Each Electron scenario must terminate its process.");
   }
 }
 
