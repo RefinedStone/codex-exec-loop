@@ -518,7 +518,7 @@ export class DesktopSession {
   }
 
   /** 메시지를 보낸다. 진행 중인 턴이 있으면 steer, 없으면 새 턴이다 (P3 §6.2). */
-  async sendMessage(text: string, images: readonly string[] = []): Promise<string | undefined> {
+  async sendMessage(text: string, images: readonly string[] = [], beforeSend?: (id: number) => void): Promise<string | undefined> {
     this.assertWritable();
     const threadId = this.store.getOpenThreadId();
     this.assertSubscribed(threadId);
@@ -527,19 +527,13 @@ export class DesktopSession {
       return;
     }
     this.assertTurnSubmissionAvailable(threadId);
-    const input = userInput(trimmed, images);
     const transcript = this.store.getTranscript();
     const activeTurn = isTurnInProgress(transcript) ? transcript?.turns.at(-1) : undefined;
-    if (activeTurn) {
-      return (await this.client.request<{ turnId: string }>("turn/steer", { threadId, input, expectedTurnId: activeTurn.id })).turnId;
-    } else {
-      const acknowledgedTurnId = this.acknowledgedTurnStarts.get(threadId);
-      if (acknowledgedTurnId) {
-        return (await this.client.request<{ turnId: string }>("turn/steer", { threadId, input, expectedTurnId: acknowledgedTurnId })).turnId;
-      } else {
-        return (await this.startTextTurn(threadId, trimmed, images)).turn?.id;
-      }
-    }
+    const expectedTurnId = activeTurn?.id ?? this.acknowledgedTurnStarts.get(threadId);
+    if (!expectedTurnId) return (await this.startTextTurn(threadId, trimmed, { images, beforeSend })).turn?.id;
+    const response = await this.client.request<{ turnId: string }>("turn/steer",
+      { threadId, input: userInput(trimmed, images), expectedTurnId }, beforeSend);
+    return beforeSend && response?.turnId !== expectedTurnId ? undefined : response?.turnId;
   }
 
   queueMessage(text: string): void {
@@ -578,13 +572,15 @@ export class DesktopSession {
     return this.pendingTurnStarts.has(threadId) || this.nextTurnQueue.hasInFlight(threadId);
   }
 
-  private async startTextTurn(threadId: string, text: string, images: readonly string[] = []): Promise<TurnStartResponse> {
+  private async startTextTurn(threadId: string, text: string, options?: Readonly<{
+    images: readonly string[]; beforeSend: ((id: number) => void) | undefined;
+  }>): Promise<TurnStartResponse> {
     const generation = this.conversationGeneration;
     const settings = this.nextTurnSettings.prepare(threadId);
     this.pendingTurnStarts.add(threadId);
     try {
-      const input = userInput(text, images);
-      const response = await this.client.request<TurnStartResponse>("turn/start", { threadId, input, ...settings.params });
+      const input = userInput(text, options?.images ?? []);
+      const response = await this.client.request<TurnStartResponse>("turn/start", { threadId, input, ...settings.params }, options?.beforeSend);
       if (typeof response?.turn?.id === "string" && response.turn.id.length > 0) {
         this.nextTurnSettings.accepted(settings);
         const title = this.provisionalTitles.accepted(threadId, text);

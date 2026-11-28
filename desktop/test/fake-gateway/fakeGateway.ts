@@ -215,7 +215,8 @@ export async function startFakeGateway(
     /** Synthetic native-owner provider responses; never calls a real provider or credential store. */
     providerServices?(method: string, params: Record<string, unknown>): FakeKernelReply | Promise<FakeKernelReply>;
     /** app-server 요청의 합성 답이다 (예: thread/fork, #2625). undefined 를 돌려주면 다음 규칙(녹화)으로 답한다. */
-    appServer?(method: string, params: Record<string, unknown>): Pick<JsonRpcEnvelope, "result" | "error"> | undefined;
+    appServer?(method: string, params: Record<string, unknown>, id: number | string):
+      Pick<JsonRpcEnvelope, "result" | "error"> | null | undefined;
     /** 화면의 정확한 대화 이동을 시험하는 읽기 응답이다. 생략하면 기존 녹화를 사용한다. */
     readThread?(params: Record<string, unknown>): unknown;
     mcpHub?: FakeMcpHub;
@@ -481,7 +482,8 @@ export async function startFakeGateway(
         answerMcpHub(options.mcpHub, socket, message);
         return;
       }
-      const appServerReply = hasId ? options.appServer?.(message.method, message.params ?? {}) : undefined;
+      const appServerReply = message.id != null ? options.appServer?.(message.method, message.params ?? {}, message.id) : undefined;
+      if (appServerReply === null) return; // Explicitly withhold the acknowledgement; undefined falls through to replay.
       if (appServerReply) {
         socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, ...appServerReply }));
         return;

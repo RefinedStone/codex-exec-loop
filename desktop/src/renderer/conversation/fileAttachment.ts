@@ -1,4 +1,5 @@
 import type { GitDiffSnapshot, GitDiffSource, GitFileDiff } from "../../shared/bridge";
+import { isManifestLedger, type ManifestLedger } from "./attachmentManifest";
 
 export const ATTACHMENT_LIMIT = { count: 8, lines: 100, bytes: 16_384, totalLines: 300, totalBytes: 49_152 } as const;
 export type DraftTarget = { readonly hostId: string; readonly worktree: string; readonly threadId: string };
@@ -10,6 +11,8 @@ export type FileAttachment = Readonly<Selection & {
   headOid: string | null; manifestId: string; side: "old" | "new"; fingerprint: string;
   selected: string; before: string; after: string; diffExcerpt: string; feedback: string;
   partial: boolean; truncated: boolean; included: boolean; staleReason: string | null; useOriginal: boolean;
+  manifestLedger?: ManifestLedger;
+  currentLedger?: ManifestLedger;
 }>;
 
 export function targetKey(target: DraftTarget): string {
@@ -19,7 +22,7 @@ const bytes = (value: string) => new TextEncoder().encode(value).length;
 export class AttachmentError extends Error {}
 const reduceSelection = "첨부 한도를 초과했습니다. 범위를 줄이거나 첨부를 제외하세요.";
 
-type CaptureOrigin = Readonly<{ target: DraftTarget; turnId: string | null; manifestId: string; draftRevision: number }>;
+type CaptureOrigin = Readonly<{ target: DraftTarget; turnId: string | null; manifestId: string; draftRevision: number; manifestLedger?: ManifestLedger }>;
 
 export async function captureSelection(diff: GitFileDiff, range: Selection, origin: CaptureOrigin): Promise<FileAttachment> {
   const snapshot = diff.snapshot;
@@ -51,6 +54,7 @@ export async function captureAttachment(snapshot: GitDiffSnapshot, origin: Captu
     headOid: snapshot.headOid, manifestId: origin.manifestId, ...quote,
     fingerprint: Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""),
     feedback: "", truncated: false, included: true, useOriginal: false,
+    ...(origin.manifestLedger && { manifestLedger: origin.manifestLedger }),
   };
   checkBundle([attachment]);
   return attachment;
@@ -72,7 +76,7 @@ export function checkBundle(items: readonly FileAttachment[]): void {
 
 /** JSON values, never interpolated fence delimiters. The preview is the wire text. */
 export function fileMessage(instruction: string, items: readonly FileAttachment[], target: DraftTarget): string {
-  const included = items.filter((item) => item.included);
+  const included = items.filter((item) => item.included).map(({ manifestLedger, currentLedger, ...quote }) => quote);
   return included.length ? JSON.stringify({ instruction, target, limits: ATTACHMENT_LIMIT, quotedContext: included }, null, 2) : instruction;
 }
 
@@ -88,5 +92,7 @@ export function isFileAttachment(item: unknown): item is FileAttachment {
     && typeof item.startLine === "number" && Number.isSafeInteger(item.startLine) && item.startLine > 0
     && typeof item.endLine === "number" && Number.isSafeInteger(item.endLine) && item.endLine >= item.startLine
     && [item.turnId, item.oldPath, item.headOid, item.staleReason].every(optionalText)
+    && (item.manifestLedger === undefined || (isManifestLedger(item.manifestLedger) && item.manifestLedger.id === item.manifestId))
+    && (item.currentLedger === undefined || isManifestLedger(item.currentLedger))
     && ["partial", "truncated", "included", "useOriginal"].every((key) => typeof item[key] === "boolean");
 }

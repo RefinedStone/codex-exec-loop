@@ -880,7 +880,7 @@ export function App() {
     queue: session.current?.nextTurnQueue,
     queueMessage: (text) => session.current?.queueMessage(text),
     resumeQueuedMessages: () => session.current?.resumeQueuedMessages(),
-    sendMessage: async (text, images) => session.current?.sendMessage(text, images),
+    sendMessage: async (text, images, beforeSend) => session.current?.sendMessage(text, images, beforeSend),
     interrupt: async () => session.current?.interrupt(),
     startThread: async (text) => {
       const current = session.current;

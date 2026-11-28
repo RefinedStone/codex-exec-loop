@@ -50,7 +50,8 @@ async function readQuote(offer: Offer, request: ManifestRequest): Promise<FileAt
   if (result.status !== "available") throw new AttachmentError(`원래 범위를 읽을 수 없습니다: ${result.reason}`);
   const lines = result.text.match(/[^\n]*\n|[^\n]+$/g) ?? [];
   const selected = lines.slice(range.startLine - first, range.endLine - first + 1).join("");
-  return captureAttachment(snapshot, { target, turnId: offer.turnId, manifestId: manifest.manifestId, draftRevision: Date.now() },
+  return captureAttachment(snapshot, { target, turnId: offer.turnId, manifestId: manifest.manifestLedger.id,
+    manifestLedger: manifest.manifestLedger, draftRevision: Date.now() },
     { ...range, selected, before: first < range.startLine ? lines[0] ?? "" : "",
       after: last > range.endLine ? lines.at(-1) ?? "" : "", partial: range.startLine > 1 || range.endLine < content.lineCount,
       diffExcerpt: offer.diffExcerpt, staleReason: result.current ? null : "선택 후 원본 변경" });

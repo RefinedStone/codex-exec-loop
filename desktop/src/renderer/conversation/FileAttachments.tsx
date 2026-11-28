@@ -4,6 +4,17 @@ import "./fileAttachments.css";
 import { useUiStore, setFileList } from "../session/uiStore";
 import { readSource, type ManifestRequest } from "./attachmentSource";
 import { captureSelection, fileMessage, targetKey, type DraftTarget, type FileAttachment } from "./fileAttachment";
+import type { ManifestLedger } from "./attachmentManifest";
+
+function LedgerDetails({ label, ledger }: { readonly label: string; readonly ledger: ManifestLedger }) {
+  return <details data-testid="attachment-ledger"><summary>{label} · 버전 미확인 {ledger.unverifiedCount}</summary>
+    <code>{ledger.id}</code>
+    <p>장부에서 관측한 판입니다. 외부 최신성 또는 읽음을 확인하지 않습니다.</p>
+    <ul>{ledger.entries.map(entry => <li key={JSON.stringify([entry.kind, entry.key])}>
+      {entry.kind} · {entry.key} · {entry.selected ? "선택" : "제외"} ({entry.reason}) · {entry.observedVersion ?? "버전 없음"}
+    </li>)}</ul>
+  </details>;
+}
 
 export function FileAttachments({ target, turnId, request, disabled }: {
   target: DraftTarget; turnId: string | null; request: ManifestRequest; disabled: boolean;
@@ -20,9 +31,9 @@ export function FileAttachments({ target, turnId, request, disabled }: {
   const attach = async () => {
     setBusy(true); setError("");
     try {
-      const { diff, manifestId } = await readSource(request, target, { path });
+      const { diff, manifestLedger } = await readSource(request, target, { path });
       add(await captureSelection(diff, { startLine: Number(start), endLine: Number(end) },
-        { target, turnId, manifestId, draftRevision: Date.now() }));
+        { target, turnId, manifestId: manifestLedger.id, manifestLedger, draftRevision: Date.now() }));
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
@@ -52,6 +63,10 @@ export function FileAttachments({ target, turnId, request, disabled }: {
     {files.map((item, index) => <div key={item.attachmentId} className="file-attachment-card" data-testid="file-attachment-card">
       <label><input type="checkbox" checked={item.included} disabled={disabled}
         onChange={() => change(files.map(a => a === item ? { ...a, included: !a.included } : a))} />포함</label>
+      {!item.included && <small>요청에서 제외</small>}
+      {item.manifestLedger ? <LedgerDetails label="원래 선택 장부" ledger={item.manifestLedger} />
+        : <small>원래 장부의 버전 확인 상태를 알 수 없음</small>}
+      {item.currentLedger && <LedgerDetails label="변경된 장부" ledger={item.currentLedger} />}
       <details><summary>{item.filePath}:{item.startLine}–{item.endLine} · {item.side === "old" ? "이전" : "이후"} · 원래 선택 보기</summary>
         <code>{item.sourceKind} · {item.oldPath ?? item.filePath} → {item.filePath}</code>
         <code>{item.origin.hostId} · {item.worktreeId} · {item.snapshotId}</code>
