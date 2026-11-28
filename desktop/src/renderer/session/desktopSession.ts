@@ -11,7 +11,7 @@ import { BROWSER_TOOL_NAMES, type BrowserAgentBridge } from "../../shared/browse
 import type { ListMcpServerStatusResponse } from "../../shared/protocol/generated/v2/ListMcpServerStatusResponse";
 import type { ListMcpServerStatusParams } from "../../shared/protocol/generated/v2/ListMcpServerStatusParams";
 import type { FuzzyFileSearchResponse } from "../../shared/protocol/generated/FuzzyFileSearchResponse";
-import type { InitializeParams } from "../../shared/protocol/generated/InitializeParams";
+import { initializeParams, NATIVE_PREDICTION } from "./sessionHandshake";
 import type { SkillsListParams } from "../../shared/protocol/generated/v2/SkillsListParams";
 import type { SkillsListResponse } from "../../shared/protocol/generated/v2/SkillsListResponse";
 import type { Thread } from "../../shared/protocol/generated/v2/Thread";
@@ -84,13 +84,6 @@ interface ResumeLoading {
 interface QueuedNotification {
   method: string;
   params: unknown;
-}
-
-export function initializeParams(clientVersion: string): InitializeParams {
-  return {
-    clientInfo: { name: "akra-desktop", title: "Akra Desktop", version: clientVersion },
-    capabilities: { experimentalApi: false, requestAttestation: false },
-  };
 }
 
 /**
@@ -1287,6 +1280,7 @@ export class DesktopSession {
   }
 
   private handleNotification(method: string, params: unknown): void {
+    if (method === NATIVE_PREDICTION) return; // Older servers can ignore the connection opt-out.
     // 압축 턴의 최종 결과를 먼저 반영한 뒤 예약 입력의 다음 dispatch 여부를 판단한다.
     this.compaction.observe(method, params);
     if (!this.readOnly && applyAccountLimitsNotification(method, params)) {
