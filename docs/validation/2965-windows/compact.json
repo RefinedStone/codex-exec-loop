@@ -1,0 +1,430 @@
+{
+  "sha": "3110a9e9cfb3eaa83bf32a06af640e4c207dffba",
+  "platform": "win32",
+  "release": "10.0.26200",
+  "node": "v24.13.0",
+  "scenario": {
+    "width": 1024,
+    "height": 700,
+    "zoom": 1.25,
+    "panel": true,
+    "scale": 1.25
+  },
+  "display": {
+    "electron": "45.2.3",
+    "monitorDips": {
+      "width": 1228,
+      "height": 691
+    },
+    "displayScale": 1.25,
+    "contentDips": [
+      1024,
+      701
+    ]
+  },
+  "checks": {
+    "emptyContextMenuHasNoTaskAction": true,
+    "keyboardActionFocused": true,
+    "copyAndQuotePresent": true,
+    "dialogOwnsFocus": true,
+    "exactMultilineDraft": true,
+    "sourceThreadAndTurn": true,
+    "geometryUnchanged": false,
+    "noPersistentAction": true,
+    "pendingAndAttachedAlign": false,
+    "overflowStaysInCode": false,
+    "menuEscapeRestoresFocus": true,
+    "editorEscapeRestoresFocus": false,
+    "panelAndDraftPreserved": true,
+    "noTaskMutationOrModelRequests": true
+  },
+  "stages": {
+    "pending": {
+      "viewport": [
+        1024,
+        702
+      ],
+      "dpr": 1.25,
+      "zoom": "1.25",
+      "conversation": {
+        "x": 272,
+        "y": 44,
+        "width": 285.76251220703125,
+        "height": 217.10000610351562
+      },
+      "column": {
+        "x": 317.20001220703125,
+        "y": -78,
+        "width": 195.3625030517578,
+        "height": 583.75
+      },
+      "composer": {
+        "x": 302,
+        "y": 552.5,
+        "width": 225.7624969482422,
+        "height": 129.10000610351562
+      },
+      "scrollTop": 121.5999984741211,
+      "scrollLeft": 0,
+      "verticalExtent": [
+        162,
+        499
+      ],
+      "horizontalExtent": [
+        204,
+        1899
+      ],
+      "codeExtent": [
+        1875,
+        1875
+      ],
+      "panel": {
+        "x": 557.7625122070312,
+        "y": 44,
+        "width": 466.2375183105469,
+        "height": 657.6000366210938
+      },
+      "tab": "스킬",
+      "draft": "Unsaved Windows acceptance fixture",
+      "focus": "conversation",
+      "action": false,
+      "legacyArea": false
+    },
+    "before": {
+      "viewport": [
+        1024,
+        702
+      ],
+      "dpr": 1.25,
+      "zoom": "1.25",
+      "conversation": {
+        "x": 272,
+        "y": 44,
+        "width": 285.76251220703125,
+        "height": 217.10000610351562
+      },
+      "column": {
+        "x": 317.20001220703125,
+        "y": -78,
+        "width": 195.3625030517578,
+        "height": 672.5
+      },
+      "composer": {
+        "x": 302,
+        "y": 552.5,
+        "width": 225.7624969482422,
+        "height": 129.10000610351562
+      },
+      "scrollTop": 121.5999984741211,
+      "scrollLeft": 0,
+      "verticalExtent": [
+        162,
+        570
+      ],
+      "horizontalExtent": [
+        204,
+        1899
+      ],
+      "codeExtent": [
+        1875,
+        1875
+      ],
+      "panel": {
+        "x": 557.7625122070312,
+        "y": 44,
+        "width": 466.2375183105469,
+        "height": 657.6000366210938
+      },
+      "tab": "스킬",
+      "draft": "Unsaved Windows acceptance fixture",
+      "focus": "conversation",
+      "action": false,
+      "legacyArea": false
+    },
+    "selected": {
+      "viewport": [
+        1024,
+        702
+      ],
+      "dpr": 1.25,
+      "zoom": "1.25",
+      "conversation": {
+        "x": 272,
+        "y": 44,
+        "width": 285.76251220703125,
+        "height": 217.10000610351562
+      },
+      "column": {
+        "x": 317.20001220703125,
+        "y": -78,
+        "width": 195.3625030517578,
+        "height": 672.5
+      },
+      "composer": {
+        "x": 302,
+        "y": 552.5,
+        "width": 225.7624969482422,
+        "height": 129.10000610351562
+      },
+      "scrollTop": 121.5999984741211,
+      "scrollLeft": 0,
+      "verticalExtent": [
+        162,
+        570
+      ],
+      "horizontalExtent": [
+        204,
+        1899
+      ],
+      "codeExtent": [
+        1875,
+        1875
+      ],
+      "panel": {
+        "x": 557.7625122070312,
+        "y": 44,
+        "width": 466.2375183105469,
+        "height": 657.6000366210938
+      },
+      "tab": "스킬",
+      "draft": "Unsaved Windows acceptance fixture",
+      "focus": "conversation",
+      "action": false,
+      "legacyArea": false
+    },
+    "changed": {
+      "viewport": [
+        1024,
+        702
+      ],
+      "dpr": 1.25,
+      "zoom": "1.25",
+      "conversation": {
+        "x": 272,
+        "y": 44,
+        "width": 285.76251220703125,
+        "height": 217.10000610351562
+      },
+      "column": {
+        "x": 317.20001220703125,
+        "y": -78,
+        "width": 195.3625030517578,
+        "height": 672.5
+      },
+      "composer": {
+        "x": 302,
+        "y": 552.5,
+        "width": 225.7624969482422,
+        "height": 129.10000610351562
+      },
+      "scrollTop": 121.5999984741211,
+      "scrollLeft": 0,
+      "verticalExtent": [
+        162,
+        570
+      ],
+      "horizontalExtent": [
+        204,
+        1899
+      ],
+      "codeExtent": [
+        1875,
+        1875
+      ],
+      "panel": {
+        "x": 557.7625122070312,
+        "y": 44,
+        "width": 466.2375183105469,
+        "height": 657.6000366210938
+      },
+      "tab": "스킬",
+      "draft": "Unsaved Windows acceptance fixture",
+      "focus": "conversation",
+      "action": false,
+      "legacyArea": false
+    },
+    "cleared": {
+      "viewport": [
+        1024,
+        702
+      ],
+      "dpr": 1.25,
+      "zoom": "1.25",
+      "conversation": {
+        "x": 272,
+        "y": 44,
+        "width": 285.76251220703125,
+        "height": 217.10000610351562
+      },
+      "column": {
+        "x": 317.20001220703125,
+        "y": -78,
+        "width": 195.3625030517578,
+        "height": 672.5
+      },
+      "composer": {
+        "x": 302,
+        "y": 552.5,
+        "width": 225.7624969482422,
+        "height": 129.10000610351562
+      },
+      "scrollTop": 121.5999984741211,
+      "scrollLeft": 0,
+      "verticalExtent": [
+        162,
+        570
+      ],
+      "horizontalExtent": [
+        204,
+        1899
+      ],
+      "codeExtent": [
+        1875,
+        1875
+      ],
+      "panel": {
+        "x": 557.7625122070312,
+        "y": 44,
+        "width": 466.2375183105469,
+        "height": 657.6000366210938
+      },
+      "tab": "스킬",
+      "draft": "Unsaved Windows acceptance fixture",
+      "focus": "conversation",
+      "action": false,
+      "legacyArea": false
+    },
+    "menuEscape": {
+      "viewport": [
+        1024,
+        702
+      ],
+      "dpr": 1.25,
+      "zoom": "1.25",
+      "conversation": {
+        "x": 272,
+        "y": 44,
+        "width": 285.76251220703125,
+        "height": 217.10000610351562
+      },
+      "column": {
+        "x": -1786,
+        "y": -195.60000610351562,
+        "width": 195.3625030517578,
+        "height": 672.5
+      },
+      "composer": {
+        "x": 302,
+        "y": 552.5,
+        "width": 225.7624969482422,
+        "height": 129.10000610351562
+      },
+      "scrollTop": 215.67999267578125,
+      "scrollLeft": 1682.56005859375,
+      "verticalExtent": [
+        162,
+        570
+      ],
+      "horizontalExtent": [
+        204,
+        1899
+      ],
+      "codeExtent": [
+        1875,
+        1875
+      ],
+      "panel": {
+        "x": 557.7625122070312,
+        "y": 44,
+        "width": 466.2375183105469,
+        "height": 657.6000366210938
+      },
+      "tab": "스킬",
+      "draft": "Unsaved Windows acceptance fixture",
+      "focus": "conversation",
+      "action": false,
+      "legacyArea": false
+    },
+    "after": {
+      "viewport": [
+        1024,
+        702
+      ],
+      "dpr": 1.25,
+      "zoom": "1.25",
+      "conversation": {
+        "x": 272,
+        "y": 44,
+        "width": 285.76251220703125,
+        "height": 217.10000610351562
+      },
+      "column": {
+        "x": -1786,
+        "y": -195.60000610351562,
+        "width": 195.3625030517578,
+        "height": 672.5
+      },
+      "composer": {
+        "x": 302,
+        "y": 552.5,
+        "width": 225.7624969482422,
+        "height": 129.10000610351562
+      },
+      "scrollTop": 215.67999267578125,
+      "scrollLeft": 1682.56005859375,
+      "verticalExtent": [
+        162,
+        570
+      ],
+      "horizontalExtent": [
+        204,
+        1899
+      ],
+      "codeExtent": [
+        1875,
+        1875
+      ],
+      "panel": {
+        "x": 557.7625122070312,
+        "y": 44,
+        "width": 466.2375183105469,
+        "height": 657.6000366210938
+      },
+      "tab": "스킬",
+      "draft": "Unsaved Windows acceptance fixture",
+      "focus": "BODY",
+      "action": false,
+      "legacyArea": false
+    }
+  },
+  "frames": {
+    "before": {
+      "file": "compact-before.png",
+      "pixels": {
+        "width": 1280,
+        "height": 877
+      }
+    },
+    "menu": {
+      "file": "compact-menu.png",
+      "pixels": {
+        "width": 1280,
+        "height": 877
+      }
+    },
+    "editor": {
+      "file": "compact-editor.png",
+      "pixels": {
+        "width": 1280,
+        "height": 877
+      }
+    },
+    "after": {
+      "file": "compact-after.png",
+      "pixels": {
+        "width": 1280,
+        "height": 877
+      }
+    }
+  }
+}

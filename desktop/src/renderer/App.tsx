@@ -1,3 +1,4 @@
+import { newAttentionCount } from "./kernel/attentionNavigation";
 // 화면 틀이다 (R10): 사이드바, 위 막대, 본문(새 스레드 · 현황판 · 대화와 입력창), 터미널, 오른쪽 패널.
 // 모양은 UX 블루프린트(`blueprint/`)를 따른다. 대화 상태는 `DesktopSession` 과 `desktopStore` 가 가진다.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -682,13 +683,18 @@ export function App() {
     },
     [loadThread, loadRemoteThread],
   );
-  useShortcuts(navigate);
+  useShortcuts(navigate, openThread);
 
   // 턴이 끝나거나 승인 요청이 오면 운영체제 알림을 보인다 (plan 26 A1). 누르면 그 스레드를 연다. 창에 포커스가 있을
   // 때도 알릴지는 알림 설정이 정한다 (`notifyOs`). 알림에는 스레드 이름만 넣는다. 대화의 글은 넣지 않는다.
   useEffect(
     () =>
       useDesktopStore.subscribe((state, previous) => {
+        if (state.kernel.kernel === previous.kernel.kernel && state.kernel.phase === "attached"
+          && state.kernel.attentionItems !== previous.kernel.attentionItems) {
+          const count = newAttentionCount(previous.kernel.attentionItems, state.kernel.attentionItems);
+          if (count && document.hasFocus()) toast(`새 응답 필요 항목 ${count}개가 있습니다.`);
+        }
         for (const event of issueDecisionAttentionEvents(previous, state)) {
           notifyIssueDecision(() => { setIssueAttentionTarget({ ...event }); openPanel("issues"); }, `akra:issue-decision:${event.kernel}:${event.decisionId}`,
             event.arbiter ? (event.arbiter.outcome === "applied" ? "arbiter_applied" : "arbiter_waiting") : event.reminderId !== undefined,
@@ -869,7 +875,7 @@ export function App() {
 
   const composerActions: ComposerActions = {
     manifestRequest: gatewayRequest,
-    runCommand: (id) => commandHandlers()[id]?.(),
+    runCommand: (id) => commandHandlers(undefined, openThread)[id]?.(),
     // `@` 파일 언급은 열린 대화의 폴더, 새 스레드 화면이면 고른 폴더에서 찾는다 (#2837).
     searchFiles: async (query) => {
       const cwd = view === "home" ? useUiStore.getState().homeCwd : openCwd;
