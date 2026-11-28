@@ -1,5 +1,6 @@
 // 브랜치를 push 하고 PR 을 만든다 (R10). 둘 다 저장소 밖에 쓰는 동작이다. 여기서는 확인(`plan…`)과 실행(`execute…`)을
 // 나눈다. 부르는 쪽(main 의 IPC 처리기)이 그 사이에 사용자에게 확인한다. 강제 push 는 하지 않는다.
+import { devNull } from "node:os";
 import type { GitPublishResult, PullRequestDraft } from "../shared/bridge";
 import { clearPullRequestCache, parseGitHubRemote } from "./gitBranch";
 import { failureMessage, requireDirectory, runGit } from "./gitStatus";
@@ -19,6 +20,8 @@ export interface PushPlan {
   /** `origin` 의 push 주소이다. 확인 창에 보여 준다. */
   remoteUrl: string;
   commit: string;
+  /** Last fetched tip when the tracking ref identifies the exact push destination. */
+  observedRemoteCommit: string | null;
 }
 
 export interface PullRequestPlan {
@@ -52,7 +55,11 @@ export async function planPush(cwdInput: unknown): Promise<Planned<PushPlan>> {
   if (remoteUrl.includes("\n")) return refuse("push 주소가 여러 개입니다. 터미널에서 대상 주소를 확인하십시오.");
   const commit = await gitLine(cwd, "rev-parse", "--verify", "HEAD");
   if (!commit) return refuse("push 할 커밋이 없습니다.");
-  return { ok: true, plan: { cwd, branch, remoteUrl, commit } };
+  const fetchUrl = await gitLine(cwd, "remote", "get-url", "origin");
+  const refspec = await gitLine(cwd, "config", "--get-all", "remote.origin.fetch");
+  const tracked = fetchUrl === remoteUrl && (refspec === "+refs/heads/*:refs/remotes/origin/*" || refspec === "refs/heads/*:refs/remotes/origin/*");
+  const observedRemoteCommit = tracked ? await gitLine(cwd, "rev-parse", "--verify", "--quiet", "--end-of-options", "refs/remotes/origin/" + branch) : null;
+  return { ok: true, plan: { cwd, branch, remoteUrl, commit, observedRemoteCommit } };
 }
 
 /** 현재 브랜치를 `origin` 의 같은 이름 브랜치로 push 한다. 원격이 앞서 있으면 git 이 거절한다. 강제로 덮어쓰지 않는다. */
@@ -63,9 +70,24 @@ export async function executePush(plan: PushPlan): Promise<GitPublishResult> {
     return refuse("확인하는 동안 브랜치나 원격이 바뀌었습니다. 다시 확인하십시오.");
   }
   const ref = `refs/heads/${plan.branch}`;
-  const output = await runGit(plan.cwd, ["push", "--no-follow-tags", "--set-upstream", "origin", `${ref}:${ref}`], 1 << 16, { timeoutMs: PUSH_TIMEOUT_MS, env: NO_PROMPT_ENV });
-  if (output.code !== 0) {
-    return refuse(failureMessage(output, "git push 가 실패했습니다."));
+  const expected = plan.observedRemoteCommit;
+  const args = ["push", "--no-follow-tags"];
+  const env = { ...NO_PROMPT_ENV, GIT_NO_REPLACE_OBJECTS: "1", GIT_GRAFT_FILE: devNull };
+  if (expected === null) {
+    // No reviewed tip: keep plain Git fast-forward/creation semantics. Never grant a lease here.
+    args.push("--set-upstream", "origin", `${ref}:${ref}`);
+  } else {
+    // A lease alone can authorize a rewrite. Prove ancestry on the real objects, then send those exact OIDs.
+    const ancestry = await runGit(plan.cwd, ["-c", "core.commitGraph=false", "merge-base", "--is-ancestor", expected, plan.commit], 4096, { env });
+    if (ancestry.code !== 0 || ancestry.timedOut) return refuse("확인한 원격 커밋에서 fast-forward할 수 없습니다. fetch 후 다시 확인하십시오.");
+    args.push(`--force-with-lease=${ref}:${expected}`, "origin", `${plan.commit}:${ref}`);
+  }
+  const output = await runGit(plan.cwd, args, 1 << 16, { timeoutMs: PUSH_TIMEOUT_MS, env });
+  if (output.code !== 0 || output.timedOut) return refuse(failureMessage(output, "git push 가 실패했습니다."));
+  if (expected !== null) {
+    // Git's --set-upstream needs a named source branch; the leased push must use the reviewed OID.
+    const upstream = await runGit(plan.cwd, ["branch", "--set-upstream-to=refs/remotes/origin/" + plan.branch, "--", plan.branch], 4096);
+    if (upstream.code !== 0) return refuse("push는 완료했지만 로컬 upstream을 설정하지 못했습니다.");
   }
   return { ok: true, url: null };
 }

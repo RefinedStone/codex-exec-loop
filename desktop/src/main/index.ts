@@ -615,8 +615,8 @@ ipcMain.handle(IPC_CHANNELS.gitHunkAction, async (event, cwd: unknown, action: u
 ipcMain.handle(IPC_CHANNELS.gitPush, async (event, cwd: unknown) => {
   const planned = await planPush(cwd);
   if (!planned.ok) return planned;
-  const { branch, remoteUrl } = planned.plan;
-  const detail = `브랜치: ${branch}\n원격: ${remoteUrl}\n\n원격 저장소의 ${branch} 브랜치에 커밋을 올립니다. 강제로 덮어쓰지 않습니다.`;
+  const { branch, remoteUrl, observedRemoteCommit } = planned.plan;
+  const detail = `브랜치: ${branch}\n원격: ${remoteUrl}\n마지막으로 확인한 원격 커밋: ${observedRemoteCommit ?? "확인하지 않음"}\n\n원격 저장소의 ${branch} 브랜치에 커밋을 올립니다. 강제로 덮어쓰지 않습니다.`;
   if (!(await confirmAction(event.sender, "question", "이 브랜치를 push 합니까?", detail, "push"))) return CANCELLED;
   return executePush(planned.plan);
 });
