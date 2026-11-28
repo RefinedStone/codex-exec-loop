@@ -1774,6 +1774,58 @@
       }
     },
     {
+      "name": "apply_issue_comment_request",
+      "scope": "issue",
+      "state": "store",
+      "summary": "Apply a recorded issue comment request with native confirmation.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [
+        "human_confirmation_required"
+      ],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "comment_id": {
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "type": {
+            "const": "apply_issue_comment_request",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "issue",
+          "comment_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "receipt": {
+            "$ref": "#/$defs/IssueInterventionReceiptState"
+          },
+          "type": {
+            "const": "issue_intervened",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "receipt"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "set_issue_binding_paused",
       "scope": "issue",
       "state": "runtime",
@@ -1837,6 +1889,58 @@
         "required": [
           "type",
           "command"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "retry_issue_account_quota",
+      "scope": "issue",
+      "state": "runtime",
+      "summary": "Queue one fresh account quota read for a current automatic issue hold. This does not approve work or replay an attempt.",
+      "effect": "write",
+      "idempotency": "natural",
+      "rejections": [],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane": {
+            "$ref": "#/$defs/IssueQuotaLane"
+          },
+          "type": {
+            "const": "retry_issue_account_quota",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "lane",
+          "expected_revision"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          },
+          "type": {
+            "const": "issue_account_quota_retry_requested",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "accepted"
         ],
         "type": "object"
       }
@@ -3572,6 +3676,13 @@
           },
           {
             "properties": {
+              "account_quota": {
+                "$ref": "#/$defs/IssueAccountQuotaState",
+                "default": {
+                  "arbiter": null,
+                  "start": null
+                }
+              },
               "autonomy": {
                 "$ref": "#/$defs/IssueAutonomyState",
                 "default": {
@@ -4252,6 +4363,13 @@
           },
           {
             "properties": {
+              "account_quota": {
+                "$ref": "#/$defs/IssueAccountQuotaState",
+                "default": {
+                  "arbiter": null,
+                  "start": null
+                }
+              },
               "autonomy": {
                 "$ref": "#/$defs/IssueAutonomyState",
                 "default": {
@@ -7439,6 +7557,22 @@
         },
         {
           "properties": {
+            "accepted": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "issue_account_quota_retry_requested",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "accepted"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "changed": {
               "type": "boolean"
             },
@@ -8198,6 +8332,32 @@
       ],
       "type": "object"
     },
+    "IssueAccountQuotaState": {
+      "additionalProperties": false,
+      "properties": {
+        "arbiter": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueQuotaWait"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "start": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueQuotaWait"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "IssueActionCommand": {
       "enum": [
         "hold_issue",
@@ -8939,6 +9099,56 @@
       ],
       "type": "string"
     },
+    "IssueCommentRequestBasis": {
+      "additionalProperties": false,
+      "properties": {
+        "authorization_epoch": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "binding_run_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "expires_at_unix_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observation_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tracked_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "observation_revision",
+        "tracked_revision",
+        "binding_run_revision",
+        "authorization_epoch",
+        "expires_at_unix_ms"
+      ],
+      "type": "object"
+    },
+    "IssueCommentRequestStatus": {
+      "enum": [
+        "pending",
+        "expired",
+        "stale",
+        "applying",
+        "applied",
+        "uncertain",
+        "display_only"
+      ],
+      "type": "string"
+    },
     "IssueCommentRequestView": {
       "additionalProperties": false,
       "properties": {
@@ -8950,12 +9160,26 @@
         },
         "kind": {
           "$ref": "#/$defs/IssueCommentCommandKind"
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueInterventionReceiptState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/IssueCommentRequestStatus"
         }
       },
       "required": [
         "comment_id",
         "author_id",
-        "kind"
+        "kind",
+        "status"
       ],
       "type": "object"
     },
@@ -9033,6 +9257,31 @@
     },
     "IssueConfirmationTarget": {
       "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "basis": {
+              "$ref": "#/$defs/IssueCommentRequestBasis"
+            },
+            "command_id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "comment_request",
+              "type": "string"
+            },
+            "workspace": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "workspace",
+            "command_id",
+            "basis"
+          ],
+          "type": "object"
+        },
         {
           "additionalProperties": false,
           "properties": {
@@ -10832,6 +11081,45 @@
       ],
       "type": "object"
     },
+    "IssueQuotaHold": {
+      "enum": [
+        "exhausted",
+        "unknown",
+        "retry_queued"
+      ],
+      "type": "string"
+    },
+    "IssueQuotaLane": {
+      "enum": [
+        "start",
+        "arbiter"
+      ],
+      "type": "string"
+    },
+    "IssueQuotaWait": {
+      "additionalProperties": false,
+      "properties": {
+        "hold": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueQuotaHold"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "revision"
+      ],
+      "type": "object"
+    },
     "IssueRemoteStateValue": {
       "enum": [
         "open",
@@ -12124,6 +12412,27 @@
         {
           "additionalProperties": false,
           "properties": {
+            "comment_id": {
+              "type": "string"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "type": {
+              "const": "apply_issue_comment_request",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "issue",
+            "comment_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "binding_id": {
               "maxLength": 512,
               "minLength": 1,
@@ -12154,6 +12463,29 @@
             "command_id",
             "binding_id",
             "paused",
+            "expected_revision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expected_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "lane": {
+              "$ref": "#/$defs/IssueQuotaLane"
+            },
+            "type": {
+              "const": "retry_issue_account_quota",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "lane",
             "expected_revision"
           ],
           "type": "object"
@@ -12718,6 +13050,13 @@
             },
             {
               "properties": {
+                "account_quota": {
+                  "$ref": "#/$defs/IssueAccountQuotaState",
+                  "default": {
+                    "arbiter": null,
+                    "start": null
+                  }
+                },
                 "autonomy": {
                   "$ref": "#/$defs/IssueAutonomyState",
                   "default": {
@@ -13683,6 +14022,13 @@
             },
             {
               "properties": {
+                "account_quota": {
+                  "$ref": "#/$defs/IssueAccountQuotaState",
+                  "default": {
+                    "arbiter": null,
+                    "start": null
+                  }
+                },
                 "autonomy": {
                   "$ref": "#/$defs/IssueAutonomyState",
                   "default": {

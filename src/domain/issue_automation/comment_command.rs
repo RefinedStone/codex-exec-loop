@@ -3,10 +3,72 @@
 //! 더 보수적으로 만드는 `hold` 만 바로 적용한다. 다른 명령은 기록만 하고 적용하지 않는다.
 use serde::{Deserialize, Serialize};
 
+use super::intervention::IssueInterventionReceipt;
 use crate::domain::issue_work::IssueReference;
 
 /// 댓글 하나로 만든 개입의 command_id 접두사이다. 같은 댓글은 같은 개입 intent 를 다시 쓴다.
 pub const ISSUE_COMMENT_COMMAND_PREFIX: &str = "issue-comment:";
+pub const COMMENT_REQUEST_CONTROL_PREFIX: &str = "issue-comment-confirmed:";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IssueCommentRequestKey {
+    pub issue: IssueReference,
+    pub comment_id: String,
+}
+
+impl IssueCommentRequestKey {
+    pub fn command_id(&self) -> anyhow::Result<String> {
+        use sha2::{Digest, Sha256};
+        Ok(format!(
+            "{COMMENT_REQUEST_CONTROL_PREFIX}{:x}",
+            Sha256::digest(serde_json::to_vec(self)?)
+        ))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IssueCommentRequestBasis {
+    pub observation_revision: u64,
+    pub tracked_revision: u64,
+    pub binding_run_revision: u64,
+    pub authorization_epoch: u64,
+    pub expires_at_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredIssueCommentRequest {
+    pub key: IssueCommentRequestKey,
+    pub basis: IssueCommentRequestBasis,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueCommentRequestAcceptance {
+    Pending,
+    Accepted,
+    Refused,
+    Uncertain,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueCommentRequestDetail {
+    pub record: IssueCommentCommandRecord,
+    pub status: IssueCommentRequestStatus,
+    pub receipt: Option<IssueInterventionReceipt>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueCommentRequestStatus {
+    Pending,
+    Expired,
+    Stale,
+    Applying,
+    Applied,
+    Uncertain,
+    DisplayOnly,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]

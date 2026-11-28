@@ -10,7 +10,7 @@ import { IssueAutonomyControl } from "./IssueAutonomyControl";
 import type { IssueAutonomyLevel, IssueCommandOutcome, IssueInterventionName } from "./issueInteractions";
 import { IssueObserveReport } from "./IssueObserveReport";
 import { IssuePolicy, type IssuePolicyFileScope } from "./IssuePolicy";
-import type { IssueAutomationModeRecord, IssueCollectionFailureState, IssueEventReference, IssueListItem, IssueSourceFailureState } from "./protocol";
+import type { IssueAutomationModeRecord, IssueCollectionFailureState, IssueEventReference, IssueListItem, IssueQuotaLane, IssueSourceFailureState } from "./protocol";
 
 const SOURCE_FAILURE_TEXT: Record<IssueSourceFailureState, string> = {
   invalid_request: "이슈 조회 요청을 처리할 수 없습니다.",
@@ -56,8 +56,10 @@ interface IssuePanelProps {
   onSync(): Promise<void>;
   onSetAutonomy(level: IssueAutonomyLevel): Promise<void>;
   onSetBindingPaused?(paused: boolean): Promise<void>;
+  onRetryQuota?(lane: IssueQuotaLane, revision: number): Promise<void>;
   onAnswerDecision(decisionId: string, option: string, note: string, criteria?: import("./protocol").TaskAcceptanceCriterion[]): Promise<void>;
   onIntervene(action: IssueInterventionName, message?: string, confirm?: boolean): Promise<IssueCommandOutcome>;
+  onConfirmCommentRequest?(commentId: string): Promise<IssueCommandOutcome>;
   onOpenConversation(): Promise<void>;
   onOpenUrl(url: string): void;
 }
@@ -78,7 +80,7 @@ function IssueRow({ item, onSelectIssue, onOpenUrl }: { item: IssueListItem; onS
   );
 }
 
-export function IssuePanel({ attentionTarget = null, onRefresh, onSelectIssue, onClearIssueSelection, onRefreshDetail, onRefreshPolicy, onOpenPolicyFile, onNextPage, onPreviousPage, onSetMode, onSync, onSetAutonomy, onSetBindingPaused, onAnswerDecision, onIntervene, onOpenConversation, onOpenUrl }: IssuePanelProps) {
+export function IssuePanel({ attentionTarget = null, onRefresh, onSelectIssue, onClearIssueSelection, onRefreshDetail, onRefreshPolicy, onOpenPolicyFile, onNextPage, onPreviousPage, onSetMode, onSync, onSetAutonomy, onSetBindingPaused, onRetryQuota, onAnswerDecision, onIntervene, onConfirmCommentRequest, onOpenConversation, onOpenUrl }: IssuePanelProps) {
   const [view, setView] = useState<"list" | "report" | "policy">("list");
   // 알림은 상세 보기로 이동하지만 같은 저장소의 패널과 사용자 초안을 다시 만들지 않는다.
   useEffect(() => { if (attentionTarget) setView("list"); }, [attentionTarget]);
@@ -130,6 +132,16 @@ export function IssuePanel({ attentionTarget = null, onRefresh, onSelectIssue, o
       ) : (
         <>
           {automation?.binding_id && <IssueBindingPauseControl state={automation.binding_pause} connected={attached} busy={busy} onChange={onSetBindingPaused} />}
+          {(["start", "arbiter"] as const).map((lane) => {
+            const wait = automation?.account_quota?.[lane];
+            if (!wait?.hold) return null;
+            const message = { exhausted: "계정 사용 한도에 도달했습니다.", unknown: "계정 사용 한도를 확인하지 못했습니다.", retry_queued: "계정 사용 한도를 다시 확인할 예정입니다." }[wait.hold];
+            return <p key={lane} role="status">
+              {lane === "start" ? "자동 시작" : "자동 중재"}: {message}{" "}
+              {onRetryQuota && <button type="button" disabled={!attached || busy || wait.hold === "retry_queued"}
+                onClick={() => void onRetryQuota(lane, wait.revision)}>한도 다시 확인</button>}
+            </p>;
+          })}
           <nav className="issues-tabs" aria-label="이슈 보기">
             <button type="button" aria-pressed={view === "list"} onClick={() => { setView("list"); onClearIssueSelection(); }} data-testid="issues-list-tab">목록</button>
             <button type="button" aria-pressed={view === "report"} onClick={() => setView("report")} data-testid="issues-report-tab">관찰 보고</button>
@@ -192,7 +204,7 @@ export function IssuePanel({ attentionTarget = null, onRefresh, onSelectIssue, o
                 </ul>
               </section>
             ))}
-            {selected && <IssueDetail selectedIssue={selected} detail={issues.detail} loading={issues.detailLoading} stale={issues.detailStale} error={issues.detailError} busy={busy || !attached} onAnswer={onAnswerDecision} onIntervene={onIntervene} onOpenConversation={onOpenConversation} onRefresh={onRefreshDetail} onBack={onClearIssueSelection} onOpenUrl={onOpenUrl} />}
+            {selected && <IssueDetail selectedIssue={selected} detail={issues.detail} loading={issues.detailLoading} stale={issues.detailStale} error={issues.detailError} busy={busy || !attached} onAnswer={onAnswerDecision} onIntervene={onIntervene} onConfirmCommentRequest={onConfirmCommentRequest} onOpenConversation={onOpenConversation} onRefresh={onRefreshDetail} onBack={onClearIssueSelection} onOpenUrl={onOpenUrl} />}
             {view === "report" && <IssueObserveReport report={page?.report} />}
             {view === "policy" && <IssuePolicy key={kernel.workspace} policy={issues.policy} loading={issues.policyLoading} error={issues.policyError} onOpenFile={onOpenPolicyFile} />}
           </div>

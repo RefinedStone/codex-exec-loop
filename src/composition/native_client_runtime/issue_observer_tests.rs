@@ -55,6 +55,7 @@ fn projection(mode: IssueCollectionMode) -> IssueCollectionProjection {
         },
         binding: None,
         catalog_revision: 1,
+        account_quota: Default::default(),
     }
 }
 

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import {answerIssue, issue as draftFixture} from "./fixtures/issue-draft-service.mjs";
 import { EventEmitter, once } from "node:events";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
@@ -35,6 +36,7 @@ let state = { profileId, provider: "jira", revision: 0, status: "disconnected", 
   capabilities: { nativeInput: true, legacyImport: true, keyring: true } };
 let gateway;
 gateway = await fake.startFakeGateway(fake.uniqueTestEndpoint(), [fake.APPROVAL_THREAD_LIST_RECORDING, fake.INTERRUPTED_TURN_RECORDING], {
+  issue: answerIssue,
   threadDocuments: { [threadId]: [resource] }, changedThreadDocuments: changed,
   onRequest(method) { if (method === "akra/context/refresh") events.emit("contextRefreshed"); },
   providerServices(method, params) {
@@ -51,6 +53,10 @@ gateway = await fake.startFakeGateway(fake.uniqueTestEndpoint(), [fake.APPROVAL_
       };
       gateway.sendProviderChange({ provider: "jira", profileId, revision: 1 });
       return { result: structuredClone(state.operation) };
+    }
+    if (method === "akra/providers/jira/draftTarget") {
+      assert.equal(params.key,"ABC-123"); assert.deepEqual(params.connection, state.activeConnection.reference);
+      return {result:{connection:params.connection,cloudId:"11111111-2222-3333-4444-555555555555",projectId:"10001",issueId:"10002"}};
     }
     if (method === "akra/providers/jira/summary") return { result: { siteUrl: "https://sample.atlassian.net", issues: [{
       key: "ABC-123", summary: "Fixture Jira issue", url: resource.url, status: "In Progress", statusCategory: "indeterminate",
@@ -116,6 +122,19 @@ try {
   await page.getByTestId("jira-connect-submit").click();
   await connectedRefresh;
   await page.getByTestId("jira-issue").waitFor();
+  await page.getByRole("button",{name:"마스킹 초안 열기"}).click();
+  const draft = page.getByTestId("issue-draft-panel");
+  await draft.getByTestId("issue-draft-body").fill("## Steps\nfixture repro\n## Impact\nfixture only");
+  const published = draft.getByTestId("issue-draft-publish");
+  assert.equal(await published.isDisabled(),true);
+  await draft.getByTestId("issue-draft-approve").check(); await published.click();
+  await draft.getByTestId("issue-draft-recheck").click();
+  const submissions=draftFixture.requests.filter(r=>r.method==="akra/issue/publish");
+  assert.equal(submissions.length,1); assert.equal(submissions[0].params.target.jira.issueId,"10002");
+  assert.deepEqual(submissions[0].params.target.jira.connection,state.activeConnection.reference);
+  assert.ok(draftFixture.requests.some(r=>r.method==="akra/issue/recheck"));
+  await draft.getByTestId("issue-draft-close").click();
+  console.log("PASS selected Jira work item opened a revision-bound draft and reread an unknown outcome with no retry");
   assert.equal(gateway.receivedMethods.some(method => method.startsWith("akra/resourceVersion/")), false);
   assert.equal(await app.evaluate(() => globalThis.jiraOwnerFixture.httpCalls), 0);
   assert.equal(await page.evaluate(() => typeof window.akra.jira), "undefined");

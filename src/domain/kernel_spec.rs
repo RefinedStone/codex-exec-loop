@@ -117,8 +117,12 @@ spec_names! {
             "Persist the issue collection mode: off or observe. Raising the mode requires Desktop human confirmation; lowering it does not. The answer follows the ledger commit.";
         SetIssueAutonomy => "set_issue_autonomy",
             "Persist the runtime issue autonomy level: off, observe, or propose within the file policy cap. Raising the level requires a current Desktop human confirmation. Reuse command_id and the idempotency key to recover the same result.";
+        ApplyIssueCommentRequest => "apply_issue_comment_request",
+            "Apply a recorded issue comment request with native confirmation.";
         SetIssueBindingPaused => "set_issue_binding_paused",
             "Request a durable pause or resume for one issue binding. The response confirms acceptance; only a completed receipt confirms that in-flight effects have drained. Resuming requires an exact current Desktop human confirmation. Requires a running kernel; other bindings and ordinary tasks continue.";
+        RetryIssueAccountQuota => "retry_issue_account_quota",
+            "Queue one fresh account quota read for a current automatic issue hold. This does not approve work or replay an attempt.";
         AnswerIssueDecision => "answer_issue_decision",
             "Record an answer to one open issue decision. Only a verified Desktop confirmation produces a human answer; human gates reject unverified answers. The current basis is checked atomically; an outdated request closes as superseded without applying its answer. Reuse the idempotency key to recover the same receipt.";
         AskIssueDecision => "ask_issue_decision",
@@ -441,6 +445,8 @@ impl KernelCommandKind {
             | Self::SetIssueAutomationMode
             | Self::SetIssueAutonomy
             | Self::SetIssueBindingPaused
+            | Self::RetryIssueAccountQuota
+            | Self::ApplyIssueCommentRequest
             | Self::AnswerIssueDecision
             | Self::AskIssueDecision
             | Self::HoldIssue
@@ -530,12 +536,15 @@ impl KernelCommandKind {
                 Natural,
                 &[Reason::HumanConfirmationRequired],
             ),
-            Self::SetIssueAutonomy | Self::SetIssueBindingPaused => (
+            Self::SetIssueAutonomy
+            | Self::SetIssueBindingPaused
+            | Self::ApplyIssueCommentRequest => (
                 CommandScope::Issue,
                 Write,
                 Keyed,
                 &[Reason::HumanConfirmationRequired],
             ),
+            Self::RetryIssueAccountQuota => (CommandScope::Issue, Write, Natural, &[]),
             Self::AnswerIssueDecision => (
                 CommandScope::Issue,
                 Write,
@@ -648,6 +657,7 @@ impl KernelCommandKind {
                 | Self::SaveParallelAgentProfiles
                 | Self::SetIssueAutomationMode
                 | Self::SetIssueAutonomy
+                | Self::ApplyIssueCommentRequest
                 | Self::AnswerIssueDecision
                 | Self::AskIssueDecision
                 | Self::HoldIssue
@@ -671,6 +681,7 @@ impl KernelCommandKind {
                 | Self::RefreshPlanning
                 | Self::RequestTaskVerification
                 | Self::SetIssueBindingPaused
+                | Self::RetryIssueAccountQuota
                 | Self::SyncIssues
                 | Self::SubmitDelegation
                 | Self::CancelDelegation

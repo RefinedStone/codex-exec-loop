@@ -22,6 +22,7 @@ interface IssueDetailProps {
   busy: boolean;
   onAnswer(decisionId: string, option: string, note: string, criteria?: import("./protocol").TaskAcceptanceCriterion[]): Promise<void>;
   onIntervene(action: IssueInterventionName, message?: string, confirm?: boolean): Promise<IssueCommandOutcome>;
+  onConfirmCommentRequest?: ((commentId: string) => Promise<IssueCommandOutcome>) | undefined;
   onOpenConversation(): Promise<void>;
   onRefresh(): Promise<void>;
   onBack(): void;
@@ -41,7 +42,7 @@ export function IssueDetail(props: IssueDetailProps) {
 }
 
 /** 현재 선택과 일치하는 최신 응답에서만 공유본을 읽는다. 저장된 판정의 stale 여부는 본문과 별개다. */
-function SelectedIssueDetail({ selectedIssue, detail, loading, stale, error, busy, onAnswer, onIntervene, onOpenConversation, onRefresh, onBack, onOpenUrl }: IssueDetailProps) {
+function SelectedIssueDetail({ selectedIssue, detail, loading, stale, error, busy, onAnswer, onIntervene, onConfirmCommentRequest, onOpenConversation, onRefresh, onBack, onOpenUrl }: IssueDetailProps) {
   const current = !stale && detail?.status === "ready" && sameIssue(selectedIssue, detail.item.issue) ? detail : null;
   // 재조회 중에는 서버의 과거 표시값을 숨기되 사용자 초안만 이슈 상세 수명에 보관한다.
   const [storedDrafts, setDrafts] = useState(() => ({
@@ -112,6 +113,11 @@ function SelectedIssueDetail({ selectedIssue, detail, loading, stale, error, bus
               <p>이 이슈에서 기록한 요청입니다 (최대 100건). 댓글은 승인 영수증이 아니며 자동으로 적용하지 않습니다.</p>
               <ul>{current.comment_requests?.map(record => <li key={record.comment_id}>
                 <code>/akra {record.kind}</code> · 작성자 {record.author_id} · 댓글 {record.comment_id}
+                {record.status && <> · {COMMENT_STATUS[record.status]}</>}
+                {record.status === "pending" && record.kind !== "approve" && onConfirmCommentRequest &&
+                  <button type="button" disabled={busy || loading} onClick={() => void onConfirmCommentRequest(record.comment_id)}>요청 적용</button>}
+                {record.status === "applied" && record.receipt && sameIssue(record.receipt.issue, selectedIssue) &&
+                  <span> · 영수증 <code>{record.receipt.command_id}</code></span>}
               </li>)}</ul>
             </section>}
             <IssueDecisionCards decisions={current.open_decisions ?? []} history={current.decision_history} asOfUnixMs={current.as_of_unix_ms} busy={busy || loading} onAnswer={onAnswer} drafts={drafts.decisions} onDraftChange={(key, draft) => {
@@ -151,3 +157,8 @@ function SelectedIssueDetail({ selectedIssue, detail, loading, stale, error, bus
     </article>
   );
 }
+
+const COMMENT_STATUS = {
+  pending: "확인 대기", applying: "적용 확인 중", applied: "적용됨",
+  expired: "만료됨", stale: "현재 기준과 다름", uncertain: "결과 확인 필요", display_only: "표시 전용",
+} as const;

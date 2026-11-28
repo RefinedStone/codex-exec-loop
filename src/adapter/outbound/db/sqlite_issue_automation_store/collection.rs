@@ -366,6 +366,7 @@ fn project_control(
         state: state.clone(),
         binding,
         catalog_revision: super::triage::catalog_revision(connection, workspace)?,
+        account_quota: super::quota::projection(connection, workspace)?,
     })
 }
 

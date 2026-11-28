@@ -217,6 +217,13 @@ impl IssueCoordinatorService {
                 return Ok(());
             }
         };
+        if !self.check_account_quota(
+            crate::application::port::outbound::issue_account_quota_port::IssueQuotaLane::Arbiter,
+            cancel,
+            (committed, || Some(runtime.model.read_account_quota())),
+        )? {
+            return Ok(());
+        }
         let claim = cancel.commit_if_active(|| {
             self.store.claim_issue_arbiter(
                 &self.workspace,

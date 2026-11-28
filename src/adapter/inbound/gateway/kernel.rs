@@ -983,6 +983,7 @@ fn confirmation_command(
             | StoredCommand::WaiveCriterion { .. }
             | StoredCommand::SetIssueAutomationMode { .. }
             | StoredCommand::SetIssueAutonomy { .. }
+            | StoredCommand::ApplyIssueCommentRequest { .. }
             | StoredCommand::SetIssueBindingPaused { paused: false, .. }),
         ) => Ok((command, descriptor)),
         _ => Err(invalid_confirmation()),
@@ -997,6 +998,10 @@ fn target_matches_command(
         return false;
     }
     match (target, command) {
+        (
+            IssueConfirmationTarget::CommentRequest { command_id, .. },
+            StoredCommand::ApplyIssueCommentRequest { key },
+        ) => key.command_id().is_ok_and(|id| &id == command_id),
         (
             IssueConfirmationTarget::BindingResume {
                 command_id,

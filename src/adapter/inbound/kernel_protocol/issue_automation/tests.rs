@@ -41,6 +41,7 @@ fn projection(mode: IssueCollectionMode) -> IssueCollectionProjection {
     .unwrap();
     IssueCollectionProjection {
         catalog_revision: 13,
+        account_quota: Default::default(),
         state: StoredIssueCollection {
             config: IssueCollectionConfig { mode },
             epoch: 3,

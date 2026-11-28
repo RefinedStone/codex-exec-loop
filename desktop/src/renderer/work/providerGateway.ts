@@ -4,7 +4,7 @@ import type { LinearBridge, LinearFilters, LinearIssue, LinearSummary } from "..
 import {
   credentialMessage, isCredentialError, isProfileId, isProvider, isRevision, operationPending,
   parseConfiguration, parseOperationReceipt, parseProviderState, publicRecord, sameConnection,
-  type ConnectionConfiguration, type ConnectionRef, type CredentialError, type CredentialOperationRequest,
+  parseConnectionRef, type ConnectionConfiguration, type ConnectionRef, type CredentialError, type CredentialOperationRequest,
   type LegacyAvailability, type OperationReceipt, type Provider, type ProviderConnectionBridge,
   type ProviderCredentialBridge, type ProviderCredentialState,
 } from "../../shared/providerCredentials";
@@ -302,6 +302,12 @@ export function createProviderGateway(request: GatewayRequest, native: ProviderC
     },
     jira: {
       ...bridge(jira), summary: () => jira.read("summary", {}, parseJiraSummary),
+      draftTarget: key => jira.read("draftTarget", {key}, value => {
+        const item=publicRecord(value,["connection","cloudId","projectId","issueId"]);
+        const connection=parseConnectionRef(item.connection); const projectId=text(item.projectId,32),issueId=text(item.issueId,32);
+        if(connection.provider!=="jira" || !/^\d+$/.test(projectId) || !/^\d+$/.test(issueId)) throw new ProviderGatewayError("corrupt");
+        return {connection, cloudId:text(item.cloudId,64),projectId,issueId};
+      }),
       issuePrompt: issueKey => {
         if (!isJiraIssueKey(issueKey)) return Promise.reject(new ProviderGatewayError("invalidRequest"));
         return jira.read("issuePrompt", { key: issueKey }, parsePrompt);

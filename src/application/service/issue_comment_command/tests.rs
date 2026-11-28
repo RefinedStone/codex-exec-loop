@@ -12,12 +12,14 @@ use crate::domain::issue_automation::source::*;
 use crate::domain::issue_automation::{IssueAutomationSnapshot, TrackedIssue};
 use crate::domain::issue_policy::{IssueDisclosurePolicy, IssuePolicy};
 use crate::domain::issue_work::{
-    IssueComparisonBasis, IssueFieldHash, IssueProjectScope, IssueSharedCopy,
+    IssueComparisonBasis, IssueFieldHash, IssueProjectScope, IssueReference, IssueSharedCopy,
 };
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+mod request;
 
 const TRUSTED: &str = "U_trusted";
 const ENABLED: &str = r#"

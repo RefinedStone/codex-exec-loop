@@ -129,6 +129,17 @@ pub trait PlanningWorkControlRepositoryPort: Send + Sync {
         workspace: &str,
         work_order_id: &str,
     ) -> Result<PlanningWorkControl>;
+    /// The command outcome commits atomically with the control effect. Absence
+    /// proves there was no effect; a read failure does not.
+    fn load_work_order_control_command(
+        &self,
+        _workspace: &str,
+        _work_order_id: &str,
+        _command_id: &str,
+        _action: PlanningWorkControlAction,
+    ) -> Result<Option<PlanningWorkControl>> {
+        bail!("work control command history is unavailable")
+    }
     /// 신규 작업 등록 전에도 안정 work_order_id를 예약할 수 있다.
     /// 같은 command_id 재시도는 당시 결과를 돌려주고, 다른 내용으로 재사용하면 거절한다.
     fn apply_work_order_control(
@@ -138,6 +149,13 @@ pub trait PlanningWorkControlRepositoryPort: Send + Sync {
         command_id: &str,
         action: PlanningWorkControlAction,
     ) -> Result<PlanningWorkControl>;
+    fn apply_confirmed_work_order_control(
+        &self,
+        _workspace: &str,
+        _request: &ConfirmedWorkControl<'_>,
+    ) -> Result<Option<PlanningWorkControl>> {
+        bail!("confirmed work control is unavailable")
+    }
     fn append_work_order_instruction(
         &self,
         workspace: &str,
@@ -150,4 +168,12 @@ pub trait PlanningWorkControlRepositoryPort: Send + Sync {
         work_order_id: &str,
     ) -> Result<Vec<PlanningWorkInstruction>>;
     fn work_order_cleanup_allowed_for_task(&self, workspace: &str, task_id: &str) -> Result<bool>;
+}
+
+pub struct ConfirmedWorkControl<'a> {
+    pub work_order_id: &'a str,
+    pub command_id: &'a str,
+    pub action: PlanningWorkControlAction,
+    pub expected_epoch: u64,
+    pub authorize: &'a dyn Fn() -> Result<bool>,
 }

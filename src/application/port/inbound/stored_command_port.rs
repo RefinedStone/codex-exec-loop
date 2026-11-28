@@ -105,6 +105,10 @@ pub struct AskIssueDecisionOption {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoredCommand {
+    RetryIssueAccountQuota {
+        lane: crate::application::port::outbound::issue_account_quota_port::IssueQuotaLane,
+        expected_revision: u64,
+    },
     SetIssueBindingPaused {
         command_id: String,
         binding_id: String,
@@ -125,6 +129,9 @@ pub enum StoredCommand {
     },
     InterveneIssue {
         request: IssueInterventionRequest,
+    },
+    ApplyIssueCommentRequest {
+        key: crate::domain::issue_automation::comment_command::IssueCommentRequestKey,
     },
     AnswerIssueDecision {
         criteria: Option<Vec<crate::domain::issue_automation::criteria::IssueWorkCriterion>>,
@@ -208,6 +215,8 @@ impl StoredCommand {
             Self::SetIssueAutomationMode { .. } => KernelCommandKind::SetIssueAutomationMode,
             Self::SetIssueAutonomy { .. } => KernelCommandKind::SetIssueAutonomy,
             Self::SetIssueBindingPaused { .. } => KernelCommandKind::SetIssueBindingPaused,
+            Self::RetryIssueAccountQuota { .. } => KernelCommandKind::RetryIssueAccountQuota,
+            Self::ApplyIssueCommentRequest { .. } => KernelCommandKind::ApplyIssueCommentRequest,
             Self::AnswerIssueDecision { .. } => KernelCommandKind::AnswerIssueDecision,
             Self::AskIssueDecision { .. } => KernelCommandKind::AskIssueDecision,
             Self::CreateTask { .. } => KernelCommandKind::CreateTask,
@@ -231,8 +240,14 @@ pub enum StoredCommandResult {
     IssueBindingPauseRequested {
         command: Box<StoredIssueBindingPauseCommand>,
     },
+    IssueAccountQuotaRetryRequested {
+        accepted: bool,
+    },
     /// 예약 완료이며 검증 실행 성공을 뜻하지 않는다.
-    TaskVerificationRequested { attempt_id: String, changed: bool },
+    TaskVerificationRequested {
+        attempt_id: String,
+        changed: bool,
+    },
     EvidencePrepared {
         preparation: Box<TaskEvidencePrepared>,
     },
@@ -313,7 +328,9 @@ pub enum StoredCommandResult {
         planning_revision: Option<i64>,
     },
     /// `directory` 는 프로필 파일을 쓴 작업 공간이다.
-    ParallelAgentProfilesSaved { directory: String },
+    ParallelAgentProfilesSaved {
+        directory: String,
+    },
 }
 
 impl StoredCommandResult {

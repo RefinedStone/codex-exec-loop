@@ -27,7 +27,10 @@ impl Fixture {
         use std::os::unix::fs::PermissionsExt;
         let directory = IsolatedDirectory::create().unwrap();
         let path = directory.root.join("codex-fixture");
-        let fixture = include_str!("fixture.py").replace("D2_SCENARIO", scenario);
+        // This fixture is executed by its shebang, including from a Windows checkout in WSL.
+        let fixture = include_str!("fixture.py")
+            .replace("\r\n", "\n")
+            .replace("D2_SCENARIO", scenario);
         fs::write(&path, fixture).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         Self(directory)
@@ -65,6 +68,29 @@ fn run(
         Duration::from_secs(5),
         started,
     )
+}
+
+#[cfg(unix)]
+#[test]
+fn quota_probe_reads_once_without_preparing_a_thread() {
+    for (scenario, quota) in [
+        ("completed", IssueAccountQuota::Allowed),
+        ("quota_exhausted", IssueAccountQuota::Exhausted),
+        ("quota_reply_lost", IssueAccountQuota::Unknown),
+    ] {
+        let fixture = Fixture::new(scenario);
+        assert_eq!(fixture.backend().read_account_quota(), quota, "{scenario}");
+        assert_eq!(
+            fixture.calls().lines().collect::<Vec<_>>(),
+            [
+                "initialize",
+                "initialized",
+                "config/read",
+                "account/read",
+                "account/rateLimits/read"
+            ]
+        );
+    }
 }
 
 #[cfg(unix)]

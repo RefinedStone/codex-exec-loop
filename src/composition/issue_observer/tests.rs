@@ -47,6 +47,7 @@ fn projection(mode: IssueCollectionMode, epoch: u64) -> IssueCollectionProjectio
         },
         binding: None,
         catalog_revision: epoch,
+        account_quota: Default::default(),
     }
 }
 

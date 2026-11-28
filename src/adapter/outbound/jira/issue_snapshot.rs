@@ -136,9 +136,18 @@ impl IssueFieldRequirementPort for JiraIssueSnapshotAdapter {
         request: IssueFieldRequirementRequest,
     ) -> Result<IssueFieldRequirementResponse> {
         self.ensure_this_site(&request.issue)?;
-        self.known_issue(&request.issue)?;
+        let issue = self.known_issue(&request.issue)?;
         let meta = self.edit_metadata(&request.issue.issue_id)?;
-        Ok(requirements(meta))
+        let mut response = requirements(meta);
+        for kind in adf_to_markdown(&issue.fields.description).unsupported {
+            response
+                .unsupported_required_fields
+                .push(IssueTemplateUnsupportedInput {
+                    label: "Description".into(),
+                    reason: format!("unsupported Jira content: {kind}"),
+                });
+        }
+        Ok(response)
     }
 }
 
@@ -653,6 +662,7 @@ mod tests {
                     "Description",
                     "the validator has no rule for a required body"
                 ),
+                unsupported("Description", "unsupported Jira content: panel"),
             ]
         );
         assert_eq!(calls.lock().unwrap()[1], ISSUE_PATH);

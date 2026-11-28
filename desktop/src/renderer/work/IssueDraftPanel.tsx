@@ -88,7 +88,7 @@ export function IssueDraftPanel({ request, reviewJobs, target, onClose }: { read
     void open(false, generation);
     return () => { epoch.current += 1; previewRequest.current += 1; };
     // 대상이 바뀌면 처음부터 다시 읽는다.
-  }, [request, target.cwd, target.owner, target.repository, target.number]);
+  }, [request, target]);
 
   const loaded = openState.phase === "loaded";
   useEffect(() => {
@@ -122,7 +122,7 @@ export function IssueDraftPanel({ request, reviewJobs, target, onClose }: { read
       current = false;
       window.clearTimeout(timer);
     };
-  }, [request, target.cwd, target.owner, target.repository, target.number, loaded, title, body, spans, labelInput, previewCount]);
+  }, [request, target, loaded, title, body, spans, labelInput, previewCount]);
 
   const invalidatePreview = (changedText = false) => {
     previewRequest.current += 1;
@@ -201,7 +201,7 @@ export function IssueDraftPanel({ request, reviewJobs, target, onClose }: { read
       setNotice("결과 확인을 그만두었습니다. 다시 게시하려면 원격 글을 다시 읽고 승인하세요.");
     });
 
-  const name = `${target.owner}/${target.repository}#${target.number}`;
+  const name = "jira" in target ? target.displayKey : `${target.owner}/${target.repository}#${target.number}`;
   if (openState.phase !== "loaded") return <IssueDraftOpening name={name} state={openState} onClose={onClose} />;
 
   const opened = openState.opened;

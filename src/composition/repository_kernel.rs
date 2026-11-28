@@ -37,8 +37,6 @@ use crate::application::service::issue_binding_admission::IssueBindingAdmission;
 use crate::application::service::issue_collection::IssueCollectionService;
 #[cfg(test)]
 use crate::composition::issue_collection::build_for_kernel_test_with_admission as build_issue_collection;
-#[cfg(not(test))]
-use crate::composition::issue_collection::build_with_admission as build_issue_collection;
 use crate::composition::kernel_host::{KernelCallError, KernelClientHandle, KernelHost};
 use crate::composition::native_client_runtime::NativeClientRuntime;
 use crate::composition::production;
@@ -206,10 +204,10 @@ impl RepositoryKernelRegistry {
                 workspace,
                 &candidate.repository_key,
             )?;
-            Ok(build_issue_collection_with_providers(
+            Ok(super::issue_collection::build_with_provider_services(
                 workspace,
                 admission,
-                self.providers.clone(),
+                (self.providers.clone(), self.app_server.clone()),
             ))
         })
     }
@@ -371,7 +369,7 @@ impl RepositoryKernelRegistry {
         if let Some(factory) = &self.attach_runtime {
             return build_kernel_for_workspace_with(
                 workspace_root,
-                None,
+                (None, None),
                 |lock, issues, admission| {
                     assemble_recovered_kernel_with_runtime(
                         lock,
@@ -609,34 +607,23 @@ pub(crate) fn build_kernel_for_workspace(
     build_kernel_for_workspace_with_providers(workspace_dir, app_server, None)
 }
 
-fn build_issue_collection_with_providers(
-    workspace: &str,
-    admission: Arc<IssueBindingAdmission>,
-    providers: Option<super::provider_credentials::ProviderServices>,
-) -> Arc<IssueCollectionService> {
-    match providers {
-        Some(providers) => super::issue_collection::build_with_provider_services(
-            workspace,
-            admission,
-            Some(providers),
-        ),
-        None => build_issue_collection(workspace, admission),
-    }
-}
-
 fn build_kernel_for_workspace_with_providers(
     workspace_dir: &str,
     app_server: Option<SharedAppServer>,
     providers: Option<super::provider_credentials::ProviderServices>,
 ) -> Result<RepositoryKernel> {
-    build_kernel_for_workspace_with(workspace_dir, providers, |lock, issues, admission| {
-        assemble_recovered_kernel(lock, workspace_dir, app_server, issues, admission)
-    })
+    build_kernel_for_workspace_with(
+        workspace_dir,
+        (providers, app_server.clone()),
+        |lock, issues, admission| {
+            assemble_recovered_kernel(lock, workspace_dir, app_server, issues, admission)
+        },
+    )
 }
 
 fn build_kernel_for_workspace_with(
     workspace_dir: &str,
-    providers: Option<super::provider_credentials::ProviderServices>,
+    services: super::issue_collection::IssueRuntimeServices,
     assemble: impl FnOnce(
         RepositoryKernelLock,
         Arc<IssueCollectionService>,
@@ -656,7 +643,21 @@ fn build_kernel_for_workspace_with(
     // 자동 시험은 같은 서비스에 외부 접근이 없는 Origin/Source를 주입한다.
     // 저장 명령과 관찰자가 같은 서비스의 모드/읽기 epoch 경계를 공유한다.
     let admission = Arc::new(IssueBindingAdmission::new());
-    let issues = build_issue_collection_with_providers(workspace_dir, admission.clone(), providers);
+    #[cfg(not(test))]
+    let issues = super::issue_collection::build_with_provider_services(
+        workspace_dir,
+        admission.clone(),
+        services,
+    );
+    #[cfg(test)]
+    let issues = match services {
+        (None, None) => build_issue_collection(workspace_dir, admission.clone()),
+        services => super::issue_collection::build_with_provider_services(
+            workspace_dir,
+            admission.clone(),
+            services,
+        ),
+    };
     assemble(lock, issues, admission)
 }
 
@@ -686,6 +687,9 @@ fn assemble_recovered_kernel_with_runtime(
 ) -> Result<RepositoryKernel> {
     // Every production and test runtime uses this same recovery and attachment boundary.
     recover_issue_binding_pause(&issues)?;
+    if let Some(comments) = issues.comment_command_service() {
+        comments.recover_requests()?;
+    }
     let mut runtime = build_runtime()?;
     runtime.attach_kernel_event_log(production::kernel_event_log_port(), workspace_dir);
     runtime.attach_repository_observer(production::repository_state_port());

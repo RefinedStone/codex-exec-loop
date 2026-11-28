@@ -218,6 +218,22 @@ pub enum IssueDecisionSaveResult {
 /// 저장소 runtime의 별도 장부다. planning DB와 schema를 공유하지 않는다.
 /// 같은 안정 ID의 재삽입은 기존 내용을 보존한다. 갱신은 revision CAS로만 한다.
 pub trait IssueAutomationStorePort: Send + Sync {
+    fn issue_quota_wait(
+        &self,
+        _workspace: &str,
+        _lane: super::issue_account_quota_port::IssueQuotaLane,
+    ) -> Result<Option<super::issue_account_quota_port::IssueQuotaWait>> {
+        anyhow::bail!("issue quota storage is unavailable")
+    }
+
+    /// Compare and advance the durable lane revision, even when the new hold is empty.
+    fn change_issue_quota_wait(
+        &self,
+        _workspace: &str,
+        _change: super::issue_account_quota_port::IssueQuotaWaitChange,
+    ) -> Result<bool> {
+        anyhow::bail!("issue quota storage is unavailable")
+    }
     fn issue_binding_pause_state(
         &self,
         _workspace: &str,

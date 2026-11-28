@@ -52,6 +52,7 @@ const commands = {
   steer_issue: { type: "steer_issue", issue, command_id: "steer-1", message: "Check the migration" },
   take_over_issue: { type: "take_over_issue", issue, command_id: "take-over-1" },
   retriage_issue: { type: "retriage_issue", issue, command_id: "retriage-1" },
+  apply_issue_comment_request: { type: "apply_issue_comment_request", issue, comment_id: "comment-1" },
   cancel_issue_work: { type: "cancel_issue_work", issue, command_id: "cancel-1", confirm: true },
   track_issue: { type: "track_issue", issue, command_id: "track-1" },
   untrack_issue: { type: "untrack_issue", issue, command_id: "untrack-1" },
@@ -82,6 +83,7 @@ const commands = {
     type: "promote_draft", draft_name: "draft-1", kind: "full_planning", expected_planning_revision: 7,
   },
   save_parallel_agent_profiles: { type: "save_parallel_agent_profiles", profiles: [] },
+  retry_issue_account_quota: { type: "retry_issue_account_quota", lane: "start", expected_revision: 7 },
 } as const satisfies Record<KernelCommand["type"], KernelCommand>;
 
 function harness() {

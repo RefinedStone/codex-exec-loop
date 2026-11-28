@@ -69,39 +69,32 @@ pub(crate) fn build_with_restart_registry(
     build_with_admission_and_restart_registry(workspace_dir, admission, restart_registry)
 }
 
-pub(crate) fn build_with_admission(
-    workspace_dir: &str,
-    admission: Arc<crate::application::service::issue_binding_admission::IssueBindingAdmission>,
-) -> Arc<IssueCollectionService> {
-    build_with_admission_and_restart_registry(workspace_dir, admission, build_restart_registry())
-}
-
 fn build_with_admission_and_restart_registry(
     workspace_dir: &str,
     admission: Arc<crate::application::service::issue_binding_admission::IssueBindingAdmission>,
     restart_registry: Arc<dyn IssueAutomationRestartRegistryPort>,
 ) -> Arc<IssueCollectionService> {
-    build_with_runtime_services(workspace_dir, admission, restart_registry, None)
+    build_with_runtime_services(workspace_dir, admission, restart_registry, (None, None))
 }
+
+pub(super) type IssueRuntimeServices = (
+    Option<super::provider_credentials::ProviderServices>,
+    Option<crate::adapter::outbound::app_server::SharedAppServer>,
+);
 
 pub(crate) fn build_with_provider_services(
     workspace_dir: &str,
     admission: Arc<crate::application::service::issue_binding_admission::IssueBindingAdmission>,
-    providers: Option<super::provider_credentials::ProviderServices>,
+    services: IssueRuntimeServices,
 ) -> Arc<IssueCollectionService> {
-    build_with_runtime_services(
-        workspace_dir,
-        admission,
-        build_restart_registry(),
-        providers,
-    )
+    build_with_runtime_services(workspace_dir, admission, build_restart_registry(), services)
 }
 
 fn build_with_runtime_services(
     workspace_dir: &str,
     admission: Arc<crate::application::service::issue_binding_admission::IssueBindingAdmission>,
     restart_registry: Arc<dyn IssueAutomationRestartRegistryPort>,
-    providers: Option<super::provider_credentials::ProviderServices>,
+    (providers, app_server): IssueRuntimeServices,
 ) -> Arc<IssueCollectionService> {
     let store = Arc::new(SqliteIssueAutomationStoreAdapter::new(|workspace| {
         let location =
@@ -243,6 +236,7 @@ fn build_with_runtime_services(
             Arc::new(crate::adapter::outbound::git::issue_assessment_evidence::GitIssueAssessmentEvidenceAdapter::new()),
         )
         .with_feedback(feedback)
+        .with_account_quota(super::production::issue_quota_adapter(app_server))
         .with_issue_binding_admission(admission.clone())
         .with_publication_journal(publication.clone()),
     );
@@ -282,7 +276,7 @@ fn build_comment_commands(
         crate::application::service::issue_intervention::IssueInterventionService::new(
             workspace_dir.to_owned(),
             store.clone(),
-            execution,
+            execution.clone(),
             Arc::new(UnavailableIssueWorkSteering),
         ),
     );
@@ -300,7 +294,8 @@ fn build_comment_commands(
                 FilesystemIssueAutomationPolicySourceAdapter::new(),
             )),
             interventions,
-        ),
+        )
+        .with_request_execution(execution),
     )
 }
 

@@ -97,6 +97,35 @@ impl StoredCommandService {
         context: Option<&StoredCommandContext>,
     ) -> Result<StoredCommandResult> {
         match command {
+            StoredCommand::RetryIssueAccountQuota {
+                lane,
+                expected_revision,
+            } => {
+                let coordinator = self
+                    .issues
+                    .as_ref()
+                    .and_then(|issues| issues.coordinator_service())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "account quota retry requires the running repository kernel"
+                        )
+                    })?;
+                Ok(StoredCommandResult::IssueAccountQuotaRetryRequested {
+                    accepted: coordinator.retry_account_quota(lane, expected_revision)?,
+                })
+            }
+            StoredCommand::ApplyIssueCommentRequest { key } => {
+                let context = context.ok_or(IssueConfirmationError::Required)?;
+                let receipt = self
+                    .issues
+                    .as_ref()
+                    .and_then(|issues| issues.comment_command_service())
+                    .ok_or_else(|| anyhow::anyhow!("comment requests are unavailable"))?
+                    .confirm_request(&key, context)?;
+                Ok(StoredCommandResult::IssueIntervened {
+                    receipt: Box::new(receipt),
+                })
+            }
             StoredCommand::SetIssueBindingPaused {
                 command_id,
                 binding_id,

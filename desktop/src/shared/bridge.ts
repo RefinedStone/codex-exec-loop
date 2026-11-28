@@ -7,6 +7,7 @@ import type { SkillsBridge } from "./skills";
 import type { VaultApprovedMapping, VaultRestoreTarget, VaultRestoreViewState } from "./vaultRestore";
 import type { ZoomDirection, ZoomFactors, ZoomScope } from "./zoom";
 import type { ConfirmTaskCriterionWaiverRequest, ConfirmIssueBindingResumeRequest, ConfirmIssueAutonomyRequest, ConfirmIssueAutomationModeRequest, ConfirmIssueDecisionRequest, IssueConfirmationResponse } from "./issueConfirmation";
+import type { ConfirmIssueCommentRequest } from "./issueConfirmation";
 import type { DiagnosticsBridge } from "./diagnostics";
 
 export type ConnectionPhase = "connecting" | "connected" | "disconnected";
@@ -48,6 +49,7 @@ export const IPC_CHANNELS = {
   confirmIssueAutomationMode: "akra:confirm-issue-automation-mode",
   confirmIssueAutonomy: "akra:confirm-issue-autonomy",
   confirmIssueBindingResume: "akra:confirm-issue-binding-resume",
+  confirmIssueCommentRequest: "akra:confirm-issue-comment-request",
   confirmTaskCriterionWaiver: "akra:confirm-task-criterion-waiver",
   gitBranchSummary: "akra:git-branch-summary",
   gitCommitDiff: "akra:git-commit-diff",
@@ -201,7 +203,9 @@ export interface JiraSummary {
 }
 
 /** Jira 업무 패널의 renderer facade이다. 인증과 HTTP는 Gateway가 소유한다. */
+export interface JiraDraftCoordinate { readonly connection:import("./providerCredentials").ConnectionRef; readonly cloudId:string; readonly projectId:string; readonly issueId:string }
 export interface JiraBridge extends ProviderConnectionBridge {
+  draftTarget(key:string): Promise<JiraDraftCoordinate>;
   currentVersion(request: { readonly key: string; readonly url: string }): Promise<{ version: string }>;
   summary(): Promise<JiraSummary>;
   issuePrompt(key: string): Promise<string>;
@@ -458,6 +462,7 @@ export interface AkraBridge {
   confirmIssueAutomationMode(request: ConfirmIssueAutomationModeRequest): Promise<IssueConfirmationResponse>;
   confirmIssueAutonomy(request: ConfirmIssueAutonomyRequest): Promise<IssueConfirmationResponse>;
   confirmIssueBindingResume(request: ConfirmIssueBindingResumeRequest): Promise<IssueConfirmationResponse>;
+  confirmIssueCommentRequest(request: ConfirmIssueCommentRequest): Promise<IssueConfirmationResponse>;
   confirmTaskCriterionWaiver(request: ConfirmTaskCriterionWaiverRequest): Promise<IssueConfirmationResponse>;
   /** 브랜치가 기준 브랜치 뒤에 더한 커밋과 그 브랜치의 PR 을 읽는다. `fresh` 이면 잠깐 저장해 둔 PR 을 쓰지 않고 다시 묻는다. */
   gitBranchSummary(cwd: string, fresh: boolean): Promise<GitBranchSummary>;

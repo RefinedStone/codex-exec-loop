@@ -1,10 +1,78 @@
 use super::*;
 use crate::application::port::outbound::planning_authority_port::PlanningAuthorityPort;
 use crate::application::port::outbound::planning_work_order_repository_port::{
-    PlanningWorkControlAction, PlanningWorkControlRepositoryPort, PlanningWorkInstruction,
-    PlanningWorkInstructionAdmission, PlanningWorkOrderRepositoryPort,
+    ConfirmedWorkControl, PlanningWorkControlAction, PlanningWorkControlRepositoryPort,
+    PlanningWorkInstruction, PlanningWorkInstructionAdmission, PlanningWorkOrderRepositoryPort,
 };
 use crate::domain::planning::TaskStatus;
+
+#[test]
+fn confirmed_control_persists_the_original_outcome_and_fences_stale_execution() {
+    let (workspace, adapter) = fixture("confirmed-control-outcome");
+    let held = adapter
+        .apply_work_order_control(
+            &workspace,
+            "order-1",
+            "ordinary-hold",
+            PlanningWorkControlAction::Hold,
+        )
+        .unwrap();
+    let input = ConfirmedWorkControl {
+        work_order_id: "order-1",
+        command_id: "comment-release",
+        action: PlanningWorkControlAction::Release,
+        expected_epoch: held.authorization_epoch,
+        authorize: &|| Ok(false),
+    };
+    assert_eq!(
+        adapter
+            .apply_confirmed_work_order_control(&workspace, &input)
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        adapter
+            .load_work_order_control(&workspace, "order-1")
+            .unwrap(),
+        held
+    );
+    let release = adapter
+        .apply_confirmed_work_order_control(
+            &workspace,
+            &ConfirmedWorkControl {
+                authorize: &|| Ok(true),
+                ..input
+            },
+        )
+        .unwrap()
+        .unwrap();
+    let replacement = adapter
+        .apply_work_order_control(
+            &workspace,
+            "order-1",
+            "ordinary-hold-after-release",
+            PlanningWorkControlAction::Hold,
+        )
+        .unwrap();
+    let reopened = SqlitePlanningAuthorityAdapter::new();
+    assert_eq!(
+        reopened
+            .load_work_order_control_command(
+                &workspace,
+                "order-1",
+                "comment-release",
+                PlanningWorkControlAction::Release
+            )
+            .unwrap(),
+        Some(release)
+    );
+    assert_eq!(
+        reopened
+            .load_work_order_control(&workspace, "order-1")
+            .unwrap(),
+        replacement
+    );
+}
 
 #[test]
 fn work_control_hold_and_release_fence_old_approval_even_after_source_change() {

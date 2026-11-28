@@ -53,6 +53,10 @@ pub enum IssueAssessmentModelStatus {
 }
 
 pub trait IssueAssessmentModelPort: Send + Sync {
+    fn read_account_quota(&self) -> super::issue_account_quota_port::IssueAccountQuota {
+        super::issue_account_quota_port::IssueAccountQuota::Unknown
+    }
+
     fn configuration(&self) -> Result<IssueAssessmentModelConfiguration>;
 
     /// Only the caller that just committed a new durable claim may dispatch. Returning

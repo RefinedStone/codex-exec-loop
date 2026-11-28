@@ -63,8 +63,52 @@ pub(super) fn make_pre_auto_schema(connection: &Connection) {
 
 pub(super) fn make_pre_comment_command_schema(connection: &Connection) {
     connection
-        .execute_batch("DROP TABLE issue_comment_commands;")
+        .execute_batch("DROP TABLE issue_comment_requests; DROP TABLE issue_account_quota; DROP TABLE issue_comment_commands;")
         .unwrap();
+}
+
+#[test]
+fn versions_sixteen_and_seventeen_upgrade_without_replacing_existing_tables() {
+    for version in [16, 17] {
+        verify_quota_and_comment_upgrade(version);
+    }
+}
+
+fn verify_quota_and_comment_upgrade(version: i64) {
+    let fixture = Fixture::new(&format!("issue-ledger-migration-{version}"));
+    let original = fixture.adapter().ensure_collection(fixture.cwd()).unwrap();
+    let connection = Connection::open(fixture.database()).unwrap();
+    connection
+        .execute_batch("DROP TABLE issue_comment_requests;")
+        .unwrap();
+    if version == 16 {
+        connection
+            .execute_batch("DROP TABLE issue_account_quota;")
+            .unwrap();
+    }
+    connection
+        .pragma_update(None, "user_version", version)
+        .unwrap();
+    validate_schema_version(&connection, version).unwrap();
+    drop(connection);
+
+    let adapter = fixture.adapter();
+    assert_eq!(adapter.ensure_collection(fixture.cwd()).unwrap(), original);
+    assert_eq!(
+        adapter
+            .issue_quota_wait(
+                fixture.cwd(),
+                crate::domain::issue_automation::collection::IssueQuotaLane::Start
+            )
+            .unwrap(),
+        None
+    );
+    let connection = Connection::open(fixture.database()).unwrap();
+    assert_eq!(
+        schema_identity(&connection).unwrap(),
+        (APPLICATION_ID, SCHEMA_VERSION)
+    );
+    validate_schema(&connection).unwrap();
 }
 
 pub(super) fn make_pre_binding_pause_schema(connection: &Connection) {

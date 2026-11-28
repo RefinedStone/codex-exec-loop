@@ -17,6 +17,7 @@ use zeroize::Zeroizing;
 
 mod feedback;
 mod jira;
+mod jira_draft;
 mod jira_source;
 mod linear;
 mod linear_issue;
@@ -680,6 +681,48 @@ impl ProviderWorkApiPort for ProviderHttpAdapter {
                 .ok_or(ProviderCredentialError::Corrupt)?,
         )
     }
+    fn jira_draft_ids(
+        &self,
+        metadata: &ConnectionMetadata,
+        token: &SecretToken,
+        key: &str,
+    ) -> CredentialResult<(String, String, String)> {
+        if !valid_jira_key(key) || metadata.configuration.deployment != Some(JiraDeployment::Cloud)
+        {
+            return Err(ProviderCredentialError::InvalidRequest);
+        }
+        let cancelled = AtomicBool::new(false);
+        let deadline = Instant::now() + REQUEST_TIMEOUT;
+        let tenant = self.jira_cloud_read(
+            metadata,
+            token,
+            JiraCloudRead::tenant_info(),
+            &cancelled,
+            deadline,
+        )?;
+        let cloud = bounded_text(&tenant["cloudId"], 64)?;
+        let relative = format!("issue/{key}");
+        let issue = self.jira_cloud_read(
+            metadata,
+            token,
+            JiraCloudRead::get_rest(&relative, vec![("fields".into(), "project".into())]),
+            &cancelled,
+            deadline,
+        )?;
+        if issue["key"].as_str() != Some(key) {
+            return Err(ProviderCredentialError::Conflict);
+        }
+        let project = bounded_text(&issue["fields"]["project"]["id"], 32)?;
+        let id = bounded_text(&issue["id"], 32)?;
+        if ![&project, &id]
+            .iter()
+            .all(|v| v.bytes().all(|b| b.is_ascii_digit()))
+        {
+            return Err(ProviderCredentialError::Corrupt);
+        }
+        Ok((cloud, project, id))
+    }
+
     fn jira_current_version(
         &self,
         metadata: &ConnectionMetadata,
