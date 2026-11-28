@@ -1,5 +1,7 @@
 use super::*;
-use crate::application::service::task_evidence::preview::{PreviewKind, PreviewTarget};
+use crate::application::port::inbound::task_evidence_query_port::{
+    PreviewKind, PreviewTarget, TaskEvidenceQueryPort,
+};
 
 #[test]
 fn preview_masks_only_matching_sealed_bytes_and_rejects_a_changed_identity() {

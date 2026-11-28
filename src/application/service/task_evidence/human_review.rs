@@ -1,5 +1,8 @@
-use super::preview::{PreviewKind, PreviewTarget, sanitized_text};
+use super::preview::sanitized_text;
 use super::*;
+use crate::application::port::inbound::task_evidence_query_port::{
+    PreviewKind, PreviewTarget, TaskEvidenceQueryPort,
+};
 use crate::domain::planning::TaskAcceptanceChannel;
 use crate::domain::planning::evidence::{HumanEvidenceDecision, HumanEvidenceReview};
 use sha2::{Digest, Sha256};
