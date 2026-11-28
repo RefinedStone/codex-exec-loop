@@ -2833,6 +2833,7 @@ fn real_wire_values_match_the_schemas_of_the_spec() {
             subject: AttentionSubject {
                 kind: AttentionSubjectKind::Task,
                 id: "task-1".to_string(),
+                issue: None,
             },
             revision: "2026-11-26T01:02:03Z".to_string(),
             summary: "Task".to_string(),

@@ -2065,13 +2065,29 @@ impl NativeClientRuntime {
             .issues(query)
     }
 
-    pub(super) fn open_issue_decisions(
+    pub(super) fn live_attention_sources(
         &self,
-    ) -> anyhow::Result<Vec<crate::domain::issue_automation::decision::StoredIssueDecision>> {
-        self.issue_collection
+    ) -> anyhow::Result<super::attention::LiveAttentionSources> {
+        let decisions = self
+            .issue_collection
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("issue collection is unavailable"))?
-            .open_decisions()
+            .open_decisions()?;
+        let recent_turns = self
+            .recent_kernel_records
+            .iter()
+            .filter(|record| {
+                matches!(
+                    record.event,
+                    KernelEvent::TurnStarted { .. } | KernelEvent::TurnEnded { .. }
+                )
+            })
+            .cloned()
+            .collect();
+        Ok(super::attention::LiveAttentionSources {
+            decisions,
+            recent_turns,
+        })
     }
 
     pub(super) fn issue_automation_policy(&self) -> Option<IssueAutomationPolicyInspection> {

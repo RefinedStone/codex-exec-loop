@@ -779,29 +779,37 @@ impl KernelSession {
             history,
             operation,
         );
-        let answer = if let KernelQueryAnswer::Attention { mut items } = answer {
-            // One catalog transaction reads the stored decision authority without
-            // re-assessing the entire catalog for every pagination request.
-            let commands = attached.commands.clone();
-            let decisions =
-                read_kernel_log(move || commands.open_issue_decisions(KERNEL_CALL_TIMEOUT)).await?;
-            items.extend(
-                decisions
-                    .iter()
-                    .filter_map(crate::adapter::inbound::kernel_protocol::issue_decision_attention),
-            );
-            KernelQueryAnswer::Attention { items }
-        } else if let KernelQueryAnswer::Planning(planning) = answer {
-            let workspace = attached.issue_workspace.clone();
-            KernelQueryAnswer::Planning(
-                blocking(move || {
-                    crate::composition::task_evidence::enrich_planning(&workspace, planning)
-                })
-                .await?,
-            )
-        } else {
-            answer
-        };
+        let answer =
+            if let KernelQueryAnswer::Attention { mut items } = answer {
+                // One catalog transaction reads the stored decision authority without
+                // re-assessing the entire catalog for every pagination request.
+                let commands = attached.commands.clone();
+                let live =
+                    read_kernel_log(move || commands.live_attention_sources(KERNEL_CALL_TIMEOUT))
+                        .await?;
+                items.extend(live.decisions.iter().filter_map(
+                    crate::adapter::inbound::kernel_protocol::issue_decision_attention,
+                ));
+                let workspace = attached.issue_workspace.clone();
+                items.extend(
+                    blocking(move || {
+                        crate::composition::attention::stored_items(&workspace, live.recent_turns)
+                    })
+                    .await?
+                    .map_err(|error| unavailable(error.to_string()))?,
+                );
+                KernelQueryAnswer::Attention { items }
+            } else if let KernelQueryAnswer::Planning(planning) = answer {
+                let workspace = attached.issue_workspace.clone();
+                KernelQueryAnswer::Planning(
+                    blocking(move || {
+                        crate::composition::task_evidence::enrich_planning(&workspace, planning)
+                    })
+                    .await?,
+                )
+            } else {
+                answer
+            };
         to_result(answer)
     }
 

@@ -7,6 +7,7 @@ use crate::domain::parallel_mode::{
 };
 use crate::domain::planning::delivery_evidence::*;
 
+mod attention;
 mod auto_delivery;
 mod fences;
 mod proof;

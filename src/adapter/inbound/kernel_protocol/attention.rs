@@ -14,6 +14,9 @@ use crate::domain::issue_automation::decision::{IssueDecisionState, StoredIssueD
 use crate::domain::parallel_mode::{PrValidationOperatorState, PrValidationOperatorSummary};
 use crate::domain::planning::{PriorityQueueTask, RuntimeProjection, TaskStatus};
 
+mod stored;
+pub(crate) use stored::{delivery_wait_items, terminal_turn_item};
+
 #[cfg(test)]
 mod tests;
 
@@ -55,6 +58,13 @@ pub enum AttentionCause {
     AutoFollowPaused,
     /// A task explicitly awaits the user.
     TaskAwaitingUser,
+    /// The latest kernel-owned turn failed, was interrupted or was lost.
+    TurnFailed,
+    TurnInterrupted,
+    TurnLost,
+    /// Delivery is currently held on a typed evidence wait.
+    CriteriaNotMet,
+    EvidenceStale,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -62,6 +72,9 @@ pub struct AttentionSubject {
     pub kind: AttentionSubjectKind,
     /// thread id, task id, 또는 PR 번호이다.
     pub id: String,
+    /// Durable navigation coordinate for decisions opened before this client attached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue: Option<crate::domain::kernel_event::IssueEventReference>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -172,14 +185,16 @@ pub(crate) fn issue_decision_attention(stored: &StoredIssueDecision) -> Option<A
     if request.state() != IssueDecisionState::Open {
         return None;
     }
-    Some(item(
+    let mut decision = item(
         AttentionCause::IssueDecisionPending,
         AttentionSubjectKind::IssueDecision,
         request.id().as_str().to_owned(),
         stored.revision.to_string(),
         request.definition().question.as_str().to_owned(),
         None,
-    ))
+    );
+    decision.subject.issue = Some(request.definition().subject.issue().into());
+    Some(decision)
 }
 
 fn approval_item(thread_id: &str, approval: &ConversationApprovalRequest) -> AttentionItem {
@@ -241,6 +256,7 @@ fn item(
         subject: AttentionSubject {
             kind,
             id: subject_id,
+            issue: None,
         },
         revision,
         summary,
