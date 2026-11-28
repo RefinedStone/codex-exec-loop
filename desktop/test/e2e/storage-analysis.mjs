@@ -221,6 +221,8 @@ try {
   await target.waitFor();
   assert.equal(scans, 1, "reopen only reads the current job");
   await view.getByTestId("thread-entry").first().click();
+  const draft = view.getByTestId("composer-input");
+  await draft.fill("Existing conversation draft");
   await panel.locator('[data-node-id="root"]').click();
   const beforeShare = calls.filter(call => call.action === "share_preview" || call.action === "share_create").length;
   assert.equal(beforeShare, 0, "click and keyboard navigation do not share");
@@ -229,8 +231,7 @@ try {
   await panel.getByRole("button", { name: "대화 입력창에 공유", exact: true }).click();
   await panel.getByRole("button", { name: "공유 해제", exact: true }).waitFor();
   assert.equal(grants, 1);
-  const draft = view.locator("textarea").first();
-  assert.match(await draft.inputValue(), /grant-1/);
+  assert.equal(await draft.inputValue(), "Existing conversation draft\n\n공유한 저장 공간: grant-1, root. 이 폴더에서 큰 항목을 설명해 주세요.");
   assert.ok(!gateway.receivedMethods.includes("turn/start") && !gateway.receivedMethods.includes("turn/steer"));
   await panel.locator('[data-node-id="assets"]').click();
   await view.getByRole("button", { name: "표에서 보기 · target 75%", exact: true }).click();
