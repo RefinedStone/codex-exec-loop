@@ -83,6 +83,7 @@ function connectBridge(endpoint: string, startDaemon?: () => void, host?: string
     openFolder: async () => false,
     gitStatus: async () => ({ ok: false, message: "not used" }),
     gitFileDiff: async () => ({ kind: "binary" }),
+    gitDiffContext: async () => ({ status: "unavailable", reason: "snapshot_expired" }),
     gitFileAction: async () => ({ ok: true as const }),
     gitOpenFile: async () => undefined,
     openIssueAutomationPolicyFile: async () => undefined,

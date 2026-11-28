@@ -80,6 +80,7 @@ const bridge: AkraBridge = {
   gitFileAction(cwd: string, action: GitFileAction, path: string): Promise<GitActionResult> {
     return ipcRenderer.invoke(IPC_CHANNELS.gitFileAction, cwd, action, path) as Promise<GitActionResult>;
   },
+  gitDiffContext: (cwd, request) => ipcRenderer.invoke(IPC_CHANNELS.gitDiffContext, cwd, request),
   gitHunks(cwd: string, path: string): Promise<GitHunkDiff> {
     return ipcRenderer.invoke(IPC_CHANNELS.gitHunks, cwd, path);
   },

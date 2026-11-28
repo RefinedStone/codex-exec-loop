@@ -159,7 +159,7 @@ describe("git file actions", () => {
     write("a.txt", "initial\n"); git("add", "a.txt");
     const staged = await readGitFileDiff(root, "a.txt", false, "head_index");
     expect(staged.snapshot).toMatchObject({ source: "head_index", headOid: null });
-    await expect(readGitFileDiff(root, "a.txt", false, "head_worktree")).rejects.toThrow("첫 커밋");
+    expect((await readGitFileDiff(root, "a.txt", false, "head_worktree")).snapshot).toMatchObject({ source: "head_worktree", headOid: null });
   });
 
   it("picks the discard commands from the status", () => {
