@@ -38,9 +38,11 @@ impl GitGraphPort for GitGraphService {
         };
         let page_digest = refs_digest(&refs);
         let first_page = request.cursor.is_none();
+        let binding = request.filter.active().then_some(&request.filter);
         let (skip, mut lanes) = match request.cursor {
             Some(cursor)
-                if cursor.refs_digest != page_digest || cursor.filter != request.filter =>
+                if cursor.refs_digest != page_digest
+                    || cursor.filter.as_ref().filter(|f| f.active()) != binding =>
             {
                 return Ok(empty_page(true, true, refs.head));
             }
@@ -51,7 +53,7 @@ impl GitGraphPort for GitGraphService {
             None => (0, GitGraphLaneState::default()),
         };
         let limit = clamp_git_graph_page_limit(request.limit);
-        let filtered = request.filter.active();
+        let filtered = binding.is_some();
         let hide = filtered && request.filter.hide;
         let commits = if hide {
             self.history.filtered_page(
@@ -86,7 +88,7 @@ impl GitGraphPort for GitGraphService {
             return Ok(empty_page(true, true, current_refs.head));
         }
         let next = has_more.then(|| GitGraphCursor {
-            filter: request.filter,
+            filter: binding.cloned(),
             skip: skip.saturating_add(rows.len()),
             lanes,
             refs_digest: page_digest.clone(),
