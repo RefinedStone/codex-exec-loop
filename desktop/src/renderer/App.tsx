@@ -14,7 +14,7 @@ import { BrowserPanel } from "./browser/BrowserPanel";
 import { ApprovalPrompt } from "./conversation/ApprovalPrompt";
 import { AreaBoundary } from "./views/AreaBoundary";
 import { appendQuote } from "./conversation/quote";
-import { threadDraftKey } from "./conversation/attachmentSource";
+import { threadDraftKey } from "./conversation/threadDraftKey";
 import { McpWriteApprovals } from "./conversation/McpWriteApprovals";
 import { pullRequestBadgeClass } from "./conversation/BranchCommits";
 import { Composer, type ComposerActions } from "./conversation/Composer";
