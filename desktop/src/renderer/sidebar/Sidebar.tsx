@@ -382,7 +382,13 @@ export function Sidebar({ onOpenThread, onOpenRemoteThread, onReloadChats, threa
   const connection = useDesktopStore((state) => state.connection);
   const codexVersion = useDesktopStore((state) => state.gateway?.codexVersion ?? null);
   const marks = useThreadMarks();
-  const attention = useMemo(() => allThreads(folders).filter((thread) => needsAttention(threadMark(thread, marks))).length, [folders, marks]);
+  const kernel = useDesktopStore((state) => state.kernel);
+  const attention = useMemo(() => {
+    const items = kernel.phase === "attached" ? kernel.attentionItems ?? [] : [];
+    const kernelThreads = new Set(items.filter(item => item.subject.kind === "thread").map(item => item.subject.id));
+    // User-turn failures and unread states still come from the thread store.
+    return items.length + allThreads(folders).filter(thread => !kernelThreads.has(thread.id) && needsAttention(threadMark(thread, marks))).length;
+  }, [folders, marks, kernel.phase, kernel.attentionItems]);
   const view = useUiStore((state) => state.view);
   const theme = useUiStore((state) => state.theme);
   const phase = connection?.phase ?? "connecting";
