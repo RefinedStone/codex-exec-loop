@@ -101,6 +101,12 @@ pub trait GitWorkspacePort: Send + Sync {
 
     /// 현재 브랜치와 작업 트리를 `commit` 으로 옮긴다. 추적하는 파일에 변경이 없을 때만 부른다. 추적하지 않는 파일을
     /// 덮어써야 하면 실패한다. 이 명령과 아래의 두 체크아웃은 그 커밋의 파일이 필터를 쓰면 실패한다.
+    fn reset_for_group(&self, _cwd: &str, _commit: &str, _receipt: &str) -> Result<()> {
+        anyhow::bail!("journalled reset is unavailable")
+    }
+    fn reset_completed(&self, _cwd: &str, _old: &str, _receipt: &str) -> Result<bool> {
+        anyhow::bail!("journalled reset is unavailable")
+    }
     fn reset_to(&self, repository_dir: &str, commit: &str) -> Result<()>;
 
     /// 브랜치의 ref 를 `from` 에서 `to` 로 바꾼다. 지금 값이 `from` 이 아니면 실패한다.

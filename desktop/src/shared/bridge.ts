@@ -466,7 +466,7 @@ export interface AkraBridge {
   gitCommitDiff(cwd: string, sha: string): Promise<GitCommitDiff>;
   /** 현재 브랜치를 `origin` 의 같은 이름 브랜치로 push 한다. main 이 먼저 사용자에게 확인한다. 강제 push 는 하지 않는다. */
   gitPush(cwd: string): Promise<GitPublishResult>;
-  gitOperator(cwd: string, action: "list" | "review" | "add" | "remove" | "force-push", branch?: string): Promise<string>;
+  gitOperator(cwd: string, action: "list" | "review" | "add" | "remove" | "force-push" | "group-preview" | "group-publish", branch?: string): Promise<string>;
   /** 현재 브랜치의 PR 을 gh 로 만든다. main 이 저장소, 브랜치, gh 계정을 보여 주고 사용자에게 확인한다. */
   gitCreatePullRequest(cwd: string, draft: PullRequestDraft): Promise<GitPublishResult>;
   remote: RemoteHostBridge;

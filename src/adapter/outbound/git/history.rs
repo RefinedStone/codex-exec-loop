@@ -128,7 +128,30 @@ impl GitHistoryPort for GitHistoryAdapter {
             .split('\0')
             .filter_map(|entry| entry.split_once('\t').map(|(_, path)| path))
             .collect();
+        let recent = required(
+            git_output(
+                repository,
+                &[
+                    "reflog",
+                    "show",
+                    "--max-count=32",
+                    "--format=%gD%x09%gs",
+                    "--remotes",
+                ],
+            )?,
+            "git reflog",
+        )?;
+        let rewritten_remote = recent.lines().find_map(|l| {
+            let (name, action) = l.split_once('\t')?;
+            if !action.ends_with(": forced-update") {
+                return None;
+            }
+            name.strip_prefix("refs/remotes/")?
+                .strip_suffix("@{0}")
+                .map(str::to_owned)
+        });
         Ok(GitWorktreeProgress {
+            rewritten_remote,
             operation,
             conflicted_files: conflicted.len(),
         })
@@ -779,6 +802,7 @@ mod tests {
         );
 
         let progress = GitWorktreeProgress {
+            rewritten_remote: None,
             operation: Some("cherry-pick".to_string()),
             conflicted_files: 1,
         };

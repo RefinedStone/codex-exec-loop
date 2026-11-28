@@ -1437,6 +1437,7 @@ impl crate::application::port::inbound::git_graph_port::GitGraphPort for FolderE
     ) -> anyhow::Result<crate::application::port::inbound::git_graph_port::GitGraphRefsState> {
         Ok(
             crate::application::port::inbound::git_graph_port::GitGraphRefsState {
+                rewritten_remote: None,
                 repository: true,
                 refs_digest: None,
                 operation_in_progress: None,

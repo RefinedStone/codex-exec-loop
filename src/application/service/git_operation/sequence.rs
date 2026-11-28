@@ -24,7 +24,14 @@ impl GitOperationService {
         let record = GitOperationRecord {
             pick_index: Some(0),
             op_id,
-            operation: GitOperation::CherryPick { commits },
+            operation: match plan.operation {
+                GitOperation::Realign { base, publish, .. } => GitOperation::Realign {
+                    base,
+                    commits,
+                    publish,
+                },
+                _ => GitOperation::CherryPick { commits },
+            },
             worktree: cwd.to_owned(),
             before: before.clone(),
             after: before,
@@ -51,9 +58,39 @@ impl GitOperationService {
     }
 
     fn advance(&self, cwd: &str, mut r: GitOperationRecord) -> Result<GitOperationOutcome> {
+        if let GitOperation::Realign { base, .. } = &r.operation
+            && r.pick_index == Some(0)
+            && r.after == r.before
+        {
+            let head = self.position(cwd)?;
+            let receipt = format!("akra-realign-{}", r.op_id);
+            if head == r.before {
+                let condition = self.workspace.read_condition(cwd)?;
+                if condition.refusal.is_some()
+                    || condition.tracked_changes
+                    || condition.operation_in_progress.is_some()
+                {
+                    return Ok(refused("worktree changed before base reset"));
+                }
+                self.workspace.reset_for_group(cwd, base, &receipt)?;
+            }
+            let head = self.position(cwd)?;
+            if head.branch != r.before.branch
+                || head.commit != *base
+                || !self
+                    .workspace
+                    .reset_completed(cwd, &r.before.commit, &receipt)?
+            {
+                return Ok(refused("cannot verify the base-reset checkpoint"));
+            }
+            r.after = head;
+            self.journal.append(cwd, &r)?;
+        }
         loop {
             let index = r.pick_index.context("missing pick checkpoint")?;
-            let GitOperation::CherryPick { commits } = &r.operation else {
+            let (GitOperation::CherryPick { commits } | GitOperation::Realign { commits, .. }) =
+                &r.operation
+            else {
                 bail!("not a pick record");
             };
             let Some(commit) = commits.get(index) else {
@@ -121,7 +158,9 @@ impl GitOperationService {
         ) {
             return Ok(refused("sequence has finished"));
         }
-        let GitOperation::CherryPick { commits } = &r.operation else {
+        let (GitOperation::CherryPick { commits } | GitOperation::Realign { commits, .. }) =
+            &r.operation
+        else {
             return Ok(refused("not a cherry-pick sequence"));
         };
         let index = r.pick_index.context("missing pick checkpoint")?;
@@ -176,6 +215,14 @@ impl GitOperationService {
         }
         let receipt = format!("akra-pick-{}-{index}", r.op_id);
         let marker = self.workspace.pick_marker(cwd)?;
+        if matches!(r.operation, GitOperation::Realign { .. })
+            && index == 0
+            && head == r.before
+            && r.after == r.before
+            && matches!(action, PickAction::Skip)
+        {
+            return Ok(refused("cannot skip the base-reset checkpoint"));
+        }
         if let Some(mark) = marker {
             if commits.get(index) != Some(&mark)
                 || head != r.after
@@ -197,7 +244,19 @@ impl GitOperationService {
             if condition.operation_in_progress.is_some() || condition.tracked_changes {
                 return Ok(refused("unrelated changes or operation in progress"));
             }
-            if head != r.after {
+            if let GitOperation::Realign { base, .. } = &r.operation
+                && index == 0
+                && r.after == r.before
+                && head.branch == r.before.branch
+                && head.commit == *base
+                && self.workspace.reset_completed(
+                    cwd,
+                    &r.before.commit,
+                    &format!("akra-realign-{}", r.op_id),
+                )?
+            {
+                r.after = head;
+            } else if head != r.after {
                 if !self
                     .workspace
                     .pick_completed(cwd, &r.after.commit, &receipt)?

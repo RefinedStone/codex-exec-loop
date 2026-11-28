@@ -1,3 +1,4 @@
+import { DRAG_BRANCH } from "./GroupPlanControls";
 import { memo } from "react";
 import { type GitGraphRow, type GitRefLabel, type GitThreadBadge, relativeTime, shortSha } from "./gitGraph";
 import { laneColorIndex, laneX, NODE_RADIUS, ROW_HEIGHT, rowPaths } from "./graphGeometry";
@@ -8,7 +9,7 @@ function RefChip({ label }: { label: GitRefLabel }) {
   const kind = REF_KIND_TITLE[label.kind];
   const title = label.syncedRemotes.length > 0 ? `${label.name} (${label.syncedRemotes.join(", ")} 와 같은 커밋)` : kind ? `${kind} ${label.name}` : label.name;
   return (
-    <span className={`git-ref git-ref-${label.kind}${label.head ? " git-ref-current" : ""}`} title={title} data-testid="git-graph-ref">
+    <span draggable={label.head && label.kind === "local_branch"} onDragStart={e=>{if(label.head && label.kind==="local_branch"){e.dataTransfer.setData(DRAG_BRANCH,label.name);e.dataTransfer.effectAllowed="move";}}} className={`git-ref git-ref-${label.kind}${label.head ? " git-ref-current" : ""}`} title={title} data-testid="git-graph-ref">
       {label.name}
       {label.syncedRemotes.length > 0 && <span className="git-ref-synced">{label.syncedRemotes.join(" ")}</span>}
     </span>

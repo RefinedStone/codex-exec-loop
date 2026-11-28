@@ -246,6 +246,9 @@ fn each_operation_changes_the_repository_and_its_undo_restores_every_ref() {
     let _ = std::fs::remove_dir_all(&directory);
 }
 
+#[path = "workspace/group_tests.rs"]
+mod group_tests;
+
 #[path = "workspace/sequence_tests.rs"]
 mod sequence_tests;
 

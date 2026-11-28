@@ -2659,3 +2659,47 @@ mod tests {
 }
 
 pub(crate) use crate::adapter::outbound::github::automation::protected_push as git_operator;
+
+/// A group publish retry is bound to a finished local journal record, not a renderer-supplied SHA.
+pub(crate) fn group_publication(cwd: &str, id: &str) -> Result<git_operator::LeasePreview> {
+    use crate::adapter::outbound::filesystem::git_operation_journal::GitOperationJournalAdapter;
+    use crate::application::port::outbound::git_operation_journal_port::GitOperationJournalPort;
+    use crate::domain::git_operation::{GitOperation, GitOperationStatus, same_git_worktree_path};
+    let journal = GitOperationJournalAdapter::new(|dir| {
+        Ok(PathBuf::from(
+            SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(dir)?.runtime_dir,
+        ))
+    });
+    let record = journal
+        .load(cwd)?
+        .into_iter()
+        .find(|r| r.op_id == id && same_git_worktree_path(&r.worktree, cwd))
+        .ok_or_else(|| anyhow::anyhow!("no such group in this worktree"))?;
+    anyhow::ensure!(
+        record.status == GitOperationStatus::Done && record.undone_by.is_none(),
+        "group is unfinished or undone"
+    );
+    let GitOperation::Realign {
+        publish: Some(dest),
+        ..
+    } = record.operation
+    else {
+        anyhow::bail!("no publication step in this group")
+    };
+    let preview = git_operator::plan(cwd, "origin", &dest.branch)?;
+    anyhow::ensure!(
+        preview.local_branch == format!("refs/heads/{}", dest.branch)
+            && record.after.branch.as_deref() == Some(dest.branch.as_str())
+            && preview.local_sha == record.after.commit
+            && preview.destination.url == dest.url,
+        "local group result or remote changed"
+    );
+    if preview.remote_sha == preview.local_sha {
+        anyhow::bail!("remote already has the local group result; nothing to retry");
+    }
+    anyhow::ensure!(
+        preview.remote_sha == dest.sha,
+        "remote SHA no longer matches the group preview; did not publish"
+    );
+    Ok(preview)
+}

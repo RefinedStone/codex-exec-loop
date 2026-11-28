@@ -254,6 +254,7 @@ mod tests {
 
         fn refs_state(&self, repository_dir: &str) -> Result<GitGraphRefsState> {
             Ok(GitGraphRefsState {
+                rewritten_remote: None,
                 repository: true,
                 refs_digest: Some(repository_dir.to_string()),
                 operation_in_progress: None,
@@ -463,3 +464,6 @@ mod tests {
         assert_eq!(failed["error"]["message"], json!("git did not run"));
     }
 }
+
+#[cfg(test)]
+mod realign_screen;

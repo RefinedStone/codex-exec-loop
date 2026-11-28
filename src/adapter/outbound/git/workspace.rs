@@ -232,6 +232,28 @@ impl GitWorkspacePort for GitWorkspaceAdapter {
         read(repository, &["update-ref", "--no-deref", "-d", full_ref]).map(|_| ())
     }
 
+    fn reset_for_group(&self, cwd: &str, commit: &str, receipt: &str) -> Result<()> {
+        let repo = absolute(cwd)?;
+        if let Some(reason) = configuration_refusal(repo) {
+            bail!(reason);
+        }
+        if let Some(reason) = filter_attribute_refusal(repo, &GitDirs::read(repo)?, Some(commit))? {
+            bail!(reason);
+        }
+        let overrides = CommandOverrides::read(repo)?;
+        let mut command = git_subprocess::command(overrides.with(&["reset", "--keep", commit]));
+        command.env("GIT_REFLOG_ACTION", receipt);
+        output_of(repo, command)?
+            .map(|_| ())
+            .map_err(anyhow::Error::msg)
+    }
+    fn reset_completed(&self, cwd: &str, old: &str, receipt: &str) -> Result<bool> {
+        let repo = absolute(cwd)?;
+        let previous = read(repo, &["rev-parse", "--verify", "HEAD@{1}"])?;
+        let action = read(repo, &["reflog", "-1", "--format=%gs", "HEAD", "--"])?;
+        Ok(previous.trim() == old
+            && (action.trim() == receipt || action.starts_with(&format!("{receipt}: "))))
+    }
     fn reset_to(&self, repository_dir: &str, commit: &str) -> Result<()> {
         // 추적하는 파일에 변경이 없으면 `--keep` 은 `--hard` 와 같은 결과이다. 다른 점은 하나이다: 추적하지 않는
         // 파일을 덮어써야 하면 `--keep` 은 멈추고 `--hard` 는 덮어쓴다.

@@ -1,0 +1,7 @@
+# Graph base realignment
+
+Choose the commits to retain with their row checkboxes. Drag the current local branch label onto the new base, or select the new base using the graph arrow keys and activate **이 커밋을 새 base로 계획**. Both routes request the same plan; neither changes a ref. The plan shows the original HEAD, target SHA, ancestor-ordered picks, patch-equivalent exclusions, and conflict predictions. A recent forced update of a remote-tracking ref is a hint, not approval.
+
+The default is local only. Confirm **확인: 로컬 묶음 실행** to back up the original branch, reset with Git's untracked-file protection and replay the selected commits. The repository queue and operation journal cover the group. After a conflict use the group record to continue, skip a pick, or abort; undo after completion requires the recorded final tip. No local plan can grant remote permission.
+
+To add a remote step, explicitly inspect it **before confirming the local plan**. Failed or unreviewed protection, an unsupported destination, a missing branch, or an unavailable remote leaves the step out and shows why. When eligible, the plan records the exact origin push URL, branch and fetched SHA. After local success, use the group record's publication button for a separate native confirmation. Policy or remote changes refuse publication. Retrying that step never replays the local reset or picks. An already-matching remote tip is reported without another write. Undo changes local refs only; it never rewrites a remote.

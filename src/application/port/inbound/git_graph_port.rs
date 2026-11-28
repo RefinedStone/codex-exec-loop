@@ -65,6 +65,8 @@ pub struct GitGraphRefsState {
     pub operation_in_progress: Option<String>,
     /// 충돌이 풀리지 않은 파일 수이다. 지문에 넣지 않는다.
     pub conflicted_files: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rewritten_remote: Option<String>,
 }
 
 pub trait GitGraphPort: Send + Sync {
