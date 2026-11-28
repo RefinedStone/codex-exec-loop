@@ -166,7 +166,10 @@ export function Fleet({ onOpenThread, onOpenItem, workspace, onWorkspace }: { on
       <KernelAttentionList key={kernel.kernel} kernel={kernel.kernel} items={items} onOpenItem={onOpenItem} />
       <div className="fleet-columns">
         {FLEET_COLUMNS.map((column) => {
-          const columnItems = threads.filter((item) => !(item.thread.cwd === workspace && authoritative.has(item.thread.id)) && column.marks.includes(item.mark));
+          // A user turn can share its thread with an older kernel demand. Without the same
+          // turn/request identity only its generic idle card is redundant, not an activity mark.
+          const columnItems = threads.filter((item) => column.marks.includes(item.mark)
+            && !(item.mark === "idle" && item.thread.cwd === workspace && authoritative.has(item.thread.id)));
           return (
             <section key={column.title} className="fleet-column">
               <h3 title={column.hint}>

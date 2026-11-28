@@ -6,6 +6,7 @@ use rusqlite::Connection;
 
 #[derive(Default)]
 pub(crate) struct StoredAttentionSources {
+    pub stored_through: i64,
     pub turns: Vec<RecordedKernelEvent>,
     pub waits: Vec<PlanningAuthorityDistributorQueueRecord>,
 }
@@ -36,6 +37,11 @@ impl StoredAttentionSources {
         };
         let mut sources = Self::default();
         if exists("kernel_events")? {
+            sources.stored_through = db.query_row(
+                "SELECT coalesce(max(sequence),0) FROM kernel_events",
+                [],
+                |row| row.get(0),
+            )?;
             // A later turn supersedes the prior terminal receipt even before the new turn ends.
             let mut query = db.prepare("WITH latest AS (SELECT max(sequence) AS sequence FROM kernel_events
                 WHERE kind IN ('turn_started','turn_ended') GROUP BY thread_id)

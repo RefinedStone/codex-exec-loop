@@ -22,13 +22,13 @@ fn attention_requires_an_active_wait_and_disappears_when_it_is_rearmed() {
             criterion.reason = Some(reason);
         }
         assert!(!f.commit(blocked, f.effect()).unwrap().effect_allowed);
-        let items = stored_items(&f.base.workspace).unwrap();
+        let items = stored_items(&f.base.workspace, vec![]).unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].cause, cause);
         assert_eq!(items[0].subject.id, f.base.lease.task_id);
         f.release();
         f.commit(f.waive_all(), TaskDeliveryEvidenceOperation::Recheck)
             .unwrap();
-        assert!(stored_items(&f.base.workspace).unwrap().is_empty());
+        assert!(stored_items(&f.base.workspace, vec![]).unwrap().is_empty());
     }
 }
