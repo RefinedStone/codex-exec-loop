@@ -5,7 +5,7 @@ import type { EvidencePreview } from "../../shared/evidencePreview";
 export function EvidencePreviewButton({ target, reviewable = false }: { readonly target: Omit<EvidencePreview, "workspace">; readonly reviewable?: boolean }) {
   const workspace = useDesktopStore((state) => state.kernel.phase === "attached" ? state.kernel.workspace : null);
   const [status, setStatus] = useState<"idle" | "pending" | "failed">("idle");
-  const open = window.akra.openEvidencePreview;
+  const open = globalThis.window?.akra?.openEvidencePreview;
   if (!open || !workspace) return null;
   const show = async (review?: "pass" | "fail") => {
     setStatus("pending");
