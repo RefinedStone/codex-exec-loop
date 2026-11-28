@@ -29,9 +29,10 @@ export function SnapshotDiffView({ cwd, file, snapshot, git, selection: controll
   const [notice, setNotice] = useState<string | null>(null);
   const [revealSelection, setRevealSelection] = useState(false);
   useEffect(() => {
-    if (controlledSelection) {
-      setSide(controlledSelection.side); setStart(controlledSelection.startLine); setEnd(controlledSelection.endLine);
-    }
+    if (controlledSelection === undefined) return;
+    setSide(controlledSelection?.side ?? "new");
+    setStart(controlledSelection?.startLine ?? 1);
+    setEnd(controlledSelection?.endLine ?? 1);
   }, [controlledSelection]);
   const coordinates = useMemo(() => diffCoordinates(file), [file]);
   const hunks = useMemo(() => coordinates.filter((row) => row.hunk), [coordinates]);

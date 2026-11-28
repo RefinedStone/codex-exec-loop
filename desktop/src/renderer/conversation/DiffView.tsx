@@ -71,7 +71,10 @@ class PatchBoundary extends Component<{ fallback: ReactNode; children: ReactNode
  * 줄 번호가 없는 변경, 아주 긴 변경, 표시를 불러오는 동안과 실패한 때는 줄을 그대로 그린다.
  */
 export function DiffBody({ file, interaction }: { file: DiffFile; interaction?: DiffInteraction }) {
-  const plain = <DiffLines key={file.path} lines={file.lines} wrap={interaction?.wrap} />;
+  const plain = <>
+    {interaction && <p role="status">이 표시에서는 행을 직접 선택할 수 없습니다. 위의 면과 행 번호를 사용하십시오.</p>}
+    <DiffLines key={file.path} lines={file.lines} wrap={interaction?.wrap} />
+  </>;
   const patch = file.lines.length <= PATCH_VIEW_LINE_LIMIT ? patchText(file) : null;
   if (patch === null) return plain;
   return (
