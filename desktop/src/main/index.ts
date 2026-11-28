@@ -683,6 +683,7 @@ ipcMain.handle(IPC_CHANNELS.confirmIssueDecision, (event, request: unknown) => i
 ipcMain.handle(IPC_CHANNELS.confirmIssueAutomationMode, (event, request: unknown) => issueConfirmationOf(event).confirmMode(request));
 ipcMain.handle(IPC_CHANNELS.confirmIssueAutonomy, (event, request: unknown) => issueConfirmationOf(event).confirmAutonomy(request));
 ipcMain.handle(IPC_CHANNELS.confirmIssueBindingResume, (event, request: unknown) => issueConfirmationOf(event).confirmBindingResume(request));
+ipcMain.handle(IPC_CHANNELS.confirmIssueCommentRequest, (event, request: unknown) => issueConfirmationOf(event).confirmCommentRequest(request));
 ipcMain.handle(IPC_CHANNELS.confirmTaskCriterionWaiver, (event, request: unknown) => issueConfirmationOf(event).confirmCriterionWaiver(request));
 
 ipcMain.handle(IPC_CHANNELS.issueAutomationPolicyOpenFile, async (event, request: unknown) => {

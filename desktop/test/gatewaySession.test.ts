@@ -90,6 +90,7 @@ function connectBridge(endpoint: string, startDaemon?: () => void, host?: string
     confirmIssueAutomationMode: async () => ({ cancelled: true }),
     confirmIssueAutonomy: async () => ({ cancelled: true }),
     confirmIssueBindingResume: async () => ({ cancelled: true }),
+    confirmIssueCommentRequest: async () => ({ cancelled: true }),
     gitBranchSummary: async () => ({ ok: false as const, message: "" }),
     gitCommitDiff: async () => ({ text: "", truncated: false }),
     gitPush: async () => ({ ok: true as const, url: null }),

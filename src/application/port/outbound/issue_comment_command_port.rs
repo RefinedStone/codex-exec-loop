@@ -1,8 +1,10 @@
 //! 이슈 댓글 명령의 읽기와 처리 기록이다 (IA8-2, #2567).
 use anyhow::Result;
 
+use crate::domain::issue_automation::collection::IssueCollectionItem;
 use crate::domain::issue_automation::comment_command::{
-    IssueCommentCommand, IssueCommentCommandRecord,
+    IssueCommentCommand, IssueCommentCommandRecord, IssueCommentRequestAcceptance,
+    IssueCommentRequestBasis, IssueCommentRequestKey, StoredIssueCommentRequest,
 };
 use crate::domain::issue_work::IssueReference;
 
@@ -17,6 +19,38 @@ pub trait IssueCommentCommandSourcePort: Send + Sync {
 }
 
 pub trait IssueCommentCommandStorePort: Send + Sync {
+    fn current_request_issue(
+        &self,
+        _key: &IssueCommentRequestKey,
+    ) -> Result<Option<IssueCollectionItem>> {
+        anyhow::bail!("comment request issue observations are unavailable")
+    }
+    fn record_comment_request(
+        &self,
+        record: &IssueCommentCommandRecord,
+        _basis: &IssueCommentRequestBasis,
+    ) -> Result<bool> {
+        self.record_issue_comment_command(&record.issue.project_scope.workspace_dir, record)
+    }
+    fn request_state(
+        &self,
+        _key: &IssueCommentRequestKey,
+    ) -> Result<Option<(IssueCommentRequestBasis, IssueCommentRequestAcceptance)>> {
+        Ok(None)
+    }
+    fn claim_request(&self, _request: &StoredIssueCommentRequest) -> Result<bool> {
+        anyhow::bail!("comment request claims are unavailable")
+    }
+    fn accepted_requests(&self, _workspace: &str) -> Result<Vec<StoredIssueCommentRequest>> {
+        Ok(Vec::new())
+    }
+    fn close_accepted_request(
+        &self,
+        _key: &IssueCommentRequestKey,
+        _state: IssueCommentRequestAcceptance,
+    ) -> Result<()> {
+        anyhow::bail!("comment request claims are unavailable")
+    }
     /// Bounded read of the immutable command records for this exact issue. Does not fetch comment bodies.
     fn recorded_requests(
         &self,

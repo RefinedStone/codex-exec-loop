@@ -68,7 +68,7 @@ mod tests;
 type RuntimeDirectoryResolver = dyn Fn(&str) -> Result<PathBuf> + Send + Sync;
 
 const APPLICATION_ID: i64 = 0x414b4941;
-const SCHEMA_VERSION: i64 = 17;
+const SCHEMA_VERSION: i64 = 18;
 /// Version 15 only widens the provider CHECK for Linear (#2564). No row changes.
 /// Version 16 adds the issue comment command ledger (#2567).
 const PROVIDER_CHECK: &str = "CHECK (provider IN ('github', 'jira', 'linear'))";
@@ -1040,7 +1040,7 @@ fn ensure_schema(
     transaction(connection, guard, |transaction| {
         match schema_identity(transaction)? {
             (APPLICATION_ID, SCHEMA_VERSION) => validate_schema(transaction),
-            (APPLICATION_ID, version @ 1..=16) => {
+            (APPLICATION_ID, version @ 1..=17) => {
                 // Exact prior schemas are validated before the additive migration.
                 // Existing bindings, observations, workflow rows and revisions remain untouched.
                 validate_schema_version(transaction, version)?;
@@ -1095,10 +1095,13 @@ fn ensure_schema(
                 if version < 15 {
                     widen_provider_checks(transaction)?;
                 }
-                transaction.execute_batch(quota::SCHEMA)?;
+                if version < 17 {
+                    transaction.execute_batch(quota::SCHEMA)?;
+                }
                 if version < 16 {
                     comment_command::create_schema(transaction)?;
                 }
+                transaction.execute_batch(comment_command::REQUEST_SCHEMA)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
             }
@@ -1135,6 +1138,7 @@ fn ensure_schema(
                 binding_pause::create_schema(transaction)?;
                 transaction.execute_batch(quota::SCHEMA)?;
                 comment_command::create_schema(transaction)?;
+                transaction.execute_batch(comment_command::REQUEST_SCHEMA)?;
                 transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
@@ -1252,6 +1256,12 @@ fn validate_schema_version(connection: &Connection, version: i64) -> Result<()> 
     }
     if version >= 17 {
         expected.push((quota::TABLE, quota::SCHEMA));
+    }
+    if version >= 18 {
+        expected.push((
+            comment_command::REQUEST_TABLE,
+            comment_command::REQUEST_SCHEMA,
+        ));
     }
     expected.sort_by_key(|(name, _)| *name);
     for (name, schema) in expected {

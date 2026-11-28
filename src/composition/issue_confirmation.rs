@@ -11,6 +11,16 @@ pub(crate) fn prepare(
     command: &StoredCommand,
 ) -> Result<IssueConfirmationPreview> {
     match command {
+        StoredCommand::ApplyIssueCommentRequest { key } => {
+            #[cfg(not(test))]
+            let collection = super::issue_collection::build(workspace);
+            #[cfg(test)]
+            let collection = super::issue_collection::build_for_kernel_test(workspace);
+            collection
+                .comment_command_service()
+                .ok_or_else(|| anyhow::anyhow!("comment requests are unavailable"))?
+                .prepare_confirmation(key)
+        }
         StoredCommand::SetIssueBindingPaused {
             command_id,
             binding_id,

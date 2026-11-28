@@ -1502,6 +1502,7 @@ impl NativeClientRuntime {
                 | StoredCommand::AnswerIssueDecision { .. }
                 | StoredCommand::AskIssueDecision { .. }
                 | StoredCommand::InterveneIssue { .. }
+                | StoredCommand::ApplyIssueCommentRequest { .. }
         );
         let is_binding_pause_command =
             matches!(&command, StoredCommand::SetIssueBindingPaused { .. });

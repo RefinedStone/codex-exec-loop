@@ -149,6 +149,36 @@ impl IssueWorkExecutionPort for AkraIssueWorkExecutionAdapter {
             )
             .map(issue_control)
     }
+    fn control_command_result(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+        command_id: &str,
+        action: IssueWorkControlAction,
+    ) -> Result<Option<IssueWorkControl>> {
+        self.repository
+            .load_work_order_control_command(
+                workspace,
+                work_order_id,
+                command_id,
+                planning_control_action(action),
+            )
+            .map(|result| result.map(issue_control))
+    }
+    fn apply_confirmed_control(
+        &self,
+        workspace: &str,
+        request: &crate::application::port::outbound::issue_work_execution_port::ConfirmedIssueControl<'_>,
+    ) -> Result<Option<IssueWorkControl>> {
+        self.repository.apply_confirmed_work_order_control(
+            workspace,
+            &crate::application::port::outbound::planning_work_order_repository_port::ConfirmedWorkControl {
+                work_order_id: request.work_order_id, command_id: request.command_id,
+                action: planning_control_action(request.action), expected_epoch: request.expected_epoch,
+                authorize: request.authorize,
+            },
+        ).map(|result| result.map(issue_control))
+    }
     fn queue_instruction(
         &self,
         workspace: &str,

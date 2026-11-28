@@ -52,6 +52,7 @@ const commands = {
   steer_issue: { type: "steer_issue", issue, command_id: "steer-1", message: "Check the migration" },
   take_over_issue: { type: "take_over_issue", issue, command_id: "take-over-1" },
   retriage_issue: { type: "retriage_issue", issue, command_id: "retriage-1" },
+  apply_issue_comment_request: { type: "apply_issue_comment_request", issue, comment_id: "comment-1" },
   cancel_issue_work: { type: "cancel_issue_work", issue, command_id: "cancel-1", confirm: true },
   track_issue: { type: "track_issue", issue, command_id: "track-1" },
   untrack_issue: { type: "untrack_issue", issue, command_id: "untrack-1" },

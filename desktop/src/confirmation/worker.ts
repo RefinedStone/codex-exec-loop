@@ -24,7 +24,7 @@ export class IssueConfirmationWorker {
       this.cancel();
     } else if (value.type === "begin" && !this.begun && !this.cancelled &&
       onlyFields(value, ["type", "kind", "input", "endpoint", "executable"]) &&
-      (value.kind === "decision" || value.kind === "mode" || value.kind === "autonomy" || value.kind === "binding_resume" || value.kind === "criterion_waiver") && pathText(value.endpoint) && pathText(value.executable)) {
+      (value.kind === "decision" || value.kind === "mode" || value.kind === "autonomy" || value.kind === "binding_resume" || value.kind === "criterion_waiver" || value.kind === "comment_request") && pathText(value.endpoint) && pathText(value.executable)) {
       this.begun = true;
       void this.run(value as Extract<ConfirmationControl, { type: "begin" }>);
     } else if (value.type === "answer" && onlyFields(value, ["type", "approved"]) &&
@@ -73,7 +73,8 @@ export class IssueConfirmationWorker {
         : message.kind === "mode" ? this.service.confirmMode(message.input)
           : message.kind === "autonomy" ? this.service.confirmAutonomy(message.input)
             : message.kind === "binding_resume" ? this.service.confirmBindingResume(message.input)
-              : this.service.confirmCriterionWaiver(message.input));
+              : message.kind === "comment_request" ? this.service.confirmCommentRequest(message.input)
+                : this.service.confirmCriterionWaiver(message.input));
       if (!this.disposed) this.send({ type: "result", response });
     } catch {
       if (!this.disposed) this.send({ type: "failed" });
