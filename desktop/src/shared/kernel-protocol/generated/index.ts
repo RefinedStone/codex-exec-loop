@@ -426,7 +426,7 @@ export type IssueWorkCriterionChannel = ("command" | "data" | "http" | "screen")
 
 export type IssueWorkSummary = { readonly "blocked_reason"?: (IssueWorkBlockReason | null); readonly "delivery_granted": boolean; readonly "task_ids": Array<string>; readonly "work_order_id": string; };
 
-export type IssueWorkVerificationRecipe = ("git_diff_check_v1");
+export type IssueWorkVerificationRecipe = ("git_diff_check_v1" | "repo_git_grep_v1");
 
 export type IssueWorkflowState = ("discovered" | "ineligible" | "needs_info" | "awaiting_decision" | "ready" | "queued" | "running" | "in_review" | "done" | "failed" | "cancelled");
 
@@ -638,7 +638,7 @@ export type TaskVerificationPhase = ("pending" | "running" | "finished");
 
 export type TaskVerificationReceiptState = { readonly "event_id": string; readonly "evidence_revision": number; readonly "verification": TaskVerificationRecord; };
 
-export type TaskVerificationRecipe = ("git_diff_check_v1");
+export type TaskVerificationRecipe = ("git_diff_check_v1" | "repo_git_grep_v1");
 
 export type TaskVerificationRecord = { readonly "artifact"?: (TaskEvidenceArtifact | null); readonly "attempt": TaskVerificationAttemptRecord; readonly "finished_at": string; readonly "manifest"?: (TaskVerificationExecutionManifest | null); readonly "result": TaskVerificationResult; };
 

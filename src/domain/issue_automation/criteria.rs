@@ -35,6 +35,7 @@ pub enum IssueWorkCriterionChannel {
 #[serde(rename_all = "snake_case")]
 pub enum IssueWorkVerificationRecipe {
     GitDiffCheckV1,
+    RepoGitGrepV1,
 }
 
 pub fn normalize_issue_work_criteria(

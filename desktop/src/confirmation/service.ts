@@ -160,14 +160,14 @@ function decisionCriteria(value: unknown): TaskAcceptanceCriterion[] {
     if (!isRecord(criterion) || !onlyFields(criterion, ["id", "scenario", "channel", "essential", "verification_recipe"]) ||
       !boundedText(criterion.id, 128, false) || !boundedText(criterion.scenario, 4_096, false) ||
       !["command", "data", "http", "screen"].includes(criterion.channel as string) || typeof criterion.essential !== "boolean" ||
-      (criterion.verification_recipe != null && (criterion.verification_recipe !== "git_diff_check_v1" || criterion.channel !== "command"))) throw failure();
+      (criterion.verification_recipe != null && ((criterion.verification_recipe !== "git_diff_check_v1" && criterion.verification_recipe !== "repo_git_grep_v1") || criterion.channel !== "command"))) throw failure();
     const id = (criterion.id as string).trim();
     const scenario = (criterion.scenario as string).trim();
     totalBytes += new TextEncoder().encode(id + scenario).length;
     if (ids.has(id) || totalBytes > 16_384) throw failure();
     ids.add(id);
     return { id, scenario, channel: criterion.channel as TaskAcceptanceCriterion["channel"], essential: criterion.essential,
-      ...(criterion.verification_recipe != null ? { verification_recipe: "git_diff_check_v1" as const } : {}) };
+      ...(criterion.verification_recipe != null ? { verification_recipe: criterion.verification_recipe } : {}) };
   });
 }
 

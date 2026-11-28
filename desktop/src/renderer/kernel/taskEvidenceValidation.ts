@@ -1,5 +1,6 @@
 /** 읽기 metadata만 검증한다. 작업자 보고와 호스트 실행을 분리하며 현재 판정은 서버가 소유한다. */
 import type { TaskEvidenceState } from "./protocol";
+import { isTaskVerificationRecipe } from "./taskVerificationRecipe";
 
 type ObjectValue = Record<string, unknown>;
 const record = (value: unknown): value is ObjectValue => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -59,7 +60,7 @@ type VerificationFact = ObjectValue & { attempt: VerificationAttempt; result: Ob
 function verificationAttempt(value: unknown): value is VerificationAttempt {
   return record(value) && keys(value, ["attempt_id", "scope", "criterion_id", "recipe", "attempt", "requested_at"])
     && token(value.attempt_id) && scope(value.scope) && positive(value.scope.acceptance_revision)
-    && identifier(value.criterion_id) && value.recipe === "git_diff_check_v1"
+    && identifier(value.criterion_id) && isTaskVerificationRecipe(value.recipe)
     && positive(value.attempt) && value.attempt <= 64 && timestamp(value.requested_at);
 }
 
@@ -70,7 +71,7 @@ function sameVerificationAttempt(left: VerificationAttempt, right: VerificationA
 
 function verificationManifest(value: unknown): value is ObjectValue & { source: ObjectValue } {
   if (!record(value) || !keys(value, ["recipe", "base_commit_sha", "base_tree_sha", "source", "git_binary_sha256", "command_sha256", "environment_sha256", "configuration_sha256"])
-    || value.recipe !== "git_diff_check_v1" || !oid(value.base_commit_sha) || !oid(value.base_tree_sha)
+    || !isTaskVerificationRecipe(value.recipe) || !oid(value.base_commit_sha) || !oid(value.base_tree_sha)
     || !record(value.source) || !tree(value.source)
     || ![value.git_binary_sha256, value.command_sha256, value.environment_sha256, value.configuration_sha256].every(token)) return false;
   const width = (value.base_commit_sha as string).length;
@@ -134,7 +135,7 @@ function hostVerification(value: unknown, task: ObjectValue & { scope: ObjectVal
     || !named(value.phase, ["pending", "running", "finished"])
     || !named(value.state, ["pending", "running", "passed", "failed", "not_run", "stale", "unavailable"])
     || !optionalError(value.unavailable)) return false;
-  if (value.attempt == null) return criterion.verification_recipe === "git_diff_check_v1" && criterion.channel === "command"
+  if (value.attempt == null) return isTaskVerificationRecipe(criterion.verification_recipe) && criterion.channel === "command"
     && value.phase === "pending" && value.state === "pending" && value.receipt == null && value.unavailable == null;
   if (!verificationAttempt(value.attempt) || value.attempt.scope.task_id !== task.scope.task_id
     || value.attempt.criterion_id !== criterion.id) return false;
@@ -163,7 +164,7 @@ function criterion(value: unknown, task: ObjectValue & { scope: ObjectValue }, e
     || typeof value.criterion.essential !== "boolean"
     || (value.state != null && !named(value.state, ["pending", "pass", "fail", "blocked", "stale", "waived"]))) return false;
   if (value.criterion.verification_recipe != null
-    && (value.criterion.verification_recipe !== "git_diff_check_v1" || value.criterion.channel !== "command")) return false;
+    && (!isTaskVerificationRecipe(value.criterion.verification_recipe) || value.criterion.channel !== "command")) return false;
   if (value.host_verification != null && !hostVerification(value.host_verification, task, value.criterion, evidenceRevision)) return false;
   if (value.evidence != null && (!evidenceReceipt(value.evidence)
     || (value.evidence.evidence_revision as number) > evidenceRevision

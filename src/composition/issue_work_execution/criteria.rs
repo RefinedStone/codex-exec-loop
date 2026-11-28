@@ -70,6 +70,7 @@ pub(super) fn verified(
                 IssueWorkVerificationRecipe::GitDiffCheckV1 => {
                     TaskVerificationRecipe::GitDiffCheckV1
                 }
+                IssueWorkVerificationRecipe::RepoGitGrepV1 => TaskVerificationRecipe::RepoGitGrepV1,
             }),
         })
         .collect();
