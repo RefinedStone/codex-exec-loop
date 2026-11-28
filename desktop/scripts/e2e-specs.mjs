@@ -3,6 +3,7 @@ export const MANUAL_E2E_SPECS = new Map([
   ["browserAutomation.mjs", "opens a visible Electron window (show: true)"],
   ["browserBridge.mjs", "needs AKRA_GATEWAY_BIN to point to a built native gateway"],
   ["storage-service-roundtrip.mjs", "needs AKRA_STORAGE_FIXTURE_BIN to point to a compiled Rust library test executable"],
+  ["thread-fork-native.mjs", "needs AKRA_CODEX_ENTRY; uses two real app-servers and a disposable synthetic CODEX_HOME"],
 ]);
 
 export function defaultE2eSpecs(fileNames) {
