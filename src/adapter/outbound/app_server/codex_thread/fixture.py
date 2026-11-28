@@ -61,13 +61,9 @@ for line in sys.stdin:
         result = {"account": None if scenario == "auth_missing" else account}
     elif method == "account/rateLimits/read":
         assert params == {}
-        match scenario:
-            case "quota_reply_lost":
-                sys.exit(0)
-            case "quota_exhausted":
-                used_percent = 100
-            case _:
-                used_percent = 10
+        if {"quota_reply_lost": True}.get(scenario, False):
+            sys.exit(0)
+        used_percent = {"quota_exhausted": 100}.get(scenario, 10)
         result = {
             "ordinaryUsageAllowed": True,
             "rateLimits": {"limitId": "other", "primary": {"usedPercent": 0}},

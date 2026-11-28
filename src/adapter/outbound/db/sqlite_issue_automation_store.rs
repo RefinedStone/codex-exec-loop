@@ -1040,7 +1040,7 @@ fn ensure_schema(
     transaction(connection, guard, |transaction| {
         match schema_identity(transaction)? {
             (APPLICATION_ID, SCHEMA_VERSION) => validate_schema(transaction),
-            (APPLICATION_ID, version @ 1..=15) => {
+            (APPLICATION_ID, version @ 1..=16) => {
                 // Exact prior schemas are validated before the additive migration.
                 // Existing bindings, observations, workflow rows and revisions remain untouched.
                 validate_schema_version(transaction, version)?;
@@ -1096,7 +1096,9 @@ fn ensure_schema(
                     widen_provider_checks(transaction)?;
                 }
                 transaction.execute_batch(quota::SCHEMA)?;
-                comment_command::create_schema(transaction)?;
+                if version < 16 {
+                    comment_command::create_schema(transaction)?;
+                }
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
             }
