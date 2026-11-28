@@ -1422,8 +1422,10 @@ The Gateway records the external documents that a thread mentions, without a mod
   to the remote branch of the same name (never a force push) and create a PR with `gh`; the main process asks
   before both and shows the target (`desktop/src/main/gitPublish.ts`).
   For a normal `origin` tracking layout with the same fetch and push URL, the push dialog includes
-  the last fetched destination SHA if known. After confirmation Desktop checks the advertised SHA
-  and refuses if it changed. This is a preflight for ordinary pushes, not an atomic force lease.
+  the last fetched destination SHA if known. Desktop checks that the reviewed source commit descends
+  from that SHA and pushes the exact source OID with an explicit destination lease. A concurrent
+  destination change cannot authorize a write, and a matching lease cannot authorize a rewrite.
+  Without a reviewed tip Desktop uses a plain push, not a lease.
   [Graph base realignment](git-base-realignment.md) combines a reviewed local base reset and ordered picks in one journal record.
   The separate operator-only protected rewrite workflow is documented in
   [Protected Git destinations](git-protected-destinations.md). It uses an explicit fetch and an exact SHA lease.
