@@ -11,11 +11,6 @@ export function currentFileTarget(): DraftTarget | null {
     ? { hostId: state.connection.endpoint, worktree, threadId: state.openThreadId } : null;
 }
 
-export function threadDraftKey(threadId: string): string {
-  const target = currentFileTarget();
-  return target?.threadId === threadId ? targetKey(target) : threadId;
-}
-
 export async function readSource(request: ManifestRequest, target: DraftTarget, source: { path: string; previousId?: string }): Promise<{
   diff: GitFileDiff; manifestId: string; changed: boolean;
 }> {

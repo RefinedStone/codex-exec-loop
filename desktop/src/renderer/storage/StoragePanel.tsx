@@ -1,7 +1,7 @@
 import "./storage.css";
 import { useEffect, useRef, useState } from "react";
 import type { RegisteredPanelProps } from "../extensions/registry";
-import { threadDraftKey } from "../conversation/attachmentSource";
+import { threadDraftKey } from "../conversation/threadDraftKey";
 import { setDraft, toast, useUiStore } from "../session/uiStore";
 import { clearStorageEvidence, useStorageEvidence } from "./storageEvidence";
 import { formatBytes, formatRatio } from "./storageNumbers";
