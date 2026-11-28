@@ -1347,6 +1347,12 @@ The Gateway records the external documents that a thread mentions, without a mod
   access for delegated threads. Codex keeps this dedicated profile's session in the
   operating system credential store. Run the command as the user who runs the Gateway.
   For opt-in PR review, see [Configure defensive pull request review](pr-review-backend.md).
+- Attention has two independent authorities. The repository kernel owns unresolved demands and
+  their revisions. A local Desktop profile owns explicit read/unread, snooze and pin choices for
+  `(kernel, item ID, revision)`. A new revision starts unread. Viewing a hidden window, losing a
+  query or receiving a notification does not mark anything read. Those choices are shared between
+  windows of that profile and survive a restart; they do not sync to another device. They never
+  acknowledge a demand, remove its history, or suspend the task.
 - Desktop basics (plan 26 U1, #2626): zoom is per area. The window page stays at 100%; the renderer applies
   CSS `zoom` to each body view (home, fleet, thread, remote), the sidebar, the top bar, each right-panel tab,
   the dot dock, the dot window, and the ChatGPT dock. The terminal multiplies its font size, and the browser
