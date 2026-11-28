@@ -56,6 +56,7 @@ impl GatewayKernelClientRuntime {
         Self {
             workspace_directory,
             snapshot,
+            thread_activity: Vec::new(),
             startup_generation: 0,
             startup_workspace: None,
             synchronized: false,

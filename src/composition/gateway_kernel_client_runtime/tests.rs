@@ -184,6 +184,55 @@ fn kernel_values_become_the_session_list_thread_activity_and_auto_follow_setting
 }
 
 #[test]
+fn viewed_gateway_turn_and_approval_follow_only_current_thread_activity() {
+    let (mut client, _) = super::fixture::client_fixture("/repo", Vec::new());
+    let activity = json!({"type":"thread_activity","threads":[
+        {"thread_id":"t-1","running":true,"active_turn_id":"turn-1","auto_follow_active":false,
+         "approval":{"approval_id":"a-1","server_request_id":"7","summary":"run tests","details":[]}}
+    ]});
+    client.apply_value(activity.clone());
+    assert!(client.snapshot.conversation_runtime.active_turn.is_none());
+    assert!(client.snapshot.conversation_runtime.approval.is_none());
+
+    for id in ["t-2", "t-1"] {
+        client.apply_mutation(
+            commands::MutationOutcome::ThreadStarted(Box::new(
+                super::fixture::conversation(id).into(),
+            )),
+            None,
+        );
+        let runtime = &client.snapshot.conversation_runtime;
+        assert_eq!(runtime.active_turn.is_some(), id == "t-1");
+        assert_eq!(runtime.approval.is_some(), id == "t-1");
+    }
+    let started_at = client
+        .snapshot
+        .conversation_runtime
+        .active_turn
+        .as_ref()
+        .unwrap()
+        .started_at;
+    client.apply_value(activity.clone());
+    assert_eq!(
+        client
+            .snapshot
+            .conversation_runtime
+            .active_turn
+            .as_ref()
+            .unwrap()
+            .started_at,
+        started_at
+    );
+
+    client.apply_kernel(KernelClientUpdate::Disconnected("closed".to_string()));
+    assert!(client.snapshot.conversation_runtime.active_turn.is_none());
+    assert!(client.snapshot.conversation_runtime.approval.is_none());
+    client.apply_value(activity);
+    assert!(client.snapshot.conversation_runtime.active_turn.is_some());
+    assert!(client.snapshot.conversation_runtime.approval.is_some());
+}
+
+#[test]
 fn startup_waits_for_sync_and_lost_connection_is_not_ready() {
     let (mut client, sender) = super::fixture::client_fixture("/repo", Vec::new());
 

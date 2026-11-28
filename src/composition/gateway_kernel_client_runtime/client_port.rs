@@ -39,6 +39,7 @@ impl NativeClientPort for GatewayKernelClientRuntime {
                     self.conversation.cancel();
                     self.snapshot.revision = self.snapshot.revision.saturating_add(1);
                     self.snapshot.conversation = ConversationSnapshot::Idle;
+                    self.refresh_conversation_activity();
                     vec![AppEvent::ConversationChanged {
                         correlation: None,
                         snapshot: ConversationSnapshot::Idle,
