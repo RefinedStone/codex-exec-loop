@@ -22,7 +22,7 @@ architecture-test exception ledger cover different failure classes and must stay
 | Shell runtime input flow: key events, command palette, submit, escape/cancel | conversation input, shell controller, command modules | reducer/controller tests plus fullscreen interaction tests | PageUp/PageDown, Ctrl+Home/End, Ctrl+E, mouse and composer focus have one owner. |
 | Shell rendering snapshots plus targeted assertions | `app/fullscreen_frame_model.rs`, `app/shell_rendering/**`, presentation | fullscreen rendering, layout, inspection, frame-model tests | Pure draw from an owned frame; no application or terminal I/O. |
 | Alternate-screen terminal lifecycle and TestBackend path | `app/ratatui_frontend.rs`, `app/fullscreen_terminal_adapter.rs` | escape-sequence lifecycle and TestBackend delivery tests | Enter/leave alternate screen, mouse/focus/paste modes, cursor restoration. |
-| Startup, session, conversation, auto-follow, planning control state | app/controller/runtime modules | colocated state and event tests | Core/application authority is projected, never recreated in the TUI. |
+| Startup, session, conversation, auto-follow, planning control state | app/controller/runtime modules | colocated state and event tests; Gateway history `TestBackend` and Gateway client runtime fixtures | Gateway thread activity is mapped before the TUI installs the conversation snapshot. Core/application authority is projected, never recreated in the TUI. |
 | TUI support and validation devices | test helpers, fullscreen regression harness, architecture guard | deterministic TestBackend and static guards | Shared helpers remain presentation-only and deterministic. |
 
 ## Fullscreen Proof Matrix

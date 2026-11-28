@@ -322,6 +322,8 @@ const TUI_COVERAGE_SURFACES: &[TuiCoverageSurface] = &[
         ],
         test_entrypoints: &[
             "src/adapter/inbound/tui/app.rs",
+            "src/adapter/inbound/tui/app/fullscreen_rendering_tests/gateway_history.rs",
+            "src/composition/gateway_kernel_client_runtime/tests.rs",
             "src/adapter/inbound/tui/app/auto_follow_controls.rs",
             "src/adapter/inbound/tui/app/auto_follow_overlay_ui.rs",
             "src/adapter/inbound/tui/app/conversation_model/view_model/messages.rs",
