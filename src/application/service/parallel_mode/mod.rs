@@ -151,11 +151,13 @@ pub(super) use self::support::{
     IntegrationWorktreeHead, current_branch_name, current_timestamp, ensure_directory_exists,
     integration_worktree_head,
 };
-const AKRA_PARALLEL_INTEGRATION_BRANCH_ENV_VAR: &str = "AKRA_PARALLEL_INTEGRATION_BRANCH";
-const AKRA_PARALLEL_INTEGRATION_BRANCH_CONFIG_KEY: &str = "akra.parallelIntegrationBranch";
 const AKRA_PARALLEL_ALLOW_PUBLIC_REPOSITORY_ENV_VAR: &str = "AKRA_PARALLEL_ALLOW_PUBLIC_REPOSITORY";
 const AKRA_PARALLEL_AUTONOMOUS_DELIVERY_ENV_VAR: &str = "AKRA_PARALLEL_AUTONOMOUS_DELIVERY";
-pub(crate) const DEFAULT_PARALLEL_MODE_INTEGRATION_BRANCH: &str = "prerelease";
+use crate::configuration::integration_branch::DEFAULT_PARALLEL_MODE_INTEGRATION_BRANCH;
+#[cfg(test)]
+use crate::configuration::integration_branch::{
+    normalize_parallel_mode_integration_branch, resolve_parallel_mode_integration_branch_strict,
+};
 #[cfg(test)]
 const DEFAULT_PUSH_REMOTE_NAME: &str = DEFAULT_GITHUB_PUSH_REMOTE_NAME;
 const DEFAULT_POOL_SIZE: usize = 3;
@@ -208,28 +210,7 @@ fn try_parallel_mode_integration_branch_for_repo_with_runtime(
     runtime: &dyn ParallelModeRuntimePort,
     repo_root: &str,
 ) -> Result<String, String> {
-    if let Some(config) = crate::configuration::current_process_config_for_workspace(Path::new(
-        repo_root,
-    ))
-    .map_err(|error| {
-        format!("failed to resolve configuration for target workspace `{repo_root}`: {error:#}")
-    })? {
-        return Ok(config.config.parallel.integration_branch.clone());
-    }
-    let env_value = runtime.environment_variable(AKRA_PARALLEL_INTEGRATION_BRANCH_ENV_VAR)?;
-    let config_value = run_command_with_runtime(
-        runtime,
-        "git",
-        [
-            "-C",
-            repo_root,
-            "config",
-            "--get",
-            AKRA_PARALLEL_INTEGRATION_BRANCH_CONFIG_KEY,
-        ],
-        None,
-    );
-    resolve_parallel_mode_integration_branch_strict(env_value.as_deref(), config_value.as_deref())
+    runtime.integration_branch_for_workspace(repo_root)
 }
 
 #[cfg(test)]
@@ -240,25 +221,6 @@ fn resolve_parallel_mode_integration_branch(
     normalize_parallel_mode_integration_branch(env_value)
         .or_else(|| normalize_parallel_mode_integration_branch(config_value))
         .unwrap_or_else(|| DEFAULT_PARALLEL_MODE_INTEGRATION_BRANCH.to_string())
-}
-
-fn resolve_parallel_mode_integration_branch_strict(
-    env_value: Option<&str>,
-    config_value: Option<&str>,
-) -> Result<String, String> {
-    if let Some(value) = env_value.filter(|value| !value.trim().is_empty()) {
-        return normalize_parallel_mode_integration_branch(Some(value)).ok_or_else(|| {
-            "AKRA_PARALLEL_INTEGRATION_BRANCH is invalid; delivery target fallback is disabled"
-                .to_string()
-        });
-    }
-    if let Some(value) = config_value.filter(|value| !value.trim().is_empty()) {
-        return normalize_parallel_mode_integration_branch(Some(value)).ok_or_else(|| {
-            "akra.parallelIntegrationBranch is invalid; delivery target fallback is disabled"
-                .to_string()
-        });
-    }
-    Ok(DEFAULT_PARALLEL_MODE_INTEGRATION_BRANCH.to_string())
 }
 
 fn try_push_remote_name_with_runtime(
@@ -357,36 +319,6 @@ impl ParallelModeDeliverySafetyPolicy {
     }
 }
 
-fn normalize_parallel_mode_integration_branch(value: Option<&str>) -> Option<String> {
-    let raw_value = value?;
-    if raw_value.is_empty()
-        || raw_value != raw_value.trim()
-        || raw_value == "HEAD"
-        || raw_value == "@"
-        || raw_value.starts_with('-')
-        || raw_value.starts_with('/')
-        || raw_value.ends_with('/')
-        || raw_value.ends_with('.')
-        || raw_value.contains("..")
-        || raw_value.contains("@{")
-        || raw_value.ends_with(".lock")
-        || raw_value.chars().any(|ch| {
-            ch <= '\u{1f}'
-                || ch == '\u{7f}'
-                || ch.is_whitespace()
-                || matches!(ch, '~' | '^' | ':' | '?' | '*' | '[' | '\\')
-        })
-    {
-        return None;
-    }
-    if raw_value
-        .split('/')
-        .any(|segment| segment.is_empty() || segment.starts_with('.') || segment.ends_with(".lock"))
-    {
-        return None;
-    }
-    Some(raw_value.to_string())
-}
 fn remote_branch_name(remote_name: &str, branch_name: &str) -> String {
     format!("{remote_name}/{branch_name}")
 }

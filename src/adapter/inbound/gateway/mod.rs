@@ -82,6 +82,16 @@ pub async fn run_from_env() -> Result<()> {
 }
 
 pub async fn run_with_args(args: Vec<String>) -> Result<()> {
+    if let [cmd, rest @ ..] = args.as_slice()
+        && cmd == "git-operator"
+    {
+        let args = rest
+            .iter()
+            .map(std::ffi::OsString::from)
+            .collect::<Vec<_>>();
+        crate::adapter::inbound::cli::git_protect::run(&args, &mut std::io::stdout(), true)?;
+        return Ok(());
+    }
     match parse_args(&args)? {
         GatewayCommand::Help => {
             print!("{USAGE}");

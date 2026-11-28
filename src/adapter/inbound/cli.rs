@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
  */
 mod context;
 mod extensions;
+pub(crate) mod git_protect;
 mod issue_form;
 mod kernel;
 mod mcp;
@@ -73,6 +74,9 @@ where
     // None 반환은 native TUI가 계속 booting해야 한다는 뜻이다. 처리된 subcommand는 모두 explicit exit code를 돌린다.
     match args.as_slice() {
         [] => Ok(None),
+        [command, rest @ ..] if command == OsStr::new("git") => {
+            Ok(Some(git_protect::run(rest, stdout, false)?))
+        }
         [command, action]
             if command == OsStr::new("codex-delegation") && action == OsStr::new("login") =>
         {
@@ -97,6 +101,7 @@ where
             Ok(Some(kernel::pr_review_settings(rest, stdout)?))
         }
         [flag] if is_help_flag(flag) => {
+            writeln!(stdout, "{}", git_protect::USAGE)?;
             writeln!(stdout, "{ADMIN_SERVER_USAGE}")?;
             writeln!(stdout, "{ADMIN_SERVER_ALIAS_USAGE}")?;
             writeln!(stdout, "{TELEGRAM_BOT_USAGE}")?;

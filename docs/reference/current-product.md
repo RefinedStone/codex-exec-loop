@@ -1426,6 +1426,8 @@ The Gateway records the external documents that a thread mentions, without a mod
   from that SHA and pushes the exact source OID with an explicit destination lease. A concurrent
   destination change cannot authorize a write, and a matching lease cannot authorize a rewrite.
   Without a reviewed tip Desktop uses a plain push, not a lease.
+  The separate operator-only protected rewrite workflow is documented in
+  [Protected Git destinations](git-protected-destinations.md). It uses an explicit fetch and an exact SHA lease.
   The "그래프" side panel (plan 27 G1, G2) shows the commit graph of the open thread's folder, read-only. It reads
   `akra/git/graph` when the panel opens, when the folder changes, and on "새로 고침"; it draws only the
   visible rows and reads the next page 60 rows before the end. A row shows the lane lines, the ref labels,

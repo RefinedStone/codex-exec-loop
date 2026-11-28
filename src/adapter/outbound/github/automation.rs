@@ -37,6 +37,8 @@ use crate::domain::parallel_mode::{
 use crate::git_subprocess;
 use crate::subprocess;
 
+pub(crate) mod protected_push;
+
 pub struct GithubAutomationAdapter;
 
 const FROZEN_GITHUB_REMOTE_NAME: &str = "akra-frozen-delivery-target";
@@ -451,6 +453,7 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         let commit_sha = run_git_stdout(repo_root, &["rev-parse", "--verify", &commit_ref])?;
         let refspec = format!("{commit_sha}:refs/heads/{branch_name}");
         if force_with_lease {
+            // Automation is not an operator. It may publish a fast-forward but never grant itself a rewrite.
             let expected_remote_head = self
                 .remote_branch_head_for_delivery_target(
                     repo_root,
@@ -459,6 +462,19 @@ impl GithubAutomationPort for GithubAutomationAdapter {
                     branch_name,
                 )?
                 .ok_or_else(|| anyhow!("force-with-lease target branch is absent"))?;
+            if run_git(
+                repo_root,
+                &[
+                    "merge-base",
+                    "--is-ancestor",
+                    &expected_remote_head,
+                    &commit_sha,
+                ],
+            )
+            .is_err()
+            {
+                bail!("non-fast-forward updates require the interactive operator lease workflow");
+            }
             let lease =
                 format!("--force-with-lease=refs/heads/{branch_name}:{expected_remote_head}");
             run_git_to_delivery_target(
@@ -1006,16 +1022,18 @@ impl GithubAutomationPort for GithubAutomationAdapter {
         }
         let lease = format!("--force-with-lease=refs/heads/{branch_name}:{expected_sha}");
         let delete_refspec = format!(":refs/heads/{branch_name}");
-        run_git_to_delivery_target(
-            repo_root,
-            credential_redacted_push_url,
-            &[
-                "push",
-                lease.as_str(),
-                FROZEN_GITHUB_REMOTE_NAME,
-                delete_refspec.as_str(),
-            ],
-        )?;
+        protected_push::guarded(repo_root, credential_redacted_push_url, branch_name, || {
+            run_git_to_delivery_target(
+                repo_root,
+                credential_redacted_push_url,
+                &[
+                    "push",
+                    lease.as_str(),
+                    FROZEN_GITHUB_REMOTE_NAME,
+                    delete_refspec.as_str(),
+                ],
+            )
+        })?;
         Ok(true)
     }
 }
@@ -2100,8 +2118,24 @@ fn fetch_branch_to_tracking_ref_isolated(
     branch_name: &str,
     tracking_ref: &str,
 ) -> Result<String> {
-    run_git(repo_root, &["check-ref-format", "--branch", branch_name])?;
     run_git(repo_root, &["check-ref-format", tracking_ref])?;
+    let commit_sha =
+        fetch_branch_oid_isolated(repo_root, credential_redacted_push_url, branch_name)?;
+    let expected_old = run_git_stdout(repo_root, &["rev-parse", "--verify", tracking_ref])
+        .unwrap_or_else(|_| "0".repeat(commit_sha.len()));
+    run_git(
+        repo_root,
+        &["update-ref", tracking_ref, &commit_sha, &expected_old],
+    )?;
+    Ok(commit_sha)
+}
+
+fn fetch_branch_oid_isolated(
+    repo_root: &str,
+    credential_redacted_push_url: &str,
+    branch_name: &str,
+) -> Result<String> {
+    run_git(repo_root, &["check-ref-format", "--branch", branch_name])?;
     let network_context =
         IsolatedGithubNetworkContext::for_git(repo_root, credential_redacted_push_url)?;
     let fetched_ref = "refs/heads/akra-frozen-fetch-result";
@@ -2137,12 +2171,6 @@ fn fetch_branch_to_tracking_ref_isolated(
         bail!("frozen GitHub target fetch produced an invalid commit OID");
     }
 
-    let expected_old = run_git_stdout(repo_root, &["rev-parse", "--verify", tracking_ref])
-        .unwrap_or_else(|_| "0".repeat(commit_sha.len()));
-    run_git(
-        repo_root,
-        &["update-ref", tracking_ref, &commit_sha, &expected_old],
-    )?;
     Ok(commit_sha)
 }
 
@@ -3625,6 +3653,8 @@ exit 23
                 .contains("git definitely-not-a-git-command failed")
         );
     }
+
+    mod protected_lease;
 
     struct GitFixture {
         repo: PathBuf,

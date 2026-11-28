@@ -92,6 +92,7 @@ function connectBridge(endpoint: string, startDaemon?: () => void, host?: string
     confirmIssueBindingResume: async () => ({ cancelled: true }),
     gitBranchSummary: async () => ({ ok: false as const, message: "" }),
     gitCommitDiff: async () => ({ text: "", truncated: false }),
+    gitOperator: async () => { throw new Error("operator Git not expected in session test"); },
     gitPush: async () => ({ ok: true as const, url: null }),
     gitCreatePullRequest: async () => ({ ok: true as const, url: null }),
     gitHunks: async () => ({ hunks: [], message: null }),

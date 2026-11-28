@@ -16,6 +16,7 @@ import { isVaultRestoreTarget, vaultRestoreProfileHold } from "../shared/vaultRe
 import { vaultRestorePowerHold } from "./vaultRestorePower";
 import { isZoomDirection, isZoomScope, stepZoomFactors, type ZoomDirection, type ZoomScope } from "../shared/zoom";
 import { GatewayConnection } from "./gatewayConnection";
+import { gitOperator } from "./gitOperator";
 import { resolveGatewayEndpoint, resolveGatewayExecutable } from "./gatewayEndpoint";
 import { spawn as spawnPty } from "node-pty";
 
@@ -612,6 +613,12 @@ ipcMain.handle(IPC_CHANNELS.gitHunkAction, async (event, cwd: unknown, action: u
 });
 
 // push 와 PR 만들기는 저장소 밖에 쓴다. main 이 확인하고, 창에 어디에 무엇을 쓰는지 보여 준다.
+ipcMain.handle(IPC_CHANNELS.gitOperator, (event, cwd:unknown, action:unknown, branch:unknown) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const frame = event.senderFrame;
+  if (!window || !mainWindows.has(window) || !frame || frame !== event.sender.mainFrame || !isAppUrl(frame.url,event.sender)) throw new Error("앱 기본 창에서 요청하십시오.");
+  return gitOperator(event,repositoryRoot(),{cwd,action,branch});
+});
 ipcMain.handle(IPC_CHANNELS.gitPush, async (event, cwd: unknown) => {
   const planned = await planPush(cwd);
   if (!planned.ok) return planned;

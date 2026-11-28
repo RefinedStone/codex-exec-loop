@@ -21,6 +21,7 @@ pub(crate) mod kernel_spec;
 pub(crate) mod git_graph;
 // git_operation 은 git 작업 엔진의 계획, 일지 기록, 되돌리기 규칙이다 (plan 27 G3).
 pub(crate) mod git_operation;
+pub(crate) mod git_protection;
 // issue_work 는 외부 이슈의 참조와 공유본이다. 복원 평문은 가지지 않는다 (#2415).
 pub(crate) use akra_issue_core::issue_work;
 // 이슈 자동화의 추적 장부 값과 상태 전이이다 (plan 28 IA1-1).

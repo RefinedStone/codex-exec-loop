@@ -31,6 +31,8 @@ use tracing_subscriber::EnvFilter;
 
 use crate::domain::planning::delivery_evidence::TaskEvidenceDeliveryMode;
 
+pub(crate) mod integration_branch;
+
 pub const CONFIG_SCHEMA_VERSION: u32 = 1;
 const CONFIG_FILE_NAME: &str = "config.toml";
 const PROJECT_CONFIG_DIRECTORY: &str = ".akra";
