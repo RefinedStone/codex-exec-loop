@@ -57,6 +57,7 @@ mod execution_answers;
 mod feedback;
 mod intervention;
 mod private_store;
+mod quota;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod triage;
@@ -67,7 +68,7 @@ mod tests;
 type RuntimeDirectoryResolver = dyn Fn(&str) -> Result<PathBuf> + Send + Sync;
 
 const APPLICATION_ID: i64 = 0x414b4941;
-const SCHEMA_VERSION: i64 = 16;
+const SCHEMA_VERSION: i64 = 17;
 /// Version 15 only widens the provider CHECK for Linear (#2564). No row changes.
 /// Version 16 adds the issue comment command ledger (#2567).
 const PROVIDER_CHECK: &str = "CHECK (provider IN ('github', 'jira', 'linear'))";
@@ -159,6 +160,26 @@ impl SqliteIssueAutomationStoreAdapter {
 }
 
 impl IssueAutomationStorePort for SqliteIssueAutomationStoreAdapter {
+    fn issue_quota_wait(
+        &self,
+        workspace: &str,
+        lane: crate::application::port::outbound::issue_account_quota_port::IssueQuotaLane,
+    ) -> Result<Option<crate::application::port::outbound::issue_account_quota_port::IssueQuotaWait>>
+    {
+        self.with_connection(workspace, |connection, _| {
+            quota::read(connection, workspace, lane)
+        })
+    }
+
+    fn change_issue_quota_wait(
+        &self,
+        workspace: &str,
+        change: crate::application::port::outbound::issue_account_quota_port::IssueQuotaWaitChange,
+    ) -> Result<bool> {
+        self.with_connection(workspace, |connection, guard| {
+            transaction(connection, guard, |tx| quota::change(tx, workspace, change))
+        })
+    }
     fn issue_binding_pause_state(
         &self,
         workspace: &str,
@@ -1019,7 +1040,7 @@ fn ensure_schema(
     transaction(connection, guard, |transaction| {
         match schema_identity(transaction)? {
             (APPLICATION_ID, SCHEMA_VERSION) => validate_schema(transaction),
-            (APPLICATION_ID, version @ 1..=15) => {
+            (APPLICATION_ID, version @ 1..=16) => {
                 // Exact prior schemas are validated before the additive migration.
                 // Existing bindings, observations, workflow rows and revisions remain untouched.
                 validate_schema_version(transaction, version)?;
@@ -1074,7 +1095,10 @@ fn ensure_schema(
                 if version < 15 {
                     widen_provider_checks(transaction)?;
                 }
-                comment_command::create_schema(transaction)?;
+                transaction.execute_batch(quota::SCHEMA)?;
+                if version < 16 {
+                    comment_command::create_schema(transaction)?;
+                }
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 validate_schema(transaction)
             }
@@ -1109,6 +1133,7 @@ fn ensure_schema(
                 decision_deadlines::create_schema(transaction)?;
                 arbiter::create_schema(transaction)?;
                 binding_pause::create_schema(transaction)?;
+                transaction.execute_batch(quota::SCHEMA)?;
                 comment_command::create_schema(transaction)?;
                 transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
                 transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -1224,6 +1249,9 @@ fn validate_schema_version(connection: &Connection, version: i64) -> Result<()> 
     }
     if version >= 16 {
         expected.push((comment_command::TABLE, comment_command::SCHEMA));
+    }
+    if version >= 17 {
+        expected.push((quota::TABLE, quota::SCHEMA));
     }
     expected.sort_by_key(|(name, _)| *name);
     for (name, schema) in expected {

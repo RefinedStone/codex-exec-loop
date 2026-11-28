@@ -121,6 +121,10 @@ fn sample_commands() -> Vec<KernelCommand> {
             paused: true,
             expected_revision: 0,
         },
+        KernelCommand::RetryIssueAccountQuota {
+            lane: crate::domain::issue_automation::collection::IssueQuotaLane::Start,
+            expected_revision: 7,
+        },
         KernelCommand::AnswerIssueDecision {
             criteria: None,
             decision_id: "decision-1".to_owned(),

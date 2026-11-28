@@ -1668,6 +1668,24 @@ impl CodexAppServerAdapter {
     }
 }
 
+impl crate::application::port::outbound::issue_account_quota_port::IssueAccountQuotaPort
+    for CodexAppServerAdapter
+{
+    fn read(
+        &self,
+    ) -> crate::application::port::outbound::issue_account_quota_port::IssueAccountQuota {
+        use crate::application::port::outbound::issue_account_quota_port::IssueAccountQuota;
+        // Use the executor's transport, but never the shared runtime's automatic retry path.
+        let Ok(mut connection) = self.open_unattended_connection() else {
+            return IssueAccountQuota::Unknown;
+        };
+        match connection.initialize() {
+            Ok(_) => connection.read_account_quota(),
+            Err(_) => IssueAccountQuota::Unknown,
+        }
+    }
+}
+
 impl StartupProbePort for CodexAppServerAdapter {
     fn load_local_startup_prerequisites(
         &self,

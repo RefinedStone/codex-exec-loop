@@ -63,8 +63,39 @@ pub(super) fn make_pre_auto_schema(connection: &Connection) {
 
 pub(super) fn make_pre_comment_command_schema(connection: &Connection) {
     connection
-        .execute_batch("DROP TABLE issue_comment_commands;")
+        .execute_batch("DROP TABLE issue_account_quota; DROP TABLE issue_comment_commands;")
         .unwrap();
+}
+
+#[test]
+fn version_sixteen_adds_quota_without_replacing_the_comment_table() {
+    let fixture = Fixture::new("issue-quota-migration-sixteen");
+    let original = fixture.adapter().ensure_collection(fixture.cwd()).unwrap();
+    let connection = Connection::open(fixture.database()).unwrap();
+    connection
+        .execute_batch("DROP TABLE issue_account_quota;")
+        .unwrap();
+    connection.pragma_update(None, "user_version", 16).unwrap();
+    validate_schema_version(&connection, 16).unwrap();
+    drop(connection);
+
+    let adapter = fixture.adapter();
+    assert_eq!(adapter.ensure_collection(fixture.cwd()).unwrap(), original);
+    assert_eq!(
+        adapter
+            .issue_quota_wait(
+                fixture.cwd(),
+                crate::domain::issue_automation::collection::IssueQuotaLane::Start
+            )
+            .unwrap(),
+        None
+    );
+    let connection = Connection::open(fixture.database()).unwrap();
+    assert_eq!(
+        schema_identity(&connection).unwrap(),
+        (APPLICATION_ID, SCHEMA_VERSION)
+    );
+    validate_schema(&connection).unwrap();
 }
 
 pub(super) fn make_pre_binding_pause_schema(connection: &Connection) {

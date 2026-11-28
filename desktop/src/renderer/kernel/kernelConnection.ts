@@ -38,7 +38,7 @@ export type KernelPhase = "idle" | "attaching" | "attached" | "failed";
 export type KernelInterest = "overview" | "issues" | "delegation" | "issue_attention";
 /** 마지막으로 수락한 planning 조회의 현재성이다. 증거의 의미는 커널이 판정한다. */
 export type PlanningEvidenceFreshness = "current" | "refreshing" | "stale";
-export type IssueCommandPending = "binding_pause" | "mode" | "sync" | "autonomy" | "decision" | "intervention";
+export type IssueCommandPending = "binding_pause" | "mode" | "sync" | "autonomy" | "decision" | "intervention" | "quota";
 
 export interface IssueDecisionAttention {
   workspace: string;
@@ -712,6 +712,10 @@ export class KernelConnection {
 
   async syncIssues(): Promise<void> {
     await this.runIssueCommand({ type: "sync_issues" }, "sync");
+  }
+
+  async retryIssueAccountQuota(lane: import("./protocol").IssueQuotaLane, revision: number): Promise<void> {
+    await this.runIssueCommand({ type: "retry_issue_account_quota", lane, expected_revision: revision }, "quota");
   }
 
   async setIssueBindingPaused(paused: boolean): Promise<void> {
@@ -1447,7 +1451,10 @@ export class KernelConnection {
       );
       const pauseNotice = command.type === "set_issue_binding_paused"
         ? bindingPauseRequestNotice(response.result?.type === "issue_binding_pause_requested" ? response.result.command : undefined, command) : null;
-      const notice = pauseNotice?.notice ?? (unknownIntervention
+      const quotaNotice = response.result?.type === "issue_account_quota_retry_requested"
+        ? response.result.accepted ? "한도 재확인을 요청했습니다." : "한도 상태가 바뀌었습니다. 현재 상태를 확인해 주세요."
+        : null;
+      const notice = quotaNotice ?? pauseNotice?.notice ?? (unknownIntervention
         ? command.type === "steer_issue"
           ? "추가 지시의 전달 결과를 확인하지 못했습니다. 같은 지시를 자동으로 다시 보내지 않습니다. 작업 상태를 확인해 주세요."
           : "요청의 처리 결과를 확인하지 못했습니다. 같은 요청을 자동으로 다시 보내지 않습니다. 현재 상태를 확인해 주세요."
@@ -1464,7 +1471,7 @@ export class KernelConnection {
     } catch (error) {
       if (this.issueCurrent(token, this.issueCommandRequest)) {
         // 정책·결정·control이 확인 창 동안 바뀌었을 수 있다. 읽기만 다시 하고 명령은 재전송하지 않는다.
-        const refresh = pending === "binding_pause" || pending === "autonomy" || pending === "decision" || pending === "intervention"
+        const refresh = pending === "binding_pause" || pending === "autonomy" || pending === "decision" || pending === "intervention" || pending === "quota"
           ? this.refreshIssues() : Promise.resolve();
         this.issueCommandError = `이슈 요청을 완료하지 못했습니다: ${failureMessage(error)}`;
         this.updateIssues({});

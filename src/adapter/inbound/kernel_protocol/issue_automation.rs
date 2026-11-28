@@ -47,6 +47,8 @@ pub enum IssueAutomationState {
 #[serde(deny_unknown_fields)]
 pub struct IssueAutomationReadyState {
     #[serde(default)]
+    pub account_quota: crate::domain::issue_automation::collection::IssueAccountQuotaState,
+    #[serde(default)]
     pub autonomy: IssueAutonomyState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binding_pause: Option<super::IssueBindingPauseState>,
@@ -97,6 +99,7 @@ impl IssueAutomationState {
     pub fn from_domain(projection: &IssueCollectionProjection) -> Self {
         let state = &projection.state;
         Self::Ready(Box::new(IssueAutomationReadyState {
+            account_quota: projection.account_quota,
             autonomy: IssueAutonomyState::default(),
             binding_pause: None,
             mode: state.config.mode.into(),

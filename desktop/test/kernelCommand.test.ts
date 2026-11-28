@@ -82,6 +82,7 @@ const commands = {
     type: "promote_draft", draft_name: "draft-1", kind: "full_planning", expected_planning_revision: 7,
   },
   save_parallel_agent_profiles: { type: "save_parallel_agent_profiles", profiles: [] },
+  retry_issue_account_quota: { type: "retry_issue_account_quota", lane: "start", expected_revision: 7 },
 } as const satisfies Record<KernelCommand["type"], KernelCommand>;
 
 function harness() {

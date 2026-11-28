@@ -1030,14 +1030,17 @@ pub(crate) fn build_native_tui_application(
     kernel_lock: Option<&RepositoryKernelLock>,
 ) -> NativeTuiApplicationComposition {
     let workspace = native_tui_workspace_dir();
+    let shared_app_server =
+        crate::adapter::outbound::app_server::gateway_relay::reachable_gateway_relay();
     let admission = Arc::new(
         crate::application::service::issue_binding_admission::IssueBindingAdmission::new(),
     );
     let issues = repository_kernel_target(&workspace)
         .map(|target| {
-            let issues = super::issue_collection::build_with_admission(
+            let issues = super::issue_collection::build_with_provider_services(
                 &target.workspace_root,
                 admission.clone(),
+                (None, shared_app_server.clone()),
             );
             let pause = issues
                 .binding_pause_service()
@@ -1063,7 +1066,7 @@ pub(crate) fn build_native_tui_application(
     // app-server 를 띄운다.
     let application = build_native_application_for_workspace(
         &workspace,
-        crate::adapter::outbound::app_server::gateway_relay::reachable_gateway_relay(),
+        shared_app_server,
         verification_handle.clone(),
         binding,
     )
@@ -1738,6 +1741,16 @@ fn app_server_adapter(
         prompt_log_port,
         conversation_thread_turn_options_port,
     );
+    Arc::new(match app_server {
+        Some(shared) => adapter.through_shared_app_server(shared),
+        None => adapter,
+    })
+}
+
+pub(super) fn issue_quota_adapter(
+    app_server: Option<SharedAppServer>,
+) -> Arc<CodexAppServerAdapter> {
+    let adapter = CodexAppServerAdapter::new(APP_SERVER_CLIENT_NAME, env!("CARGO_PKG_VERSION"));
     Arc::new(match app_server {
         Some(shared) => adapter.through_shared_app_server(shared),
         None => adapter,

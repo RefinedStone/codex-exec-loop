@@ -1842,6 +1842,58 @@
       }
     },
     {
+      "name": "retry_issue_account_quota",
+      "scope": "issue",
+      "state": "runtime",
+      "summary": "Queue one fresh account quota read for a current automatic issue hold. This does not approve work or replay an attempt.",
+      "effect": "write",
+      "idempotency": "natural",
+      "rejections": [],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane": {
+            "$ref": "#/$defs/IssueQuotaLane"
+          },
+          "type": {
+            "const": "retry_issue_account_quota",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "lane",
+          "expected_revision"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          },
+          "type": {
+            "const": "issue_account_quota_retry_requested",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "accepted"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "answer_issue_decision",
       "scope": "issue",
       "state": "store",
@@ -3572,6 +3624,13 @@
           },
           {
             "properties": {
+              "account_quota": {
+                "$ref": "#/$defs/IssueAccountQuotaState",
+                "default": {
+                  "arbiter": null,
+                  "start": null
+                }
+              },
               "autonomy": {
                 "$ref": "#/$defs/IssueAutonomyState",
                 "default": {
@@ -4252,6 +4311,13 @@
           },
           {
             "properties": {
+              "account_quota": {
+                "$ref": "#/$defs/IssueAccountQuotaState",
+                "default": {
+                  "arbiter": null,
+                  "start": null
+                }
+              },
               "autonomy": {
                 "$ref": "#/$defs/IssueAutonomyState",
                 "default": {
@@ -7439,6 +7505,22 @@
         },
         {
           "properties": {
+            "accepted": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "issue_account_quota_retry_requested",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "accepted"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "changed": {
               "type": "boolean"
             },
@@ -8196,6 +8278,32 @@
         "proof_id",
         "intent"
       ],
+      "type": "object"
+    },
+    "IssueAccountQuotaState": {
+      "additionalProperties": false,
+      "properties": {
+        "arbiter": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueQuotaWait"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "start": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueQuotaWait"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
       "type": "object"
     },
     "IssueActionCommand": {
@@ -10832,6 +10940,45 @@
       ],
       "type": "object"
     },
+    "IssueQuotaHold": {
+      "enum": [
+        "exhausted",
+        "unknown",
+        "retry_queued"
+      ],
+      "type": "string"
+    },
+    "IssueQuotaLane": {
+      "enum": [
+        "start",
+        "arbiter"
+      ],
+      "type": "string"
+    },
+    "IssueQuotaWait": {
+      "additionalProperties": false,
+      "properties": {
+        "hold": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueQuotaHold"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "revision"
+      ],
+      "type": "object"
+    },
     "IssueRemoteStateValue": {
       "enum": [
         "open",
@@ -12161,6 +12308,29 @@
         {
           "additionalProperties": false,
           "properties": {
+            "expected_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "lane": {
+              "$ref": "#/$defs/IssueQuotaLane"
+            },
+            "type": {
+              "const": "retry_issue_account_quota",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "lane",
+            "expected_revision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "criteria": {
               "items": {
                 "$ref": "#/$defs/IssueWorkCriterion"
@@ -12718,6 +12888,13 @@
             },
             {
               "properties": {
+                "account_quota": {
+                  "$ref": "#/$defs/IssueAccountQuotaState",
+                  "default": {
+                    "arbiter": null,
+                    "start": null
+                  }
+                },
                 "autonomy": {
                   "$ref": "#/$defs/IssueAutonomyState",
                   "default": {
@@ -13683,6 +13860,13 @@
             },
             {
               "properties": {
+                "account_quota": {
+                  "$ref": "#/$defs/IssueAccountQuotaState",
+                  "default": {
+                    "arbiter": null,
+                    "start": null
+                  }
+                },
                 "autonomy": {
                   "$ref": "#/$defs/IssueAutonomyState",
                   "default": {

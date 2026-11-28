@@ -1498,6 +1498,7 @@ impl NativeClientRuntime {
             StoredCommand::SetIssueAutomationMode { .. }
                 | StoredCommand::SetIssueAutonomy { .. }
                 | StoredCommand::SetIssueBindingPaused { .. }
+                | StoredCommand::RetryIssueAccountQuota { .. }
                 | StoredCommand::AnswerIssueDecision { .. }
                 | StoredCommand::AskIssueDecision { .. }
                 | StoredCommand::InterveneIssue { .. }
@@ -1590,6 +1591,7 @@ impl NativeClientRuntime {
             &end,
             StoredCommandEnd::Finished(StoredCommandOutcome::Done(
                 StoredCommandResult::IssueAutonomyChanged { changed: true, .. }
+                    | StoredCommandResult::IssueAccountQuotaRetryRequested { accepted: true }
             ))
         ) {
             self.published_issue_change = true;
@@ -2180,6 +2182,8 @@ impl NativeClientRuntime {
                     fact.revision,
                 )],
                 IssueObserverCommittedFact::Coordinated(fact) => vec![match *fact {
+                    crate::application::service::issue_coordinator::IssueCoordinatorFact::AccountQuotaChanged =>
+                        return Vec::new(),
                     crate::application::service::issue_coordinator::IssueCoordinatorFact::FeedbackPosted(event) =>
                         KernelEvent::issue_feedback_posted(&event),
                     crate::application::service::issue_coordinator::IssueCoordinatorFact::Triaged(fact) => KernelEvent::issue_triaged(
