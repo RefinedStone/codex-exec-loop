@@ -65,6 +65,7 @@ const MAX_UNIX_SOCKET_PATH_BYTES: usize = 103;
 const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(100);
 /// 한가한 커널을 찾는 간격이다. 커널은 한가한 시간(10분)이 지난 뒤 이 간격 안에 내려간다.
 const KERNEL_IDLE_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
+pub(crate) const EMBEDDED_GATEWAY_COMMAND: &str = "__gateway-daemon";
 
 #[derive(Debug, PartialEq, Eq)]
 enum GatewayCommand {

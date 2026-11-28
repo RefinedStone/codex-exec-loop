@@ -1,20 +1,26 @@
 use super::NativeTuiApp;
+#[cfg(test)]
+use crate::core::app::GithubReviewPollingSettings;
 use crate::core::app::{
-    GithubReviewPollCorrelation, GithubReviewPollingSettings, GithubReviewPollingSetupCorrelation,
-    GithubReviewPollingSetupMode, GithubReviewPollingSetupResult,
+    GithubReviewPollCorrelation, GithubReviewPollingSetupCorrelation, GithubReviewPollingSetupMode,
+    GithubReviewPollingSetupResult,
 };
 use crate::domain::github_review::{
     GithubPullRequestActivityEvent, GithubPullRequestActivitySnapshot, GithubPullRequestPollResult,
     GithubPullRequestTarget, truncate_notice_text,
 };
+#[cfg(test)]
 use anyhow::{Result, anyhow, bail};
 use std::time::Duration;
 
 // GitHub review polling is an optional shell-side watcher for the active PR
 // lane. Explicit env configuration wins, otherwise the adapter may discover an
 // open PR for the current branch against the parallel-mode integration branch.
+#[cfg(test)]
 const GITHUB_PULL_REQUEST_ENV_VAR: &str = "AKRA_GITHUB_PR";
+#[cfg(test)]
 const GITHUB_POLL_INTERVAL_SECONDS_ENV_VAR: &str = "AKRA_GITHUB_POLL_INTERVAL_SECS";
+#[cfg(test)]
 const DEFAULT_GITHUB_POLL_INTERVAL_SECONDS: u64 = 60;
 const MAX_STATUS_DETAIL_LENGTH: usize = 48;
 
@@ -25,21 +31,6 @@ pub(super) struct GithubReviewPollingBootstrap {
     pub(super) state: GithubReviewPollingState,
 }
 impl GithubReviewPollingBootstrap {
-    pub(super) fn from_environment() -> Self {
-        let pull_request_value = std::env::var(GITHUB_PULL_REQUEST_ENV_VAR).ok();
-        if let Some(config) = crate::configuration::current_process_config() {
-            if !config.config.github.auto_discover_pull_request && pull_request_value.is_none() {
-                return Self::disabled();
-            }
-            return Self::parse_env_values(
-                pull_request_value,
-                Some(config.config.github.review_poll_interval_secs.to_string()),
-            );
-        }
-        let interval_seconds_value = std::env::var(GITHUB_POLL_INTERVAL_SECONDS_ENV_VAR).ok();
-        Self::parse_env_values(pull_request_value, interval_seconds_value)
-    }
-
     #[cfg(test)]
     pub(super) fn from_env_values(
         pull_request_value: Option<String>,
@@ -48,6 +39,7 @@ impl GithubReviewPollingBootstrap {
         Self::parse_env_values(pull_request_value, interval_seconds_value)
     }
 
+    #[cfg(test)]
     fn parse_env_values(
         pull_request_value: Option<String>,
         interval_seconds_value: Option<String>,
@@ -97,6 +89,7 @@ impl GithubReviewPollingBootstrap {
     }
 
     /// 호스트가 설정을 시작할 때 쓸 값이다. 설정이 없거나 잘못되었으면 `None` 이다 (plan 18 K2-6).
+    #[cfg(test)]
     pub(super) fn setup_settings(&self) -> Option<GithubReviewPollingSettings> {
         match &self.state {
             GithubReviewPollingState::Pending { config } => Some(GithubReviewPollingSettings {
@@ -124,6 +117,7 @@ pub(super) struct GithubReviewPollingEnvironmentConfig {
 // composition owns provider execution.
 #[derive(Debug, Clone)]
 pub(super) enum GithubReviewPollingState {
+    #[cfg(test)]
     Pending {
         config: GithubReviewPollingEnvironmentConfig,
     },
@@ -170,6 +164,7 @@ impl GithubReviewPollingState {
     }
     pub(super) fn status_label(&self) -> String {
         match self {
+            #[cfg(test)]
             Self::Pending { .. } => "setup pending".to_string(),
             Self::Discovering { .. } => "discovering".to_string(),
             Self::Disabled { .. } => "off".to_string(),
@@ -195,7 +190,9 @@ impl GithubReviewPollingState {
     }
     fn environment_config(&self) -> Option<&GithubReviewPollingEnvironmentConfig> {
         match self {
-            Self::Pending { config } | Self::Discovering { config, .. } => Some(config),
+            #[cfg(test)]
+            Self::Pending { config } => Some(config),
+            Self::Discovering { config, .. } => Some(config),
             Self::Disabled { config, .. } | Self::SetupError { config, .. } => config.as_ref(),
             Self::Active(state) => Some(&state.environment_config),
         }
@@ -433,6 +430,7 @@ impl NativeTuiApp {
 // Env configuration is intentionally narrow and human-readable because it is
 // used in ad hoc review lanes as well as tests: owner/repo#number plus an
 // optional positive second interval.
+#[cfg(test)]
 fn parse_pull_request_target(value: &str) -> Result<GithubPullRequestTarget> {
     let Some((repository, number_text)) = value.trim().split_once('#') else {
         bail!("{GITHUB_PULL_REQUEST_ENV_VAR} must look like owner/repo#123, got {value}");
@@ -454,6 +452,7 @@ fn parse_pull_request_target(value: &str) -> Result<GithubPullRequestTarget> {
     }
     Ok(GithubPullRequestTarget::new(repository, number))
 }
+#[cfg(test)]
 fn parse_poll_interval(value: Option<&str>) -> Result<Duration> {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(Duration::from_secs(DEFAULT_GITHUB_POLL_INTERVAL_SECONDS));

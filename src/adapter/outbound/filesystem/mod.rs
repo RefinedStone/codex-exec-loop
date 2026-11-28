@@ -33,6 +33,7 @@ pub use self::parallel_agent_profile::FilesystemParallelAgentProfileRepositoryAd
 pub use self::planning_workspace::FilesystemPlanningWorkspaceAdapter;
 pub use self::pr_validation_rollout_evidence::FilesystemPrValidationRolloutEvidenceAdapter;
 pub use self::task_evidence_artifact::FilesystemTaskEvidenceArtifactAdapter;
+#[cfg(test)]
 pub(crate) use self::workspace_layout_migration::WorkspaceLayoutMigrationError;
 
 pub mod issue_creation_journal;

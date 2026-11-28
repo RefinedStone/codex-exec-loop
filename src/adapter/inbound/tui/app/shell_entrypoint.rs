@@ -5,43 +5,20 @@ use anyhow::Result;
 
 #[cfg(test)]
 use super::NativeTuiParallelModeBinding;
-use super::github_polling::GithubReviewPollingBootstrap;
 use super::shell_frontend::ShellFrontend;
 use super::shell_runtime::ShellRuntime;
 use super::{NativeTuiApp, ShellChromeEvent};
-use crate::composition::native_client_runtime::NativeTuiApplicationComposition;
 use crate::composition::production;
 
 // shell_entrypoint owns terminal bootstrap only. Production service wiring lives
 // in crate::composition::production so TUI remains an inbound adapter.
 pub fn run() -> Result<()> {
-    /*
-     * 저장소당 커널 하나 (plan 18 K3-4). 커널을 조립하기 전에 시작 폴더의 저장소 잠금을 잡고, TUI 가 끝날 때까지
-     * 쥔다. 다른 TUI 나 커널 데몬이 이 저장소(다른 worktree 포함)를 돌리면 화면을 열기 전에 이유를 돌려준다.
-     */
-    let kernel_lock = match production::acquire_native_tui_kernel_lock() {
-        Ok(lock) => lock,
-        // Gateway 가 이 저장소의 커널을 돌리면 잠금 없이 그 커널에 붙는다 (plan 18 K6-2).
-        Err(error) => match production::attach_native_tui_to_gateway_kernel(&error) {
-            Some(client) => {
-                let shutdown = crate::shutdown::GracefulShutdown::install()?;
-                return run_app(NativeTuiApp::new_gateway_kernel_client(client), &shutdown);
-            }
-            None => return Err(error),
-        },
-    };
+    let client = production::build_tui_gateway_client()?;
     let shutdown = crate::shutdown::GracefulShutdown::install()?;
-    let application = production::build_native_tui_application(kernel_lock.as_ref());
-    run_app(build_default_app(application), &shutdown)
-}
-
-fn run_app(app: NativeTuiApp, shutdown: &crate::shutdown::GracefulShutdown) -> Result<()> {
-    ShellFrontend::new().run(prepare_runtime(app), shutdown)
-}
-
-fn build_default_app(application: NativeTuiApplicationComposition) -> NativeTuiApp {
-    let github_review_polling = GithubReviewPollingBootstrap::from_environment();
-    NativeTuiApp::new_with_github_review_polling(application, github_review_polling)
+    ShellFrontend::new().run(
+        prepare_runtime(NativeTuiApp::new_gateway_kernel_client(client)),
+        &shutdown,
+    )
 }
 
 fn prepare_runtime(mut app: NativeTuiApp) -> ShellRuntime {

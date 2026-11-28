@@ -17,11 +17,22 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 pub(crate) const GATEWAY_RELAY_COMMAND: &str = "__gateway-app-server-relay";
 
 /// Gateway 를 찾는 시간의 상한이다. Gateway 가 없으면 바로 실패하므로 보통은 이보다 훨씬 짧다.
+#[cfg(test)]
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const CONNECT_ATTEMPTS: u32 = 10;
 const CONNECT_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 
+pub(crate) fn start_gateway(command: &mut std::process::Command) -> Result<std::process::Child> {
+    command.spawn().with_context(|| {
+        format!(
+            "start the Akra Gateway at {}",
+            std::path::Path::new(command.get_program()).display()
+        )
+    })
+}
+
 /// 이 사용자의 Gateway 가 접속을 받으면 그 중계를 돌려준다. 없으면 TUI 는 지금처럼 자기 app-server 를 띄운다.
+#[cfg(test)]
 pub(crate) fn reachable_gateway_relay() -> Option<super::SharedAppServer> {
     let endpoint = reachable_gateway_endpoint()?;
     let relay_executable = std::env::current_exe().ok()?;
@@ -31,6 +42,7 @@ pub(crate) fn reachable_gateway_relay() -> Option<super::SharedAppServer> {
     })
 }
 
+#[cfg(test)]
 fn reachable_gateway_endpoint() -> Option<String> {
     let endpoint = crate::gateway_endpoint::client_endpoint().ok()?;
     // 호출자가 async runtime 안에 있을 수 있으므로 자기 runtime 을 가진 스레드에서 본다.
@@ -46,6 +58,7 @@ fn reachable_gateway_endpoint() -> Option<String> {
     reachable.then_some(endpoint)
 }
 
+#[cfg(test)]
 async fn endpoint_accepts(endpoint: &str) -> bool {
     matches!(
         tokio::time::timeout(PROBE_TIMEOUT, connect_with_retry(endpoint)).await,
@@ -55,7 +68,7 @@ async fn endpoint_accepts(endpoint: &str) -> bool {
 
 /// Windows 의 Gateway 는 접속 하나를 받은 뒤에 다음 pipe 를 연다. 그 사이의 접속은 pipe busy 로 실패하므로 잠깐
 /// 다시 해 본다. 다른 오류(Gateway 가 없음)는 바로 돌려준다. 그래서 Gateway 가 없을 때 TUI 시작이 늦지 않다.
-async fn connect_with_retry(
+pub(crate) async fn connect_with_retry(
     endpoint: &str,
 ) -> std::io::Result<impl AsyncRead + AsyncWrite + Unpin + use<>> {
     let mut attempts_left = CONNECT_ATTEMPTS;

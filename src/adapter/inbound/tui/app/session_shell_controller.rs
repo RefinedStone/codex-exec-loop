@@ -33,9 +33,6 @@ impl NativeTuiApp {
          * conversation_state. That keeps attach/load behavior in conversation lifecycle code, while
          * this controller only supplies the selected catalog row.
          */
-        if self.refuse_in_gateway_kernel_client() {
-            return;
-        }
         self.dispatch_conversation_intent(ConversationIntentEvent::SessionOpenRequested {
             session: self.current_session().cloned().map(Box::new),
         });

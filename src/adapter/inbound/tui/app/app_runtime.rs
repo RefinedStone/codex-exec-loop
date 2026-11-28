@@ -22,7 +22,6 @@ use crate::application::service::session_service::SessionService;
 use crate::application::service::startup_service::StartupService;
 #[cfg(test)]
 use crate::composition::native_client_runtime::NativeClientRuntime;
-use crate::composition::native_client_runtime::NativeTuiApplicationComposition;
 #[cfg(test)]
 use crate::core::app::StartupReadySnapshot;
 #[cfg(test)]
@@ -1670,26 +1669,6 @@ impl NativeTuiApp {
             turn_control_truth,
             GithubReviewPollingBootstrap::disabled(),
             Arc::new(InertClipboardImageProbeTrigger),
-        )
-    }
-
-    pub(super) fn new_with_github_review_polling(
-        application: NativeTuiApplicationComposition,
-        github_review_polling: GithubReviewPollingBootstrap,
-    ) -> Self {
-        let runtime_channels = NativeTuiAppRuntimeChannels::new();
-        // 설정 시작 시점은 호스트가 정한다 (plan 18 K2-6). 화면은 설정 값만 넘기고 상태를 그린다.
-        let application = application
-            .with_github_review_polling(github_review_polling.setup_settings())
-            .bind_client_runtime();
-        let (client_runtime, turn_control_truth, clipboard_image_probe_trigger) =
-            application.into_parts();
-        Self::new_with_bound_application(
-            client_runtime,
-            runtime_channels,
-            turn_control_truth,
-            github_review_polling,
-            clipboard_image_probe_trigger,
         )
     }
 
