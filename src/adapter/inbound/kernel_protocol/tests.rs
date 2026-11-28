@@ -115,6 +115,10 @@ fn sample_commands() -> Vec<KernelCommand> {
             command_id: "autonomy-1".to_owned(),
             level: IssueAutonomyLevel::Propose,
         },
+        KernelCommand::ApplyIssueCommentRequest {
+            issue: (&sample_issue_reference()).into(),
+            comment_id: "comment-1".into(),
+        },
         KernelCommand::SetIssueBindingPaused {
             command_id: "pause-1".into(),
             binding_id: "binding-1".into(),

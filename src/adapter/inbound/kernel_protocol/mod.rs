@@ -351,6 +351,7 @@ impl CommandRequest {
             | KernelCommand::SetIssueAutonomy { .. }
             | KernelCommand::SetIssueBindingPaused { .. }
             | KernelCommand::RetryIssueAccountQuota { .. }
+            | KernelCommand::ApplyIssueCommentRequest { .. }
             | KernelCommand::AnswerIssueDecision { .. }
             | KernelCommand::AskIssueDecision { .. }
             | KernelCommand::HoldIssue { .. }
@@ -766,6 +767,7 @@ impl CommandResult {
             KernelCommandKind::AnswerIssueDecision => Some("issue_decision_resolved"),
             KernelCommandKind::AskIssueDecision => Some("issue_decision_requested"),
             KernelCommandKind::HoldIssue
+            | KernelCommandKind::ApplyIssueCommentRequest
             | KernelCommandKind::ReleaseIssue
             | KernelCommandKind::SteerIssue
             | KernelCommandKind::TakeOverIssue
@@ -1109,6 +1111,10 @@ pub enum KernelCommand {
         command_id: String,
         level: IssueAutonomyLevel,
     },
+    ApplyIssueCommentRequest {
+        issue: crate::domain::kernel_event::IssueEventReference,
+        comment_id: String,
+    },
     SetIssueBindingPaused {
         #[schemars(length(min = 1, max = 256), regex(pattern = NON_BLANK))]
         command_id: String,
@@ -1442,6 +1448,7 @@ impl KernelCommand {
             Self::SetIssueAutonomy { .. } => KernelCommandKind::SetIssueAutonomy,
             Self::SetIssueBindingPaused { .. } => KernelCommandKind::SetIssueBindingPaused,
             Self::RetryIssueAccountQuota { .. } => KernelCommandKind::RetryIssueAccountQuota,
+            Self::ApplyIssueCommentRequest { .. } => KernelCommandKind::ApplyIssueCommentRequest,
             Self::AnswerIssueDecision { .. } => KernelCommandKind::AnswerIssueDecision,
             Self::AskIssueDecision { .. } => KernelCommandKind::AskIssueDecision,
             Self::HoldIssue { .. } => KernelCommandKind::HoldIssue,
@@ -1485,6 +1492,7 @@ impl KernelCommand {
             | Self::SetIssueAutonomy { .. }
             | Self::SetIssueBindingPaused { .. }
             | Self::RetryIssueAccountQuota { .. }
+            | Self::ApplyIssueCommentRequest { .. }
             | Self::AnswerIssueDecision { .. }
             | Self::AskIssueDecision { .. }
             | Self::HoldIssue { .. }
@@ -1550,6 +1558,10 @@ impl KernelCommand {
             StoredCommand::InterveneIssue { request } => {
                 issue_intervention::command_from_request(request)
             }
+            StoredCommand::ApplyIssueCommentRequest { key } => Self::ApplyIssueCommentRequest {
+                issue: (&key.issue).into(),
+                comment_id: key.comment_id,
+            },
             StoredCommand::CreateTask { task } => Self::CreateTask {
                 task: TaskFields::from_stored(task),
             },
@@ -1760,6 +1772,25 @@ impl KernelCommand {
                 IssueInterventionAction::Hold,
                 workspace_directory,
             )?,
+            Self::ApplyIssueCommentRequest { issue, comment_id } => {
+                if comment_id.trim().is_empty()
+                    || comment_id.len() > 256
+                    || comment_id.chars().any(char::is_control)
+                {
+                    return Err(KernelProtocolError::invalid_params("invalid comment_id"));
+                }
+                let issue = KernelQuery::Issue { issue }
+                    .issue_reference(workspace_directory)?
+                    .ok_or_else(|| {
+                        KernelProtocolError::invalid_params("invalid issue reference")
+                    })?;
+                StoredCommand::ApplyIssueCommentRequest {
+                    key: crate::domain::issue_automation::comment_command::IssueCommentRequestKey {
+                        issue,
+                        comment_id,
+                    },
+                }
+            }
             Self::ReleaseIssue { issue, command_id } => issue_intervention::into_stored(
                 issue,
                 command_id,
@@ -2061,6 +2092,7 @@ impl KernelCommand {
             | Self::SetIssueAutonomy { .. }
             | Self::SetIssueBindingPaused { .. }
             | Self::RetryIssueAccountQuota { .. }
+            | Self::ApplyIssueCommentRequest { .. }
             | Self::AnswerIssueDecision { .. }
             | Self::AskIssueDecision { .. }
             | Self::HoldIssue { .. }

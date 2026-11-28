@@ -117,6 +117,8 @@ spec_names! {
             "Persist the issue collection mode: off or observe. Raising the mode requires Desktop human confirmation; lowering it does not. The answer follows the ledger commit.";
         SetIssueAutonomy => "set_issue_autonomy",
             "Persist the runtime issue autonomy level: off, observe, or propose within the file policy cap. Raising the level requires a current Desktop human confirmation. Reuse command_id and the idempotency key to recover the same result.";
+        ApplyIssueCommentRequest => "apply_issue_comment_request",
+            "Apply a recorded issue comment request with native confirmation.";
         SetIssueBindingPaused => "set_issue_binding_paused",
             "Request a durable pause or resume for one issue binding. The response confirms acceptance; only a completed receipt confirms that in-flight effects have drained. Resuming requires an exact current Desktop human confirmation. Requires a running kernel; other bindings and ordinary tasks continue.";
         RetryIssueAccountQuota => "retry_issue_account_quota",
@@ -444,6 +446,7 @@ impl KernelCommandKind {
             | Self::SetIssueAutonomy
             | Self::SetIssueBindingPaused
             | Self::RetryIssueAccountQuota
+            | Self::ApplyIssueCommentRequest
             | Self::AnswerIssueDecision
             | Self::AskIssueDecision
             | Self::HoldIssue
@@ -533,7 +536,9 @@ impl KernelCommandKind {
                 Natural,
                 &[Reason::HumanConfirmationRequired],
             ),
-            Self::SetIssueAutonomy | Self::SetIssueBindingPaused => (
+            Self::SetIssueAutonomy
+            | Self::SetIssueBindingPaused
+            | Self::ApplyIssueCommentRequest => (
                 CommandScope::Issue,
                 Write,
                 Keyed,
@@ -652,6 +657,7 @@ impl KernelCommandKind {
                 | Self::SaveParallelAgentProfiles
                 | Self::SetIssueAutomationMode
                 | Self::SetIssueAutonomy
+                | Self::ApplyIssueCommentRequest
                 | Self::AnswerIssueDecision
                 | Self::AskIssueDecision
                 | Self::HoldIssue

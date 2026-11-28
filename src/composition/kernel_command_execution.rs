@@ -338,6 +338,7 @@ impl KernelCommandPort for CommandOnlyKernel {
                     StoredCommand::AnswerIssueDecision { .. }
                         | StoredCommand::AskIssueDecision { .. }
                         | StoredCommand::InterveneIssue { .. }
+                        | StoredCommand::ApplyIssueCommentRequest { .. }
                         | StoredCommand::SetIssueAutonomy { .. }
                         | StoredCommand::PrepareEvidence { .. }
                         | StoredCommand::RecordEvidence { .. }

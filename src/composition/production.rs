@@ -1045,12 +1045,22 @@ pub(crate) fn build_native_tui_application(
             let pause = issues
                 .binding_pause_service()
                 .expect("repository collection supplies binding pause");
-            let restored = restore_native_tui_issue_bindings(
+            let mut restored = restore_native_tui_issue_bindings(
                 kernel_lock,
                 &target,
                 pause.as_ref(),
                 admission.as_ref(),
             );
+            if restored
+                && let Some(comments) = issues.comment_command_service()
+                && comments.recover_requests().is_err()
+            {
+                admission.close_all();
+                tracing::warn!(
+                    "TUI comment request recovery is unavailable; issue automation remains closed"
+                );
+                restored = false;
+            }
             (target.workspace_root, issues, pause, restored)
         })
         .ok();

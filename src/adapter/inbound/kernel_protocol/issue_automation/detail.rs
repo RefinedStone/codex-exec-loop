@@ -68,6 +68,9 @@ pub struct IssueCommentRequestView {
     pub comment_id: String,
     pub author_id: String,
     pub kind: crate::domain::issue_automation::comment_command::IssueCommentCommandKind,
+    pub status: crate::domain::issue_automation::comment_command::IssueCommentRequestStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<super::super::issue_intervention::IssueInterventionReceiptState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -139,7 +142,13 @@ impl IssueState {
             Some(item) => Self::Ready(Box::new(IssueDetailState {
                 revision: detail.revision,
                 as_of_unix_ms: None,
-                comment_requests: detail.comment_requests.iter().map(|record| IssueCommentRequestView { comment_id: record.comment_id.clone(), author_id: record.author_id.clone(), kind: record.kind }).collect(),
+                comment_requests: detail.comment_requests.iter().map(|request| IssueCommentRequestView {
+                    comment_id: request.record.comment_id.clone(),
+                    author_id: request.record.author_id.clone(),
+                    kind: request.record.kind,
+                    status: request.status,
+                    receipt: request.receipt.clone().map(Into::into),
+                }).collect(),
                 item: item.into(),
                 open_decisions: item
                     .open_decisions

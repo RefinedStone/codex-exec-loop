@@ -130,6 +130,9 @@ pub enum StoredCommand {
     InterveneIssue {
         request: IssueInterventionRequest,
     },
+    ApplyIssueCommentRequest {
+        key: crate::domain::issue_automation::comment_command::IssueCommentRequestKey,
+    },
     AnswerIssueDecision {
         criteria: Option<Vec<crate::domain::issue_automation::criteria::IssueWorkCriterion>>,
         decision_id: String,
@@ -213,6 +216,7 @@ impl StoredCommand {
             Self::SetIssueAutonomy { .. } => KernelCommandKind::SetIssueAutonomy,
             Self::SetIssueBindingPaused { .. } => KernelCommandKind::SetIssueBindingPaused,
             Self::RetryIssueAccountQuota { .. } => KernelCommandKind::RetryIssueAccountQuota,
+            Self::ApplyIssueCommentRequest { .. } => KernelCommandKind::ApplyIssueCommentRequest,
             Self::AnswerIssueDecision { .. } => KernelCommandKind::AnswerIssueDecision,
             Self::AskIssueDecision { .. } => KernelCommandKind::AskIssueDecision,
             Self::CreateTask { .. } => KernelCommandKind::CreateTask,

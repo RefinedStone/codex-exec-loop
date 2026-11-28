@@ -191,7 +191,7 @@ const DOTS_LIST_METHOD = "akra/dots/list";
 const DOTS_WATCH_METHOD = "akra/dots/watch";
 const DOTS_LIVE_NOTIFICATION = "akra/dots/live";
 /** 세션이 쓰는 메시지 버스이다. `local` 은 `window.akra` 이고, 원격 호스트는 `remoteHostBridge` 이다. */
-export type SessionBridge = Pick<AkraBridge, "send" | "onMessage" | "onConnectionState" | "ready"> & Partial<Pick<AkraBridge, "confirmIssueAutomationMode" | "confirmIssueDecision" | "confirmIssueAutonomy" | "confirmIssueBindingResume" | "confirmTaskCriterionWaiver">> & {
+export type SessionBridge = Pick<AkraBridge, "send" | "onMessage" | "onConnectionState" | "ready"> & Partial<Pick<AkraBridge, "confirmIssueAutomationMode" | "confirmIssueDecision" | "confirmIssueAutonomy" | "confirmIssueBindingResume" | "confirmIssueCommentRequest" | "confirmTaskCriterionWaiver">> & {
   readonly chatHistory?: true;
 };
 
@@ -340,6 +340,7 @@ export class DesktopSession {
       confirmIssueDecision: bridge.confirmIssueDecision,
       confirmIssueAutonomy: bridge.confirmIssueAutonomy,
       confirmIssueBindingResume: bridge.confirmIssueBindingResume,
+      confirmIssueCommentRequest: bridge.confirmIssueCommentRequest,
       confirmTaskCriterionWaiver: bridge.confirmTaskCriterionWaiver,
     });
   }
@@ -480,6 +481,10 @@ export class DesktopSession {
 
   interveneIssue(action: IssueInterventionName, message?: string, confirm = false): Promise<IssueCommandOutcome> {
     return this.kernel.interveneIssue(action, message, confirm);
+  }
+
+  confirmCommentRequest(commentId: string): Promise<IssueCommandOutcome> {
+    return this.kernel.confirmCommentRequest(commentId);
   }
 
   readIssueConversation(): Promise<IssueConversationTarget | null> {

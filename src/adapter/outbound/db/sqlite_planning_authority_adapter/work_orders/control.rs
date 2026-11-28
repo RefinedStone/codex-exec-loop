@@ -9,9 +9,9 @@ use crate::application::port::outbound::planning_task_repository_port::{
     PlanningTaskAuthorityCommit, PlanningTaskAuthorityMutationAudit,
 };
 use crate::application::port::outbound::planning_work_order_repository_port::{
-    PlanningWorkControl, PlanningWorkControlAction, PlanningWorkControlRepositoryPort,
-    PlanningWorkInstruction, PlanningWorkInstructionAdmission, validate_work_order_id,
-    validate_work_order_task_id,
+    ConfirmedWorkControl, PlanningWorkControl, PlanningWorkControlAction,
+    PlanningWorkControlRepositoryPort, PlanningWorkInstruction, PlanningWorkInstructionAdmission,
+    validate_work_order_id, validate_work_order_task_id,
 };
 use crate::domain::planning::{
     PlanningAuthorityLocation, PriorityQueueService, TaskActor, TaskMutationProvenance, TaskStatus,
@@ -43,6 +43,29 @@ fn validate_command_id(command_id: &str) -> Result<()> {
         bail!("work control requires a bounded command_id");
     }
     Ok(())
+}
+
+fn load_control_command(
+    connection: &Connection,
+    work_order_id: &str,
+    command_id: &str,
+    action: PlanningWorkControlAction,
+) -> Result<Option<PlanningWorkControl>> {
+    let previous: Option<(String, String, String)> = connection.query_row(
+        "SELECT work_order_id, action_json, result_json FROM planning_work_order_control_commands WHERE command_id=?1",
+        params![command_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).optional()?;
+    previous
+        .map(|(owner, recorded_action, result)| {
+            if owner != work_order_id
+                || serde_json::from_str::<PlanningWorkControlAction>(&recorded_action)? != action
+            {
+                bail!("work control command_id was reused for different content");
+            }
+            Ok(serde_json::from_str(&result)?)
+        })
+        .transpose()
 }
 
 impl PlanningWorkControlRepositoryPort for SqlitePlanningAuthorityAdapter {
@@ -82,72 +105,152 @@ impl PlanningWorkControlRepositoryPort for SqlitePlanningAuthorityAdapter {
         command_id: &str,
         action: PlanningWorkControlAction,
     ) -> Result<PlanningWorkControl> {
+        apply_control(
+            workspace,
+            ControlInput {
+                work_order_id,
+                command_id,
+                action,
+            },
+            None,
+        )?
+        .context("ordinary work control was refused")
+    }
+
+    fn apply_confirmed_work_order_control(
+        &self,
+        workspace: &str,
+        request: &ConfirmedWorkControl<'_>,
+    ) -> Result<Option<PlanningWorkControl>> {
+        apply_control(
+            workspace,
+            ControlInput {
+                work_order_id: request.work_order_id,
+                command_id: request.command_id,
+                action: request.action,
+            },
+            Some(request),
+        )
+    }
+
+    fn load_work_order_control_command(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+        command_id: &str,
+        action: PlanningWorkControlAction,
+    ) -> Result<Option<PlanningWorkControl>> {
         validate_work_order_id(work_order_id)?;
         validate_command_id(command_id)?;
         let location = Self::resolve_authority_location_from_workspace(workspace)?;
-        let mut connection = open_authority_connection(&location)?;
-        ensure_work_order_tables(&connection)?;
-        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let action_json = serde_json::to_string(&action)?;
-        let previous: Option<(String,String,String)> = tx.query_row(
-            "SELECT work_order_id, action_json, result_json FROM planning_work_order_control_commands WHERE command_id=?1",
-            params![command_id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
-        ).optional()?;
-        if let Some((owner, recorded_action, result)) = previous {
-            if owner != work_order_id || recorded_action != action_json {
-                bail!("work control command_id was reused for different content");
-            }
-            return Ok(serde_json::from_str(&result)?);
-        }
-        let current = load_control(&tx, work_order_id)?;
-        let next = current.apply(action)?;
-        if next != current {
-            tx.execute(
-                "INSERT INTO planning_work_order_controls (work_order_id,control_json) VALUES (?1,?2)
-                 ON CONFLICT(work_order_id) DO UPDATE SET control_json=excluded.control_json",
-                params![work_order_id,serde_json::to_string(&next)?],
-            )?;
-            if let Some(order) = load_work_order_record(&tx, work_order_id)? {
-                permits::write_permits(&tx, work_order_id, &[])?;
-                if action == PlanningWorkControlAction::Cancel {
-                    cancel_lineage(&tx, &location, &order.task_ids)?;
-                }
-            }
-            let event = match action {
-                PlanningWorkControlAction::Hold => "issue_held",
-                PlanningWorkControlAction::Release => "issue_released",
-                _ => "issue_work_control_changed",
-            };
-            let payload = serde_json::json!({
-                "work_order_id":work_order_id,"command_id":command_id,
-                "action":action,"control":next
-            })
-            .to_string();
-            runtime_projection::append_runtime_event(
-                &tx,
-                event,
-                "work_order_control",
-                work_order_id,
-                event,
-                &payload,
-            )?;
-            runtime_projection::append_runtime_event(
-                &tx,
-                "issue_work_permit_revoked",
-                "work_order_control",
-                work_order_id,
-                "work control invalidated earlier execution permissions",
-                &payload,
-            )?;
-        }
-        tx.execute(
-            "INSERT INTO planning_work_order_control_commands (command_id,work_order_id,action_json,result_json) VALUES (?1,?2,?3,?4)",
-            params![command_id,work_order_id,action_json,serde_json::to_string(&next)?],
-        )?;
-        tx.commit()?;
-        Ok(next)
+        let connection = open_authority_connection(&location)?;
+        load_control_command(&connection, work_order_id, command_id, action)
     }
 
+    fn append_work_order_instruction(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+        instruction: &PlanningWorkInstruction,
+    ) -> Result<PlanningWorkInstructionAdmission> {
+        Self::append_work_order_instruction(self, workspace, work_order_id, instruction)
+    }
+
+    fn load_work_order_instructions(
+        &self,
+        workspace: &str,
+        work_order_id: &str,
+    ) -> Result<Vec<PlanningWorkInstruction>> {
+        Self::load_work_order_instructions(self, workspace, work_order_id)
+    }
+
+    fn work_order_cleanup_allowed_for_task(&self, workspace: &str, task_id: &str) -> Result<bool> {
+        Self::work_order_cleanup_allowed_for_task(self, workspace, task_id)
+    }
+}
+
+struct ControlInput<'a> {
+    work_order_id: &'a str,
+    command_id: &'a str,
+    action: PlanningWorkControlAction,
+}
+
+fn apply_control(
+    workspace: &str,
+    input: ControlInput<'_>,
+    confirmation: Option<&ConfirmedWorkControl<'_>>,
+) -> Result<Option<PlanningWorkControl>> {
+    let ControlInput {
+        work_order_id,
+        command_id,
+        action,
+    } = input;
+    validate_work_order_id(work_order_id)?;
+    validate_command_id(command_id)?;
+    let location =
+        SqlitePlanningAuthorityAdapter::resolve_authority_location_from_workspace(workspace)?;
+    let mut connection = open_authority_connection(&location)?;
+    ensure_work_order_tables(&connection)?;
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if let Some(previous) = load_control_command(&tx, work_order_id, command_id, action)? {
+        return Ok(Some(previous));
+    }
+    let current = load_control(&tx, work_order_id)?;
+    if let Some(confirmation) = confirmation
+        && (current.authorization_epoch != confirmation.expected_epoch
+            || !(confirmation.authorize)()?)
+    {
+        return Ok(None);
+    }
+    let next = current.apply(action)?;
+    if next != current {
+        tx.execute(
+            "INSERT INTO planning_work_order_controls (work_order_id,control_json) VALUES (?1,?2)
+                 ON CONFLICT(work_order_id) DO UPDATE SET control_json=excluded.control_json",
+            params![work_order_id, serde_json::to_string(&next)?],
+        )?;
+        if let Some(order) = load_work_order_record(&tx, work_order_id)? {
+            permits::write_permits(&tx, work_order_id, &[])?;
+            if action == PlanningWorkControlAction::Cancel {
+                cancel_lineage(&tx, &location, &order.task_ids)?;
+            }
+        }
+        let event = match action {
+            PlanningWorkControlAction::Hold => "issue_held",
+            PlanningWorkControlAction::Release => "issue_released",
+            _ => "issue_work_control_changed",
+        };
+        let payload = serde_json::json!({
+            "work_order_id":work_order_id,"command_id":command_id,
+            "action":action,"control":next
+        })
+        .to_string();
+        runtime_projection::append_runtime_event(
+            &tx,
+            event,
+            "work_order_control",
+            work_order_id,
+            event,
+            &payload,
+        )?;
+        runtime_projection::append_runtime_event(
+            &tx,
+            "issue_work_permit_revoked",
+            "work_order_control",
+            work_order_id,
+            "work control invalidated earlier execution permissions",
+            &payload,
+        )?;
+    }
+    tx.execute(
+            "INSERT INTO planning_work_order_control_commands (command_id,work_order_id,action_json,result_json) VALUES (?1,?2,?3,?4)",
+            params![command_id,work_order_id,serde_json::to_string(&action)?,serde_json::to_string(&next)?],
+        )?;
+    tx.commit()?;
+    Ok(Some(next))
+}
+
+impl SqlitePlanningAuthorityAdapter {
     fn append_work_order_instruction(
         &self,
         workspace: &str,

@@ -1,4 +1,11 @@
-import type { CommandResponse, IssueAutomationModeRecord, IssueAutonomyLevel, TaskAcceptanceCriterion } from "./kernel-protocol/generated";
+import type { CommandResponse, IssueAutomationModeRecord, IssueAutonomyLevel, IssueEventReference, TaskAcceptanceCriterion } from "./kernel-protocol/generated";
+
+export interface ConfirmIssueCommentRequest {
+  readonly workspace: string;
+  readonly issue: IssueEventReference;
+  readonly commentId: string;
+  readonly key: string;
+}
 
 /** 사람 확인 요청에는 명령 입력만 있다. 이 IPC에는 확인 증거와 서버 intent를 담지 않는다. */
 export interface ConfirmIssueDecisionRequest {

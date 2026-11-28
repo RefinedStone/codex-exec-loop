@@ -59,6 +59,7 @@ interface IssuePanelProps {
   onRetryQuota?(lane: IssueQuotaLane, revision: number): Promise<void>;
   onAnswerDecision(decisionId: string, option: string, note: string, criteria?: import("./protocol").TaskAcceptanceCriterion[]): Promise<void>;
   onIntervene(action: IssueInterventionName, message?: string, confirm?: boolean): Promise<IssueCommandOutcome>;
+  onConfirmCommentRequest?(commentId: string): Promise<IssueCommandOutcome>;
   onOpenConversation(): Promise<void>;
   onOpenUrl(url: string): void;
 }
@@ -79,7 +80,7 @@ function IssueRow({ item, onSelectIssue, onOpenUrl }: { item: IssueListItem; onS
   );
 }
 
-export function IssuePanel({ attentionTarget = null, onRefresh, onSelectIssue, onClearIssueSelection, onRefreshDetail, onRefreshPolicy, onOpenPolicyFile, onNextPage, onPreviousPage, onSetMode, onSync, onSetAutonomy, onSetBindingPaused, onRetryQuota, onAnswerDecision, onIntervene, onOpenConversation, onOpenUrl }: IssuePanelProps) {
+export function IssuePanel({ attentionTarget = null, onRefresh, onSelectIssue, onClearIssueSelection, onRefreshDetail, onRefreshPolicy, onOpenPolicyFile, onNextPage, onPreviousPage, onSetMode, onSync, onSetAutonomy, onSetBindingPaused, onRetryQuota, onAnswerDecision, onIntervene, onConfirmCommentRequest, onOpenConversation, onOpenUrl }: IssuePanelProps) {
   const [view, setView] = useState<"list" | "report" | "policy">("list");
   // 알림은 상세 보기로 이동하지만 같은 저장소의 패널과 사용자 초안을 다시 만들지 않는다.
   useEffect(() => { if (attentionTarget) setView("list"); }, [attentionTarget]);
@@ -203,7 +204,7 @@ export function IssuePanel({ attentionTarget = null, onRefresh, onSelectIssue, o
                 </ul>
               </section>
             ))}
-            {selected && <IssueDetail selectedIssue={selected} detail={issues.detail} loading={issues.detailLoading} stale={issues.detailStale} error={issues.detailError} busy={busy || !attached} onAnswer={onAnswerDecision} onIntervene={onIntervene} onOpenConversation={onOpenConversation} onRefresh={onRefreshDetail} onBack={onClearIssueSelection} onOpenUrl={onOpenUrl} />}
+            {selected && <IssueDetail selectedIssue={selected} detail={issues.detail} loading={issues.detailLoading} stale={issues.detailStale} error={issues.detailError} busy={busy || !attached} onAnswer={onAnswerDecision} onIntervene={onIntervene} onConfirmCommentRequest={onConfirmCommentRequest} onOpenConversation={onOpenConversation} onRefresh={onRefreshDetail} onBack={onClearIssueSelection} onOpenUrl={onOpenUrl} />}
             {view === "report" && <IssueObserveReport report={page?.report} />}
             {view === "policy" && <IssuePolicy key={kernel.workspace} policy={issues.policy} loading={issues.policyLoading} error={issues.policyError} onOpenFile={onOpenPolicyFile} />}
           </div>

@@ -687,6 +687,9 @@ fn assemble_recovered_kernel_with_runtime(
 ) -> Result<RepositoryKernel> {
     // Every production and test runtime uses this same recovery and attachment boundary.
     recover_issue_binding_pause(&issues)?;
+    if let Some(comments) = issues.comment_command_service() {
+        comments.recover_requests()?;
+    }
     let mut runtime = build_runtime()?;
     runtime.attach_kernel_event_log(production::kernel_event_log_port(), workspace_dir);
     runtime.attach_repository_observer(production::repository_state_port());

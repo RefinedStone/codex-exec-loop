@@ -10,6 +10,14 @@ use crate::domain::issue_automation::work_control::{
     IssueWorkControl, IssueWorkControlAction, IssueWorkInstruction, IssueWorkInstructionAdmission,
 };
 use anyhow::Result;
+
+pub struct ConfirmedIssueControl<'a> {
+    pub work_order_id: &'a str,
+    pub command_id: &'a str,
+    pub action: crate::domain::issue_automation::work_control::IssueWorkControlAction,
+    pub expected_epoch: u64,
+    pub authorize: &'a dyn Fn() -> Result<bool>,
+}
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -220,6 +228,22 @@ pub trait IssueWorkExecutionPort: Send + Sync {
         _action: IssueWorkControlAction,
     ) -> Result<IssueWorkControl> {
         anyhow::bail!("work intervention control is unavailable")
+    }
+    fn control_command_result(
+        &self,
+        _workspace: &str,
+        _work_order_id: &str,
+        _command_id: &str,
+        _action: IssueWorkControlAction,
+    ) -> Result<Option<IssueWorkControl>> {
+        anyhow::bail!("work intervention control history is unavailable")
+    }
+    fn apply_confirmed_control(
+        &self,
+        _workspace: &str,
+        _request: &ConfirmedIssueControl<'_>,
+    ) -> Result<Option<IssueWorkControl>> {
+        anyhow::bail!("confirmed issue control is unavailable")
     }
     fn queue_instruction(
         &self,

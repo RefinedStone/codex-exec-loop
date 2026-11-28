@@ -1774,6 +1774,58 @@
       }
     },
     {
+      "name": "apply_issue_comment_request",
+      "scope": "issue",
+      "state": "store",
+      "summary": "Apply a recorded issue comment request with native confirmation.",
+      "effect": "write",
+      "idempotency": "keyed",
+      "rejections": [
+        "human_confirmation_required"
+      ],
+      "completion": "records",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "comment_id": {
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueEventReference"
+          },
+          "type": {
+            "const": "apply_issue_comment_request",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "issue",
+          "comment_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/CommandResponse"
+      },
+      "result": {
+        "properties": {
+          "receipt": {
+            "$ref": "#/$defs/IssueInterventionReceiptState"
+          },
+          "type": {
+            "const": "issue_intervened",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "receipt"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "set_issue_binding_paused",
       "scope": "issue",
       "state": "runtime",
@@ -9047,6 +9099,56 @@
       ],
       "type": "string"
     },
+    "IssueCommentRequestBasis": {
+      "additionalProperties": false,
+      "properties": {
+        "authorization_epoch": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "binding_run_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "expires_at_unix_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observation_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tracked_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "observation_revision",
+        "tracked_revision",
+        "binding_run_revision",
+        "authorization_epoch",
+        "expires_at_unix_ms"
+      ],
+      "type": "object"
+    },
+    "IssueCommentRequestStatus": {
+      "enum": [
+        "pending",
+        "expired",
+        "stale",
+        "applying",
+        "applied",
+        "uncertain",
+        "display_only"
+      ],
+      "type": "string"
+    },
     "IssueCommentRequestView": {
       "additionalProperties": false,
       "properties": {
@@ -9058,12 +9160,26 @@
         },
         "kind": {
           "$ref": "#/$defs/IssueCommentCommandKind"
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueInterventionReceiptState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/IssueCommentRequestStatus"
         }
       },
       "required": [
         "comment_id",
         "author_id",
-        "kind"
+        "kind",
+        "status"
       ],
       "type": "object"
     },
@@ -9141,6 +9257,31 @@
     },
     "IssueConfirmationTarget": {
       "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "basis": {
+              "$ref": "#/$defs/IssueCommentRequestBasis"
+            },
+            "command_id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "comment_request",
+              "type": "string"
+            },
+            "workspace": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "workspace",
+            "command_id",
+            "basis"
+          ],
+          "type": "object"
+        },
         {
           "additionalProperties": false,
           "properties": {
@@ -12265,6 +12406,27 @@
             "type",
             "command_id",
             "level"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "comment_id": {
+              "type": "string"
+            },
+            "issue": {
+              "$ref": "#/$defs/IssueEventReference"
+            },
+            "type": {
+              "const": "apply_issue_comment_request",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "issue",
+            "comment_id"
           ],
           "type": "object"
         },

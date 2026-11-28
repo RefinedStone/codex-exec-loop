@@ -77,8 +77,13 @@ const actions = () => ["hold_issue", "release_issue", "steer_issue", "take_over_
             : !control.cancelled;
   return { command, enabled, reason: enabled ? null : "현재 작업 상태에서 사용할 수 없습니다." };
 });
+let commentReceipt;
 const detail = () => ({ type: "issue", status: "ready", revision, as_of_unix_ms: queriedAt, item: item(), open_decisions: structuredClone(openDecisions),
-  comment_requests: [{comment_id:"IC_request",author_id:"user-fixture",kind:"release"}],
+  comment_requests: [
+    { comment_id: "IC_request", author_id: "user-fixture", kind: "release", status: commentReceipt ? "applied" : "pending", receipt: commentReceipt },
+    { comment_id: "IC_expired", author_id: "user-fixture", kind: "retriage", status: "expired" },
+    { comment_id: "IC_approve", author_id: "user-fixture", kind: "approve", status: "display_only" },
+  ],
   decision_history: structuredClone(history), control: { ...control }, actions: actions(), conversation: structuredClone(conversation) });
 const commandRequests = (type) => requests.flatMap((entry) => {
   const request = entry.method === "akra/kernel/command_confirmed" ? entry.params.request : entry.method === "akra/kernel/command" ? entry.params : null;
@@ -106,6 +111,16 @@ const kernel = {
     }
     if (method !== "akra/kernel/command" && method !== "akra/kernel/command_confirmed") return undefined;
     const { command } = method === "akra/kernel/command_confirmed" ? confirmedRequest(params) : params;
+    if (command.type === "apply_issue_comment_request") {
+      assert.equal(method, "akra/kernel/command_confirmed");
+      assert.equal(command.comment_id, "IC_request");
+      assert.deepEqual(command.issue, issue);
+      assert.equal(commentReceipt, undefined, "a confirmed request does not submit twice");
+      commentReceipt = { issue, command_id: "fixture-comment-receipt", action: "release_issue",
+        work_order_id: "fixture-order", authorization_epoch: 1, changed: true };
+      revision++;
+      return { result: { processed: true, result: { type: "issue_intervened", receipt: commentReceipt } } };
+    }
     if (command.type === "set_issue_autonomy") {
       assert.ok(rank(command.level) <= rank(cap), "fake server must reject cap violations");
       if (rank(command.level) > rank(effectiveOverride ?? level)) assert.equal(method, "akra/kernel/command_confirmed");
@@ -343,6 +358,27 @@ try {
   assert.match(await recorded.innerText(), /user-fixture/);
   assert.match(await recorded.innerText(), /IC_request/);
   assert.equal(commandRequests("release_issue").length, 0, "displaying the request is not approval");
+  assert.equal(commandRequests("apply_issue_comment_request").length, 0, "passive display sends no command");
+  const row = recorded.getByRole("listitem").filter({ hasText: "IC_request" });
+  const expired = recorded.getByRole("listitem").filter({ hasText: "IC_expired" });
+  const approve = recorded.getByRole("listitem").filter({ hasText: "IC_approve" });
+  assert.equal(await expired.getByRole("button").count(), 0);
+  assert.equal(await approve.getByRole("button").count(), 0);
+  const apply = row.getByRole("button", { name: "요청 적용" });
+  const beforeCommentDialogs = await app.evaluate(() => {
+    globalThis.issueInterventionFixture.nextAnswer = 1;
+    return globalThis.issueInterventionFixture.dialogs.length;
+  });
+  await apply.click();
+  await until(async () => (await app.evaluate(() => globalThis.issueInterventionFixture.dialogs.length)) > beforeCommentDialogs && await apply.isEnabled());
+  assert.equal(commandRequests("apply_issue_comment_request").length, 0, "native decline sends no command");
+  await app.evaluate(() => { globalThis.issueInterventionFixture.nextAnswer = 0; });
+  await apply.click();
+  await row.getByText("fixture-comment-receipt").waitFor();
+  assert.equal(await apply.count(), 0);
+  assert.equal(await expired.getByText("fixture-comment-receipt").count(), 0);
+  assert.equal(commandRequests("apply_issue_comment_request").length, 1);
+  console.log("PASS recorded comments stay passive until native confirmation and show only their linked receipt");
   await panel.getByTestId("issues-detail-original").click();
   const originalWindow = await originalWindowOpened;
   await originalWindow.locator('#root[data-phase="held"]').waitFor({ timeout: 10_000 });

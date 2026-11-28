@@ -22,7 +22,7 @@ use crate::domain::issue_automation::intervention::{
     IssueInterventionAction, IssueInterventionReceipt, IssueInterventionRequest,
 };
 use crate::domain::issue_automation::source::{IssueRemoteState, IssueSourceRead};
-use crate::domain::issue_work::{IssueProvider, IssueReference};
+use crate::domain::issue_work::IssueProvider;
 
 const GITHUB_SERVER_ID: &str = "github.com";
 const COMMENT_CHANNEL: &str = "issue_comment";
@@ -34,6 +34,8 @@ pub struct IssueCommentCommandService {
     source: Arc<dyn IssueCommentCommandSourcePort>,
     policy: IssueAutomationPolicyService,
     interventions: Arc<dyn IssueInterventionPort>,
+    execution: Option<Arc<dyn crate::application::port::outbound::issue_work_execution_port::IssueWorkExecutionPort>>,
+    request_gate: std::sync::Mutex<()>,
 }
 
 impl IssueCommentCommandService {
@@ -52,6 +54,8 @@ impl IssueCommentCommandService {
             source,
             policy,
             interventions,
+            execution: None,
+            request_gate: std::sync::Mutex::new(()),
         }
     }
 
@@ -94,9 +98,7 @@ impl IssueCommentCommandService {
                         continue;
                     }
                     if cancel
-                        .commit_if_active(|| {
-                            self.process(&item.issue, command, &context, committed)
-                        })?
+                        .commit_if_active(|| self.process(&item, command, &context, committed))?
                         .is_none()
                     {
                         return Ok(());
@@ -108,14 +110,6 @@ impl IssueCommentCommandService {
                 return Ok(());
             }
         }
-    }
-
-    /// Display evidence only: comment records are never authority for a decision or intervention.
-    pub(super) fn recorded_requests(
-        &self,
-        issue: &IssueReference,
-    ) -> Result<Vec<IssueCommentCommandRecord>> {
-        self.records.recorded_requests(&self.workspace, issue)
     }
 
     /// 정책은 사용자 파일이 켜야 한다. 저장소 파일은 목록을 줄이거나 끄기만 한다 (plan 28 §4 원칙 5).
@@ -141,11 +135,12 @@ impl IssueCommentCommandService {
     /// 보류를 먼저 적용하고 기록한다. 그 사이에 끝나도 같은 개입 command_id 가 영수증을 다시 준다.
     fn process(
         &self,
-        issue: &IssueReference,
+        item: &IssueCollectionItem,
         command: IssueCommentCommand,
         context: &StoredCommandContext,
         committed: &(dyn Fn(IssueInterventionReceipt) + Send + Sync),
     ) -> Result<()> {
+        let issue = &item.issue;
         if self
             .records
             .issue_comment_command(&self.workspace, issue, &command.comment_id)?
@@ -178,8 +173,12 @@ impl IssueCommentCommandService {
             }
             record.intervention_command_id = Some(command_id);
         }
-        self.records
-            .record_issue_comment_command(&self.workspace, &record)?;
+        if let Some(basis) = self.request_basis(item, &record, context)? {
+            self.records.record_comment_request(&record, &basis)?;
+        } else {
+            self.records
+                .record_issue_comment_command(&self.workspace, &record)?;
+        }
         Ok(())
     }
 }
@@ -209,5 +208,6 @@ fn is_open_tracked_github_issue(item: &IssueCollectionItem) -> bool {
         )
 }
 
+mod request;
 #[cfg(test)]
 mod tests;

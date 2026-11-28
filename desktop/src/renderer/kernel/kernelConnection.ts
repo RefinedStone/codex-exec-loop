@@ -3,6 +3,7 @@
 import { JsonRpcError, type JsonRpcClient } from "../rpc/jsonRpcClient";
 import { verificationBlockReason, verificationTargetKey, type TaskVerificationRequests, type TaskVerificationRequestView, type TaskVerificationTarget } from "./taskVerificationActions";
 import type { ConfirmTaskCriterionWaiverRequest, ConfirmIssueBindingResumeRequest, ConfirmIssueAutonomyRequest, ConfirmIssueAutomationModeRequest, ConfirmIssueDecisionRequest, IssueConfirmationResponse } from "../../shared/issueConfirmation";
+import type { ConfirmIssueCommentRequest } from "../../shared/issueConfirmation";
 import { waiverBlockReason, waiverReasonValid, type TaskCriterionWaiverRequestView, type TaskCriterionWaiverTarget, type TaskCriterionWaiverOutcome } from "./taskCriterionWaiver";
 import type { IssueAutonomyLevel, IssueCommandOutcome, IssueConversationTarget, IssueInterventionName } from "./issueInteractions";
 import {
@@ -54,6 +55,7 @@ export interface IssueConfirmationBridge {
   confirmIssueDecision?(request: ConfirmIssueDecisionRequest): Promise<IssueConfirmationResponse>;
   confirmIssueAutonomy?(request: ConfirmIssueAutonomyRequest): Promise<IssueConfirmationResponse>;
   confirmIssueBindingResume?(request: ConfirmIssueBindingResumeRequest): Promise<IssueConfirmationResponse>;
+  confirmIssueCommentRequest?(request: ConfirmIssueCommentRequest): Promise<IssueConfirmationResponse>;
 }
 
 export interface KernelIssuesView {
@@ -757,6 +759,16 @@ export class KernelConnection {
     return this.runIssueCommand({ type: action, ...common }, "intervention");
   }
 
+  confirmCommentRequest(commentId: string): Promise<IssueCommandOutcome> {
+    const issues = this.store.getKernel().issues;
+    const detail = !issues.detailStale && issues.detail?.status === "ready" ? issues.detail : null;
+    if (!detail || !sameIssue(issues.selectedIssue, detail.item.issue) ||
+      !detail.comment_requests?.some((record) => record.comment_id === commentId && record.status === "pending")) {
+      return Promise.resolve("unavailable");
+    }
+    return this.runIssueCommand({ type: "apply_issue_comment_request", issue: detail.item.issue, comment_id: commentId }, "intervention");
+  }
+
   async readIssueConversation(): Promise<IssueConversationTarget | null> {
     const selected = this.store.getKernel().issues.selectedIssue;
     const generation = this.generation;
@@ -1366,6 +1378,8 @@ export class KernelConnection {
     const submittedDetail = this.store.getKernel().issues.detail;
     const submittedDecision = command.type === "answer_issue_decision" && submittedDetail?.status === "ready"
       ? submittedDetail.open_decisions?.find((decision) => decision.id === command.decision_id) : undefined;
+    const submittedComment = command.type === "apply_issue_comment_request" && submittedDetail?.status === "ready"
+      ? submittedDetail.comment_requests?.find((record) => record.comment_id === command.comment_id) : undefined;
     let failureOutcome: IssueCommandOutcome = "failed";
     const token = this.issueToken(++this.issueCommandRequest);
     this.uncertainIssueOutcome = null;
@@ -1377,7 +1391,12 @@ export class KernelConnection {
         && (automation?.status !== "ready" || automation.mode !== "observe");
       let confirmation: IssueConfirmationResponse | undefined;
       let response: CommandResponse;
-      if (command.type === "answer_issue_decision") {
+      if (command.type === "apply_issue_comment_request") {
+        if (!this.confirmations.confirmIssueCommentRequest || !this.wanted) throw new Error("이 창에서는 시스템 확인을 열 수 없습니다.");
+        confirmation = await this.confirmations.confirmIssueCommentRequest({
+          workspace: this.wanted, issue: command.issue, commentId: command.comment_id, key: crypto.randomUUID(),
+        });
+      } else if (command.type === "answer_issue_decision") {
         if (!this.confirmations.confirmIssueDecision || !this.wanted) throw new Error("이 창에서는 시스템 확인을 열 수 없습니다.");
         confirmation = await this.confirmations.confirmIssueDecision({ workspace: this.wanted, decisionId: command.decision_id, option: command.option, note: command.note, criteria: command.criteria, key: crypto.randomUUID() });
       } else if (command.type === "set_issue_binding_paused" && !command.paused) {
@@ -1443,12 +1462,16 @@ export class KernelConnection {
           issueArbiterNotices: view.issueArbiterNotices.filter((entry) => entry.decisionId !== id || entry.arbiter?.outcome !== "waiting") });
       }
       const receipt = response.result?.type === "issue_intervened" ? response.result.receipt : null;
-      const unknownIntervention = pending === "intervention" && (
+      const unknownComment = command.type === "apply_issue_comment_request" && (
+        !receipt || !submittedComment || !sameIssue(receipt.issue, command.issue)
+        || receipt.action !== `${submittedComment.kind}_issue` || !receipt.command_id
+      );
+      const unknownIntervention = unknownComment || (command.type !== "apply_issue_comment_request" && pending === "intervention" && (
         !receipt || !("command_id" in command) || receipt.command_id !== command.command_id
         || !("issue" in command) || !sameIssue(receipt.issue, command.issue) || receipt.action !== command.type
         || receipt.delivery === "unknown"
         || (command.type === "steer_issue" && receipt.delivery !== "queued" && receipt.delivery !== "sent")
-      );
+      ));
       const pauseNotice = command.type === "set_issue_binding_paused"
         ? bindingPauseRequestNotice(response.result?.type === "issue_binding_pause_requested" ? response.result.command : undefined, command) : null;
       const quotaNotice = response.result?.type === "issue_account_quota_retry_requested"

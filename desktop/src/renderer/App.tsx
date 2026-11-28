@@ -890,6 +890,7 @@ export function App() {
                   onRetryQuota={async (lane, revision) => session.current?.retryIssueAccountQuota(lane, revision)}
                   onAnswerDecision={async (decisionId, option, note, criteria) => session.current?.answerIssueDecision(decisionId, option, note, criteria)}
                   onIntervene={async (action, message, confirm) => session.current?.interveneIssue(action, message, confirm) ?? "unavailable"}
+                  onConfirmCommentRequest={async (commentId) => session.current?.confirmCommentRequest(commentId) ?? "unavailable"}
                   onOpenConversation={openIssueConversation}
                   onOpenUrl={(url) => {
                     void openIssueAutomationUrl(url, {

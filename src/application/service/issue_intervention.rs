@@ -252,6 +252,9 @@ impl IssueInterventionPort for IssueInterventionService {
             || request.command_id.starts_with(
                 crate::domain::issue_automation::binding_pause::ISSUE_BINDING_PAUSE_CONTROL_PREFIX,
             )
+            || request.command_id.starts_with(
+                crate::domain::issue_automation::comment_command::COMMENT_REQUEST_CONTROL_PREFIX,
+            )
         {
             bail!("the intervention command ID uses a reserved control namespace");
         }

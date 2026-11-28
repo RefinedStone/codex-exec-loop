@@ -276,7 +276,7 @@ fn build_comment_commands(
         crate::application::service::issue_intervention::IssueInterventionService::new(
             workspace_dir.to_owned(),
             store.clone(),
-            execution,
+            execution.clone(),
             Arc::new(UnavailableIssueWorkSteering),
         ),
     );
@@ -294,7 +294,8 @@ fn build_comment_commands(
                 FilesystemIssueAutomationPolicySourceAdapter::new(),
             )),
             interventions,
-        ),
+        )
+        .with_request_execution(execution),
     )
 }
 
