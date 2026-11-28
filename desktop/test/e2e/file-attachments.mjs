@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { once } from "node:events";
 import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -29,9 +28,7 @@ async function windowScenario(action, gatewayEndpoint = endpoint) {
     if (process.env.AKRA_QA_SCREENSHOT) await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive());
     await action(page);
   } finally {
-    const exited = once(app.process(), "exit", { signal: AbortSignal.timeout(10_000) });
-    for (const win of app.windows()) await win.close();
-    await exited;
+    await app.close();
   }
 }
 
