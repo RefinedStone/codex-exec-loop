@@ -2,7 +2,7 @@
 //! No remote mutation occurs here, and a late adoption cannot overtake an update.
 use super::*;
 use crate::application::port::outbound::evidence_vault_port::{
-    VaultCreationLoadRequest, VaultCreationRecordScope,
+    VaultCreationLoadRequest, VaultCreationRecordScope, VaultStoreError,
 };
 use crate::domain::issue_creation::{IssueCreationIntentRecord, IssueCreationIntentState};
 
@@ -86,6 +86,7 @@ impl IssueJournaledPublishService {
         })?;
         match &binding.snapshot().state {
             VaultBindingState::Missing => {}
+            VaultBindingState::Deleted => return Err(VaultStoreError::IssueDeleted.into()),
             VaultBindingState::Readable { .. } => {
                 bail!("an existing restore version already owns this issue")
             }

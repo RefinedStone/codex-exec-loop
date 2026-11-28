@@ -42,6 +42,7 @@ pub mod work_context_port;
 pub mod issue_form_install_port;
 
 pub mod issue_intervention_port;
+pub(crate) mod vault_maintenance_port;
 pub(crate) mod vault_restore_session_port;
 
 pub mod conversation_workspace_port;

@@ -5,6 +5,30 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
+#[cfg(all(test, any(unix, windows)))]
+pub(crate) struct DisposableVault(pub(crate) PathBuf);
+
+#[cfg(all(test, any(unix, windows)))]
+impl DisposableVault {
+    pub(crate) fn new() -> Self {
+        let root = crate::test_utils::platform_safe_temp_dir().join(format!(
+            "akra-disposable-vault-{:032x}",
+            rand::random::<u128>()
+        ));
+        prepare_writer_root(&root).unwrap();
+        Self(std::fs::canonicalize(root).unwrap())
+    }
+}
+
+#[cfg(all(test, any(unix, windows)))]
+impl Drop for DisposableVault {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_dir_all(&self.0) {
+            eprintln!("disposable Vault fixture cleanup failed: {error}");
+        }
+    }
+}
+
 #[cfg(unix)]
 #[path = "vault_fs/unix.rs"]
 mod platform;
@@ -45,6 +69,12 @@ pub(crate) fn compare_and_swap_file(
     record_name(relative)?;
     validate_size(replacement.len())?;
     platform::compare_and_swap_file(root, relative, observed, replacement)
+}
+
+/// Remove only the observed private record. A stale observation performs no mutation.
+pub(crate) fn remove_observed_file(root: &Path, relative: &Path, observed: &str) -> Result<bool> {
+    record_name(relative)?;
+    platform::remove_observed_file(root, relative, observed)
 }
 
 /// A destination may have changed even if later flushing or verification failed.

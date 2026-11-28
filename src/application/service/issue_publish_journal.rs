@@ -8,7 +8,7 @@ use crate::application::port::outbound::evidence_vault_port::{
     EvidenceVaultStorePort, VaultBindingCommitPolicy, VaultBindingCommitRequest,
     VaultBindingCommitResult, VaultBindingFields, VaultBindingState, VaultBindingToken,
     VaultPlaintext, VaultRecordBinding, VaultRecordField, VaultRecordKey, VaultRecordLoadRequest,
-    VaultRecordSaveRequest, VaultRecordScope,
+    VaultRecordSaveRequest, VaultRecordScope, VaultStoreError,
 };
 use crate::application::port::outbound::issue_publish_intent_journal_port::IssuePublishIntentJournalPort;
 use crate::application::port::outbound::issue_snapshot_port::{
@@ -164,7 +164,7 @@ impl IssueJournaledPublishService {
             sequence,
         };
         if !shared_copy_only && !restorable.is_empty() {
-            match self.save_pending_records(&record, restorable, vault_key.clone()) {
+            match self.save_pending_records(&record, restorable, vault_key.clone())? {
                 Some(fields) => record.pending_vault_fields = fields,
                 None => {
                     record.state = IssuePublishIntentState::Held;
@@ -186,6 +186,9 @@ impl IssueJournaledPublishService {
             })
             .transpose()?;
         if let Some(binding) = &binding {
+            if binding.snapshot().state == VaultBindingState::Deleted {
+                return Err(VaultStoreError::IssueDeleted.into());
+            }
             if !record.pending_vault_fields.is_empty()
                 && matches!(
                     binding.snapshot().state,
@@ -432,24 +435,30 @@ impl IssueJournaledPublishService {
         record: &IssuePublishIntentRecord,
         restorable: Vec<IssueRestorableField>,
         vault_key: Option<VaultRecordKey>,
-    ) -> Option<Vec<IssuePublishVaultField>> {
-        let key = vault_key?;
+    ) -> Result<Option<Vec<IssuePublishVaultField>>> {
+        let Some(key) = vault_key else {
+            return Ok(None);
+        };
         let mut fields = Vec::new();
         for item in restorable {
-            self.vault
-                .save(VaultRecordSaveRequest {
-                    scope: VaultRecordScope {
-                        issue: record.issue.clone(),
-                        field: vault_field(item.field),
-                        binding: VaultRecordBinding::PublishIntent(record.intent_id.clone()),
-                    },
-                    key: key.clone(),
-                    plaintext: item.plaintext,
-                })
-                .ok()?;
+            match self.vault.save(VaultRecordSaveRequest {
+                scope: VaultRecordScope {
+                    issue: record.issue.clone(),
+                    field: vault_field(item.field),
+                    binding: VaultRecordBinding::PublishIntent(record.intent_id.clone()),
+                },
+                key: key.clone(),
+                plaintext: item.plaintext,
+            }) {
+                Ok(()) => {}
+                Err(VaultStoreError::IssueDeleted) => {
+                    return Err(VaultStoreError::IssueDeleted.into());
+                }
+                Err(_) => return Ok(None),
+            }
             fields.push(item.field);
         }
-        Some(fields)
+        Ok(Some(fields))
     }
 
     /// 지금 원격 글의 지문이다. 읽지 못하면 `None` 이다.

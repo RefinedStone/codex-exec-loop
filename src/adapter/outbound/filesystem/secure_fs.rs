@@ -143,7 +143,12 @@ pub(crate) fn remove_entry(root: &Path, relative: &Path) -> Result<()> {
 
 #[cfg(unix)]
 pub(crate) fn remove_optional_file(root: &Path, relative: &Path) -> Result<()> {
-    platform::remove_optional_file(root, relative)
+    platform::unlink_regular_file(root, relative, None).map(|_| ())
+}
+
+#[cfg(unix)]
+pub(crate) fn remove_observed_file(root: &Path, relative: &Path, observed: &str) -> Result<bool> {
+    platform::unlink_regular_file(root, relative, Some(observed))
 }
 
 #[cfg(unix)]
@@ -393,19 +398,30 @@ mod platform {
         remove_entry_locked(root, &root_fd, relative)
     }
 
-    pub(super) fn remove_optional_file(root: &Path, relative: &Path) -> Result<()> {
+    pub(super) fn unlink_regular_file(
+        root: &Path,
+        relative: &Path,
+        observed: Option<&str>,
+    ) -> Result<bool> {
         reject_internal_path(relative)?;
         let root_fd = open_workspace_root(root)?;
         let _mutation_lock = acquire_workspace_mutation_lock(&root_fd)?;
         let (parent, leaf) = match open_parent(&root_fd, relative, false) {
             Ok(value) => value,
-            Err(error) if error_chain_is_not_found(&error) => return Ok(()),
+            Err(error) if error_chain_is_not_found(&error) => return Ok(false),
             Err(error) => return Err(error),
         };
-        let Some((file, identity)) = open_regular_file(&parent, &leaf)? else {
-            return Ok(());
+        let Some((mut file, identity)) = open_regular_file(&parent, &leaf)? else {
+            return Ok(false);
         };
-        validate_regular_identity(identity, &root.join(relative))?;
+        let path = root.join(relative);
+        validate_regular_identity(identity, &path)?;
+        if let Some(observed) = observed {
+            let body = read_bounded_utf8(&mut file, identity, &path, MAX_FILE_BYTES)?;
+            if body != observed {
+                return Ok(false);
+            }
+        }
         let reachable_parent = ensure_parent_path_reachable(root, &root_fd, relative, &parent)?;
         ensure_path_identity(&reachable_parent, &leaf, identity)?;
         ensure_path_identity(&parent, &leaf, identity)?;
@@ -423,7 +439,7 @@ mod platform {
         if inspect_entry(&reachable_parent, &leaf)?.is_some() {
             bail!("private planning file path reappeared during removal");
         }
-        Ok(())
+        Ok(true)
     }
 
     fn remove_entry_locked(root: &Path, root_fd: &OwnedFd, relative: &Path) -> Result<()> {

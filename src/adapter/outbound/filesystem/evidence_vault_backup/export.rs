@@ -39,6 +39,9 @@ pub(super) fn selected(
             })
             .map_err(VaultBackupError::Record)?;
         let snapshot = transaction.snapshot().clone();
+        if snapshot.state == VaultBindingState::Deleted {
+            return Err(VaultBackupError::Record(VaultStoreError::IssueDeleted));
+        }
         for scope in request.scopes.iter().filter(|scope| scope.issue == issue) {
             if !exported_scopes.insert(scope.clone()) {
                 continue;

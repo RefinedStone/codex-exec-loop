@@ -20,6 +20,7 @@ use zeroize::Zeroize;
 use super::vault_fs;
 
 mod binding;
+mod inventory;
 use crate::application::port::outbound::evidence_vault_port::{
     EvidenceVaultStorePort, VaultBindingTransaction, VaultCreationLoadRequest,
     VaultCreationRecordScope, VaultCreationSaveRequest, VaultPlaintext, VaultRecordBinding,
@@ -119,10 +120,25 @@ impl EvidenceVaultStorePort for FilesystemEvidenceVaultStoreAdapter {
                 "bound vault records require a binding transaction".to_string(),
             ));
         }
-        self.save_record(request)
+        let current = VaultRecordScope::current_version(request.scope.issue.clone());
+        let lease = binding::acquire_inventory(self, &current)?;
+        let mut inventory = inventory::Inventory::read(self, &current)?;
+        lease.verify_identity().map_err(storage_error)?;
+        inventory.register(self, &current, &request.scope)?;
+        self.save_record(request)?;
+        lease
+            .verify_identity()
+            .map_err(|_| VaultStoreError::WriteOutcomeUnknown)
     }
 
     fn load(&self, request: VaultRecordLoadRequest) -> Result<VaultPlaintext, VaultStoreError> {
+        let current = VaultRecordScope::current_version(request.scope.issue.clone());
+        if inventory::Inventory::read(self, &current)?
+            .deletion
+            .is_some()
+        {
+            return Err(VaultStoreError::IssueDeleted);
+        }
         let scope = scope_bytes(&request.scope);
         let body = vault_fs::read_optional_file(&self.vault_root, &record_relative_path(&scope))
             .map_err(storage_error)?

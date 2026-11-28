@@ -567,6 +567,11 @@ impl EvidenceVaultRestoreService {
         };
         self.key(grant)?;
         before_commit()?;
+        // Review is read-only. Retain the source before a confirmed attempt can
+        // replace its pointer, so an interrupted commit can replay the approval.
+        binding
+            .retain_reconnect_source(&approval.basis.source_version)
+            .map_err(VaultRestoreHold::RecordUnavailable)?;
         match binding
             .commit(VaultBindingCommitRequest {
                 expected: approval.basis.expected.clone(),
@@ -638,6 +643,9 @@ impl EvidenceVaultRestoreService {
         match &snapshot.state {
             VaultBindingState::Readable { version } => Ok(version.clone()),
             VaultBindingState::Missing => Err(VaultRestoreHold::NotBound),
+            VaultBindingState::Deleted => Err(VaultRestoreHold::RecordUnavailable(
+                VaultStoreError::IssueDeleted,
+            )),
             VaultBindingState::Unreadable { error } => {
                 Err(VaultRestoreHold::RecordUnavailable(error.clone()))
             }

@@ -4,6 +4,7 @@ use std::time::Duration;
 use sha2::{Digest, Sha256};
 
 use super::super::vault_fs::VaultBindingLease;
+use super::inventory::Inventory;
 use super::{
     FilesystemEvidenceVaultStoreAdapter, aead_key, open_record, record_relative_path, scope_bytes,
     seal_record, storage_error, vault_fs,
@@ -11,11 +12,14 @@ use super::{
 use crate::application::port::outbound::evidence_vault_port::{
     VaultBindingCommitPolicy, VaultBindingCommitRequest, VaultBindingCommitResult,
     VaultBindingFields, VaultBindingReceipt, VaultBindingSnapshot, VaultBindingState,
-    VaultBindingToken, VaultBindingTransaction, VaultPlaintext, VaultRecordBinding,
-    VaultRecordField, VaultRecordKey, VaultRecordLoadRequest, VaultRecordScope, VaultStoreError,
+    VaultBindingToken, VaultBindingTransaction, VaultCleanupPolicy, VaultCleanupReport,
+    VaultPlaintext, VaultRecordBinding, VaultRecordField, VaultRecordKey, VaultRecordLoadRequest,
+    VaultRecordScope, VaultStoreError,
 };
 
 const BINDING_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+
+mod maintenance;
 
 fn binding_lock_name(scope: &VaultRecordScope) -> String {
     format!(
@@ -35,13 +39,9 @@ pub(super) fn begin(
     }
     // A malformed caller key is not a recoverable damaged pointer.
     aead_key(request.key.key.expose())?;
-    let lease = VaultBindingLease::acquire(
-        store.vault_root.clone(),
-        binding_lock_name(&request.scope),
-        BINDING_LOCK_TIMEOUT,
-    )
-    .map_err(storage_error)?;
-    let (_, snapshot) = read_snapshot(store, &request.scope, &request.key)?;
+    let lease = acquire(store, &request.scope)?;
+    let inventory = Inventory::read(store, &request.scope)?;
+    let (_, snapshot) = read_snapshot(store, &request.scope, &request.key, &inventory)?;
     lease.verify_identity().map_err(storage_error)?;
     Ok(Box::new(FilesystemBinding {
         store,
@@ -49,14 +49,37 @@ pub(super) fn begin(
         scope: request.scope,
         key: request.key,
         snapshot,
+        inventory,
     }))
+}
+
+pub(super) fn acquire(
+    store: &FilesystemEvidenceVaultStoreAdapter,
+    scope: &VaultRecordScope,
+) -> Result<VaultBindingLease, VaultStoreError> {
+    VaultBindingLease::acquire(
+        store.vault_root.clone(),
+        binding_lock_name(scope),
+        BINDING_LOCK_TIMEOUT,
+    )
+    .map_err(storage_error)
 }
 
 fn read_snapshot(
     store: &FilesystemEvidenceVaultStoreAdapter,
     scope: &VaultRecordScope,
     key: &VaultRecordKey,
+    inventory: &Inventory,
 ) -> Result<(Option<String>, VaultBindingSnapshot), VaultStoreError> {
+    if let Some(deletion) = &inventory.deletion {
+        return Ok((
+            None,
+            VaultBindingSnapshot {
+                token: VaultBindingToken::observed(scope.clone(), Some(deletion.revision)),
+                state: VaultBindingState::Deleted,
+            },
+        ));
+    }
     let scope_data = scope_bytes(scope);
     // Filesystem safety/read failures must not become permission to recover an unreadable pointer.
     let raw = vault_fs::read_optional_file(&store.vault_root, &record_relative_path(&scope_data))
@@ -81,12 +104,24 @@ fn read_snapshot(
     Ok((raw, VaultBindingSnapshot { token, state }))
 }
 
+pub(super) fn acquire_inventory(
+    store: &FilesystemEvidenceVaultStoreAdapter,
+    scope: &VaultRecordScope,
+) -> Result<VaultBindingLease, VaultStoreError> {
+    let mut bytes = scope_bytes(scope);
+    super::push_part(&mut bytes, "prospective-inventory-lease");
+    let name = format!("evidence-vault-binding-{:x}.lock", Sha256::digest(bytes));
+    VaultBindingLease::acquire(store.vault_root.clone(), name, BINDING_LOCK_TIMEOUT)
+        .map_err(storage_error)
+}
+
 struct FilesystemBinding<'a> {
     store: &'a FilesystemEvidenceVaultStoreAdapter,
     lease: VaultBindingLease,
     scope: VaultRecordScope,
     key: VaultRecordKey,
     snapshot: VaultBindingSnapshot,
+    inventory: Inventory,
 }
 
 impl FilesystemBinding<'_> {
@@ -111,13 +146,17 @@ impl FilesystemBinding<'_> {
     }
 
     fn stage_field(
-        &self,
+        &mut self,
         version: &str,
         field: VaultRecordField,
         plaintext: &VaultPlaintext,
     ) -> Result<bool, VaultStoreError> {
         self.lease.verify_identity().map_err(storage_error)?;
-        let scope = scope_bytes(&self.field_scope(version, field));
+        let field_scope = self.field_scope(version, field);
+        self.inventory
+            .register(self.store, &self.scope, &field_scope)
+            .map_err(storage_error)?;
+        let scope = scope_bytes(&field_scope);
         let sealed = seal_record(&self.key, &scope, plaintext)?;
         let sealed = std::str::from_utf8(&sealed).map_err(storage_error)?;
         // Even a non-cooperating writer must not cause an immutable generation to be overwritten.
@@ -144,11 +183,37 @@ impl VaultBindingTransaction for FilesystemBinding<'_> {
         &self.snapshot
     }
 
+    fn retain_reconnect_source(&mut self, version: &str) -> Result<(), VaultStoreError> {
+        self.lease.verify_identity().map_err(storage_error)?;
+        let inventory_lease = acquire_inventory(self.store, &self.scope)?;
+        self.inventory = Inventory::read(self.store, &self.scope)?;
+        if self.inventory.mark_generation(version, true)? {
+            self.inventory.persist(self.store, &self.scope)?;
+        }
+        inventory_lease.verify_identity().map_err(storage_error)?;
+        self.lease.verify_identity().map_err(storage_error)
+    }
+
+    fn maintenance_revision(&self) -> Result<VaultBindingToken, VaultStoreError> {
+        Inventory::read(self.store, &self.scope)?.revision(&self.snapshot.token)
+    }
+
+    fn maintain(
+        self: Box<Self>,
+        expected: &VaultBindingToken,
+        policy: &VaultCleanupPolicy,
+    ) -> Result<VaultCleanupReport, VaultStoreError> {
+        maintenance::apply(*self, expected, policy)
+    }
+
     fn load_version_fields(
         &mut self,
         version: &str,
     ) -> Result<VaultBindingFields, VaultStoreError> {
         self.lease.verify_identity().map_err(storage_error)?;
+        if matches!(self.snapshot.state, VaultBindingState::Deleted) {
+            return Err(VaultStoreError::IssueDeleted);
+        }
         let fields = VaultBindingFields {
             title: self.read_field(version, VaultRecordField::Title)?,
             body: self.read_field(version, VaultRecordField::Body)?,
@@ -162,11 +227,17 @@ impl VaultBindingTransaction for FilesystemBinding<'_> {
         request: VaultBindingCommitRequest,
     ) -> Result<VaultBindingCommitResult, VaultStoreError> {
         self.lease.verify_identity().map_err(storage_error)?;
+        if matches!(self.snapshot.state, VaultBindingState::Deleted) {
+            return Err(VaultStoreError::IssueDeleted);
+        }
+        let _inventory_lease = acquire_inventory(self.store, &self.scope)?;
+        self.inventory = Inventory::read(self.store, &self.scope)?;
         if request.expected.scope() != &self.scope {
             return Ok(VaultBindingCommitResult::Conflict);
         }
         let version = request.generation_version(&self.key)?;
-        let (observed, current) = read_snapshot(self.store, &self.scope, &self.key)?;
+        let (observed, current) =
+            read_snapshot(self.store, &self.scope, &self.key, &self.inventory)?;
         let fields = self.load_version_fields(&version)?;
         // A committed attempt has a different current token. Check its full immutable identity
         // and payload before rejecting the original expected token as stale.
@@ -227,9 +298,12 @@ impl VaultBindingTransaction for FilesystemBinding<'_> {
             return Ok(VaultBindingCommitResult::Conflict);
         }
 
+        self.lease.verify_identity().map_err(storage_error)?;
+        self.inventory
+            .register(self.store, &self.scope, &self.scope)
+            .map_err(storage_error)?;
         #[cfg(all(test, any(unix, windows)))]
         test_hooks::before_pointer();
-        self.lease.verify_identity().map_err(storage_error)?;
         let scope = scope_bytes(&self.scope);
         let sealed = seal_record(&self.key, &scope, &VaultPlaintext::new(version.clone()))?;
         let sealed = std::str::from_utf8(&sealed).map_err(storage_error)?;
@@ -264,6 +338,17 @@ impl VaultBindingTransaction for FilesystemBinding<'_> {
         self.lease
             .verify_identity()
             .map_err(|_| VaultStoreError::WriteOutcomeUnknown)?;
+        if let VaultBindingState::Readable { version: previous } = &current.state
+            && self
+                .inventory
+                .mark_generation(previous, false)
+                .map_err(|_| VaultStoreError::WriteOutcomeUnknown)?
+        {
+            // A crash before this receipt only leaves an extra record retained.
+            self.inventory
+                .persist(self.store, &self.scope)
+                .map_err(|_| VaultStoreError::WriteOutcomeUnknown)?;
+        }
         Ok(VaultBindingCommitResult::Committed(VaultBindingReceipt {
             version,
             token: VaultBindingToken::observed(
