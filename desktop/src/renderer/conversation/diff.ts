@@ -192,15 +192,31 @@ export function parseGitDiff(diff: string): DiffFile[] {
  * 턴 전체의 변경이다. `turn/diff/updated` 를 받았으면 그것을 쓴다 (같은 파일의 여러 변경이 합쳐져 있다).
  * 기록에서 연 이전 턴에는 그 알림이 없으므로, 적용된 `fileChange` 아이템의 변경을 차례로 보여 준다.
  */
-export function turnDiffFiles(diff: string | null, items: readonly ThreadItem[]): DiffFile[] {
-  const parsed = diff === null ? [] : parseGitDiff(diff);
-  // 비어 있는 diff 는 "변경 없음" 이다. 내용이 있는데 파일을 못 찾았으면 형식을 모르는 것이므로 아이템으로 대신한다.
-  if (diff !== null && (parsed.length > 0 || diff.trim() === "")) {
-    return parsed;
+export interface TurnDiffFileSource {
+  readonly file: DiffFile;
+  readonly origin: string;
+  readonly input: { readonly kind: "patch" | "update" | "add" | "delete"; readonly text: string };
+}
+
+/** Keep the provider's original bytes beside its display model. Never read a current file. */
+export function turnDiffSources(diff: string | null, items: readonly ThreadItem[]): TurnDiffFileSource[] {
+  if (diff !== null) {
+    const sources = diff.split(/(?=^diff --git )/m).flatMap((text, index) =>
+      parseGitDiff(text).map((file): TurnDiffFileSource => ({
+        file, origin: `turn:${index}`, input: { kind: "patch", text },
+      })));
+    // An explicit empty aggregate means no changes. Unknown formats retain the existing item fallback.
+    if (sources.length > 0 || diff.trim() === "") return sources;
   }
-  return items.flatMap((item) =>
-    item.type === "fileChange" && item.status === "completed" ? item.changes.map(diffFileFromChange) : [],
-  );
+  return items.flatMap((item) => item.type === "fileChange" && item.status === "completed"
+    ? item.changes.map((change, index): TurnDiffFileSource => ({
+      file: diffFileFromChange(change), origin: `item:${item.id}:${index}`,
+      input: { kind: change.kind.type, text: change.diff },
+    })) : []);
+}
+
+export function turnDiffFiles(diff: string | null, items: readonly ThreadItem[]): DiffFile[] {
+  return turnDiffSources(diff, items).map((source) => source.file);
 }
 
 export function totalCounts(files: readonly DiffFile[]): { added: number; removed: number } {

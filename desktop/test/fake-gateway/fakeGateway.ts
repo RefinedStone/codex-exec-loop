@@ -74,6 +74,7 @@ export interface FakeGateway {
   /** 붙어 있는 local 커널 연결에만 상태 이벤트를 보낸다. */
   sendExtensionChange(kernel: string, change?: Record<string, unknown>): void;
   sendKernelEvent(event: unknown): void;
+  sendAppServerNotification(method: string, params: unknown): void;
   sendProviderChange(change: unknown): void;
   close(): Promise<void>;
 }
@@ -540,6 +541,10 @@ export async function startFakeGateway(
           socket.send(JSON.stringify({ jsonrpc: "2.0", method: "akra/kernel/event", params: { event } }));
         }
       }
+    },
+    sendAppServerNotification(method, params) {
+      const text = JSON.stringify({ jsonrpc: "2.0", method, params });
+      for (const socket of localClients) if (socket.readyState === socket.OPEN) socket.send(text);
     },
     close: async () => {
       for (const client of sockets.clients) {

@@ -102,7 +102,7 @@ export function DiffStyleToggle() {
   );
 }
 
-function DiffFileView({ file, defaultOpen }: { file: DiffFile; defaultOpen: boolean }) {
+export function DiffFileView({ file, defaultOpen, context }: { file: DiffFile; defaultOpen: boolean; context?: ReactNode }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <details className="diff-file" data-testid="diff-file" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
@@ -117,7 +117,7 @@ function DiffFileView({ file, defaultOpen }: { file: DiffFile; defaultOpen: bool
         )}
         <DiffCounts added={file.added} removed={file.removed} />
       </summary>
-      {open && <DiffBody file={file} />}
+      {open && <><DiffBody file={file} />{context}</>}
     </details>
   );
 }

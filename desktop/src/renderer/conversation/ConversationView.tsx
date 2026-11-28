@@ -13,8 +13,9 @@ import { openPanel, useUiStore } from "../session/uiStore";
 import { ConversationMenu, conversationMenuTarget, type ConversationMenuTarget } from "./ConversationMenu";
 import { copyText } from "./copyText";
 import { memoryOnLeave, newContentTurnId, restoreStep } from "./newContent";
-import { diffFileFromChange, totalCounts, turnDiffFiles, type DiffFile } from "./diff";
-import { DiffCounts, DiffFileList } from "./DiffView";
+import { diffFileFromChange } from "./diff";
+import { DiffFileList } from "./DiffView";
+import { TurnChanges } from "./TurnChanges";
 import { findTurns, matchRanges } from "./find";
 import { ItemView } from "./ItemView";
 import { Markdown } from "./Markdown";
@@ -103,23 +104,6 @@ export function PlanList({ steps }: { steps: readonly TurnPlanStep[] }) {
         </li>
       ))}
     </ol>
-  );
-}
-
-function Changes({ files }: { files: readonly DiffFile[] }) {
-  const counts = totalCounts(files);
-  return (
-    <div className="changes-card" data-testid="turn-changes">
-      <header>
-        <Icon name="diff" />
-        <span>파일 {files.length}개 변경</span>
-        <DiffCounts added={counts.added} removed={counts.removed} />
-        <button type="button" className="button" onClick={() => openPanel("review")}>
-          변경 검토
-        </button>
-      </header>
-      <DiffFileList files={files} />
-    </div>
   );
 }
 
@@ -213,7 +197,6 @@ function copyAnswer(turn: TurnView): void {
 
 const Turn = memo(function Turn({ turn }: { turn: TurnView }) {
   const blocks = useMemo(() => turnBlocks(turn.items), [turn.items]);
-  const changedFiles = useMemo(() => turnDiffFiles(turn.diff, turn.items), [turn.diff, turn.items]);
   return (
     <article className="turn" data-testid="turn" data-turn-id={turn.id} data-status={turn.status}>
       {blocks.map((block) => (
@@ -228,7 +211,7 @@ const Turn = memo(function Turn({ turn }: { turn: TurnView }) {
           <PlanList steps={turn.plan} />
         </div>
       )}
-      {changedFiles.length > 0 && <Changes files={changedFiles} />}
+      <TurnChanges turn={turn} />
       {turn.status === "inProgress" && <Working turn={turn} />}
       {turn.status === "interrupted" && <div className="turn-note">중단했습니다</div>}
       {turn.status === "failed" && <div className="turn-note">실패했습니다</div>}
