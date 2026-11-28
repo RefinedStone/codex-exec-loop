@@ -6,6 +6,7 @@ use crate::core::app::{
     AppEvent, AppSnapshot, ConversationLoadCorrelation, ConversationReadySnapshot,
     ConversationSnapshot, CoreDispatchOutcome, SessionCatalogSnapshot, StartupAttachmentSnapshot,
     StartupCheckCorrelation, StartupDiagnosticSnapshot, StartupReadySnapshot, StartupSnapshot,
+    ThreadActivitySummary,
 };
 use crate::core::native_client_port::NativeClientDispatchOutcome;
 use serde_json::Value;
@@ -49,6 +50,7 @@ pub(crate) const TUI_KERNEL_CLIENT_NAME: &str = "akra-tui";
 pub(crate) struct GatewayKernelClientRuntime {
     workspace_directory: String,
     snapshot: AppSnapshot,
+    thread_activity: Vec<ThreadActivitySummary>,
     startup_generation: u64,
     startup_workspace: Option<String>,
     synchronized: bool,
@@ -91,6 +93,7 @@ impl GatewayKernelClientRuntime {
                     }
                     Err(message) => ConversationSnapshot::Failed { message },
                 };
+                self.refresh_conversation_activity();
                 vec![AppEvent::ConversationChanged {
                     correlation: Some(correlation),
                     snapshot: self.snapshot.conversation.clone(),
@@ -114,6 +117,7 @@ impl GatewayKernelClientRuntime {
             }
         };
         self.snapshot.revision = self.snapshot.revision.saturating_add(1);
+        self.refresh_conversation_activity();
         vec![AppEvent::ConversationChanged {
             correlation,
             snapshot: self.snapshot.conversation.clone(),
@@ -131,6 +135,8 @@ impl GatewayKernelClientRuntime {
             KernelClientUpdate::Disconnected(reason) => {
                 self.conversation.cancel();
                 self.synchronized = false;
+                self.thread_activity.clear();
+                self.refresh_conversation_activity();
                 let message = format!(
                     "lost the connection to the Akra Gateway kernel ({reason}); reconnecting"
                 );
@@ -188,9 +194,13 @@ impl GatewayKernelClientRuntime {
             },
             Some("thread_activity") => {
                 match serde_json::from_value::<Vec<ThreadActivity>>(value["threads"].clone()) {
-                    Ok(threads) => vec![AppEvent::ThreadActivityChanged(
-                        threads.into_iter().map(thread_activity).collect(),
-                    )],
+                    Ok(threads) => {
+                        self.thread_activity = threads.into_iter().map(thread_activity).collect();
+                        self.refresh_conversation_activity();
+                        vec![AppEvent::ThreadActivityChanged(
+                            self.thread_activity.clone(),
+                        )]
+                    }
                     Err(error) => unreadable("thread_activity", &error),
                 }
             }

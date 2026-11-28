@@ -2241,10 +2241,6 @@ impl NativeTuiApp {
             }
             AppEvent::ThreadActivityChanged(activity) => {
                 self.conversation.thread_activity = activity;
-                if self.runtime.client_runtime.is_gateway_kernel_client() {
-                    let snapshot = self.runtime.client_runtime.snapshot().conversation_runtime;
-                    self.project_gateway_conversation_activity(snapshot);
-                }
             }
             AppEvent::GatewayCommandStatus(message) => {
                 self.show_gateway_kernel_client_refusal(message);
@@ -2422,7 +2418,7 @@ impl NativeTuiApp {
         if loaded_successfully {
             if self.runtime.client_runtime.is_gateway_kernel_client() {
                 let snapshot = self.runtime.client_runtime.snapshot().conversation_runtime;
-                self.project_gateway_conversation_activity(snapshot);
+                self.apply_conversation_runtime_projection(snapshot);
             }
             let workspace_directory = self.planning_workspace_directory();
             let resume_status_context = match &self.conversation.lifecycle.conversation_state {
@@ -2665,14 +2661,20 @@ impl NativeTuiApp {
         &mut self,
         snapshot: crate::core::app::ConversationRuntimeSnapshot,
     ) {
-        if self.runtime.client_runtime.is_gateway_kernel_client() {
-            self.project_gateway_conversation_activity(snapshot);
-            return;
-        }
+        let gateway_client = self.runtime.client_runtime.is_gateway_kernel_client();
         if let ConversationState::Ready(conversation) =
             &mut self.conversation.lifecycle.conversation_state
         {
+            let had_approval = conversation.pending_approval_request().is_some();
             conversation.apply_runtime_snapshot(snapshot);
+            let has_approval = conversation.pending_approval_request().is_some();
+            if gateway_client && had_approval != has_approval {
+                self.dispatch_shell_chrome(if has_approval {
+                    ShellChromeEvent::ApprovalOverlayShown
+                } else {
+                    ShellChromeEvent::ApprovalOverlayClosed
+                });
+            }
         }
     }
 
@@ -2924,9 +2926,6 @@ impl NativeTuiApp {
             reduce_auto_follow_overlay_ui(state, event);
     }
 }
-
-#[path = "app_runtime/gateway_activity.rs"]
-mod gateway_activity;
 
 pub(super) struct AppliedNativeParallelDispatch {
     pub(super) presentation_changed: bool,
