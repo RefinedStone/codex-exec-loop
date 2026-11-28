@@ -113,6 +113,16 @@ pub(super) fn verify_named_file(
     parent.verify()
 }
 
+pub(super) fn open_for_removal(parent: &PinnedPrivateDirectory, name: &str) -> Result<File> {
+    let file = OpenOptions::new()
+        .access_mode(WINDOWS_GENERIC_READ | WINDOWS_READ_CONTROL | DELETE)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_WRITE_THROUGH)
+        .open(parent.file_path(name)?)?;
+    verify_named_file(parent, name, &file)?;
+    Ok(file)
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum NewFilePurpose {
     Record,

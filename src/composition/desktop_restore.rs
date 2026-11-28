@@ -17,6 +17,37 @@ use crate::application::service::evidence_vault_unlock::EvidenceVaultUnlockServi
 use anyhow::Result;
 use std::sync::Arc;
 
+pub(crate) fn local_maintenance(
+    workspace: &str,
+) -> Result<crate::application::service::evidence_vault_lifecycle::LocalVaultMaintenance> {
+    use crate::application::port::outbound::vault_restore_workspace_port::VaultRestoreWorkspacePort;
+    let workspace = VaultRestoreWorkspaceAdapter
+        .canonical_workspace(workspace)
+        .map_err(|_| {
+            anyhow::anyhow!("the selected workspace is not a canonical primary checkout")
+        })?;
+    // The general resolver can fall back to a non-Git directory if discovery
+    // fails. A destructive command requires an actual primary checkout.
+    let git_marker = std::fs::symlink_metadata(std::path::Path::new(&workspace).join(".git"))?;
+    anyhow::ensure!(
+        git_marker.file_type().is_dir(),
+        "Vault maintenance requires a primary checkout with a local .git directory"
+    );
+    let root = crate::configuration::akra_home_dir()?.join("evidence-vault");
+    let unlock = EvidenceVaultUnlockService::new(Arc::new(OsVaultKeyStoreAdapter::new()));
+    let key = unlock
+        .existing_key()
+        .map_err(|_| anyhow::anyhow!("the existing Vault key is unavailable"))?;
+    Ok(
+        crate::application::service::evidence_vault_lifecycle::LocalVaultMaintenance {
+            workspace,
+            vault: Arc::new(FilesystemEvidenceVaultStoreAdapter::new(root)),
+            journal: super::production::build_issue_publish_journal(),
+            key,
+        },
+    )
+}
+
 pub(crate) fn build() -> Result<Arc<dyn VaultRestoreSessionPort>> {
     build_in(crate::configuration::akra_home_dir()?)
 }

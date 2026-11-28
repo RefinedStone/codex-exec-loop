@@ -33,6 +33,7 @@ mod kernel;
 mod mcp;
 mod reports;
 mod usage;
+mod vault;
 
 use self::reports::{
     DoctorReport, PlanningToolErrorReport, ResetReport, render_doctor_report, render_json_line,
@@ -90,6 +91,9 @@ where
         [command, rest @ ..] if command == OsStr::new("issue-form") => {
             Ok(Some(issue_form::run(rest, stdout)?))
         }
+        [command, rest @ ..] if command == OsStr::new("vault") => {
+            Ok(Some(vault::run(rest, stdout)?))
+        }
         [command, rest @ ..] if command == OsStr::new("kernel") => {
             Ok(Some(kernel::run(rest, stdout)?))
         }
@@ -111,6 +115,7 @@ where
             writeln!(stdout, "{MCP_USAGE}")?;
             writeln!(stdout, "Usage: akra codex-delegation login")?;
             writeln!(stdout, "{}", issue_form::USAGE)?;
+            writeln!(stdout, "{}", vault::USAGE)?;
             writeln!(stdout, "Usage: akra describe --json")?;
             writeln!(stdout, "{}", extensions::USAGE)?;
             writeln!(stdout, "{}", context::USAGE)?;

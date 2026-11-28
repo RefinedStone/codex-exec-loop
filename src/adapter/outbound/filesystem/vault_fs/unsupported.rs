@@ -19,6 +19,10 @@ pub(super) fn compare_and_swap_file(_: &Path, _: &Path, _: Option<&str>, _: &str
     bail!("private vault files are unavailable on this platform")
 }
 
+pub(super) fn remove_observed_file(_: &Path, _: &Path, _: &str) -> Result<bool> {
+    anyhow::bail!("private vault record removal is unavailable on this platform")
+}
+
 pub(super) fn write_outcome_unknown(_: &anyhow::Error) -> bool {
     false
 }

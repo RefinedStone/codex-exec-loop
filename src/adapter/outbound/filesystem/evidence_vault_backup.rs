@@ -26,6 +26,7 @@ use crate::application::port::outbound::evidence_vault_port::{
     EvidenceVaultStorePort, VaultBindingCommitPolicy, VaultBindingCommitRequest,
     VaultBindingCommitResult, VaultBindingFields, VaultBindingState, VaultKey, VaultPlaintext,
     VaultRecordBinding, VaultRecordField, VaultRecordKey, VaultRecordLoadRequest, VaultRecordScope,
+    VaultStoreError,
 };
 use crate::domain::issue_work::{IssueProjectScope, IssueReference};
 
@@ -333,6 +334,9 @@ fn commit_import_bindings(
                 continue;
             }
             VaultBindingState::Missing => VaultBindingCommitPolicy::InstallIfMissing,
+            VaultBindingState::Deleted => {
+                return Err(VaultBackupError::Record(VaultStoreError::IssueDeleted));
+            }
             VaultBindingState::Unreadable { .. }
                 if recovery_mode == VaultBackupRecoveryMode::RecoverUnreadable =>
             {

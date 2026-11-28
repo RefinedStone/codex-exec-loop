@@ -140,7 +140,10 @@ pub trait EvidenceVaultRestorePort: Send + Sync {
  */
 
 /// 저장 계약의 판이다. 요청, 응답, 오류의 뜻이 바뀌면 올린다.
-pub const EVIDENCE_VAULT_STORE_CONTRACT_VERSION: u32 = 4;
+pub const EVIDENCE_VAULT_STORE_CONTRACT_VERSION: u32 = 5;
+
+mod lifecycle;
+pub use lifecycle::{VaultCleanupPolicy, VaultCleanupReport, VaultLifecycleAction};
 
 /// 가린 구간이 있는 이슈의 필드이다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -205,6 +208,8 @@ pub struct VaultRecordLoadRequest {
 pub enum VaultStoreError {
     /// 이 범위의 레코드가 없다.
     RecordNotFound,
+    /// The issue has an explicit local deletion marker, not a missing binding.
+    IssueDeleted,
     /// 레코드를 해석할 수 없다 (예: 잘린 파일).
     CorruptRecord,
     /// 레코드의 암호화 형식을 이 구현이 모른다.
@@ -225,6 +230,9 @@ impl fmt::Display for VaultStoreError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::RecordNotFound => formatter.write_str("the vault has no record for this scope"),
+            Self::IssueDeleted => {
+                formatter.write_str("the local issue vault was explicitly deleted")
+            }
             Self::CorruptRecord => formatter.write_str("the vault record cannot be parsed"),
             Self::UnsupportedFormat => {
                 formatter.write_str("the vault record uses an unsupported encryption format")
@@ -300,7 +308,7 @@ pub trait EvidenceVaultStorePort: Send + Sync {
     }
 
     /// PublishIntent staging만 저장한다. CurrentVersion/ConfirmedVersion은 begin_binding으로만 쓴다.
-    /// staging 저장은 binding lease를 재취득하지 않아 transaction 안에서도 부를 수 있다.
+    /// Staging does not re-enter a binding transaction, but observes its deletion fence.
     /// 교체 전 실패는 이전 레코드를 보존한다. 교체 후 실패는 `WriteOutcomeUnknown`이며 다시 읽어야 한다.
     fn save(&self, request: VaultRecordSaveRequest) -> std::result::Result<(), VaultStoreError>;
 
@@ -352,6 +360,7 @@ pub struct VaultBindingSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VaultBindingState {
     Missing,
+    Deleted,
     Readable {
         version: String,
     },
@@ -489,6 +498,27 @@ pub enum VaultBindingCommitResult {
 /// 읽기와 commit은 같은 프로세스 공유 lease 아래 수행하며, guard를 버리면 쓰기 없이 종료한다.
 pub trait VaultBindingTransaction {
     fn snapshot(&self) -> &VaultBindingSnapshot;
+
+    /// Covers the private inventory as well as the binding inspected for confirmation.
+    fn maintenance_revision(&self) -> Result<VaultBindingToken, VaultStoreError> {
+        Ok(self.snapshot().token.clone())
+    }
+
+    /// Keep a source that a reconnect approval may still need after replacement.
+    fn retain_reconnect_source(&mut self, _version: &str) -> Result<(), VaultStoreError> {
+        Ok(())
+    }
+
+    /// Called with the exact snapshot inspected by the local confirmation flow.
+    fn maintain(
+        self: Box<Self>,
+        _expected: &VaultBindingToken,
+        _policy: &VaultCleanupPolicy,
+    ) -> Result<VaultCleanupReport, VaultStoreError> {
+        Err(VaultStoreError::Storage(
+            "vault maintenance is unavailable".to_owned(),
+        ))
+    }
 
     /// 승인 당시 source version도 읽을 수 있다. 각 필드의 부재와 빈 평문을 구분한다.
     fn load_version_fields(&mut self, version: &str)

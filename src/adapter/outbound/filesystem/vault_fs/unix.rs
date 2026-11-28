@@ -35,6 +35,10 @@ pub(super) fn write_outcome_unknown(error: &anyhow::Error) -> bool {
     secure_fs::atomic_replacement_completed(error)
 }
 
+pub(super) fn remove_observed_file(root: &Path, relative: &Path, observed: &str) -> Result<bool> {
+    secure_fs::compare_and_swap_optional_file(root, relative, Some(observed), None)
+}
+
 #[cfg(test)]
 pub(super) use secure_fs::{
     install_after_atomic_replace_error_hook, install_before_atomic_replace_hook,

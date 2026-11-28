@@ -92,6 +92,7 @@ pub mod work_context;
 // evidence_vault_unlock 은 사용자 확인 뒤에 이슈와 열람 세션에 묶인 Vault 잠금 해제 권한을 준다 (#2422).
 pub mod evidence_vault_unlock;
 // evidence_vault_restore 는 최신 게시본이 저장한 연결과 같을 때만 복원하고, 다르면 보류하고 재연결을 받는다 (#2425).
+pub(crate) mod evidence_vault_lifecycle;
 pub mod evidence_vault_restore;
 // evidence_vault_backup 은 사용자 승인 뒤에 복구 키로 Vault 백업을 내보내고 가져온다 (#2432).
 pub mod evidence_vault_backup;

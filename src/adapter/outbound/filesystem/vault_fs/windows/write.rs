@@ -73,6 +73,38 @@ fn writer_lease(root: &Path) -> Result<PrivateLease> {
     PrivateLease::mutation(root)
 }
 
+pub(super) fn remove_observed_file(root: &Path, name: &str, observed: &str) -> Result<bool> {
+    let lease = writer_lease(root)?;
+    let Some(records) = directory::open_records(lease.directory(), false)? else {
+        return Ok(false);
+    };
+    let Some(original) = files::read_snapshot(&records, name)? else {
+        return Ok(false);
+    };
+    if original.body != observed {
+        return Ok(false);
+    }
+    let file = files::open_for_removal(&records, name)?;
+    if ObjectIdentity::of(&file)? != original.object
+        || files::read_snapshot(&records, name)?.as_ref() != Some(&original)
+    {
+        return Ok(false);
+    }
+    lease.verify_identity()?;
+    disposition(&file)?;
+    drop(file);
+    lease
+        .verify_identity()
+        .map_err(|error| error.context(WriteOutcomeUnknown))?;
+    // NTFS can hold a delete-pending name while another reader has a handle.
+    // Do not acknowledge cleanup unless this name is absent.
+    match files::read_snapshot(&records, name) {
+        Ok(None) => Ok(true),
+        Ok(Some(_)) => Err(anyhow::Error::new(WriteOutcomeUnknown)),
+        Err(error) => Err(error.context(WriteOutcomeUnknown)),
+    }
+}
+
 fn install(
     lease: &PrivateLease,
     parent: &PinnedPrivateDirectory,
@@ -206,19 +238,29 @@ impl<'a> TemporaryFile<'a> {
 impl Drop for TemporaryFile<'_> {
     fn drop(&mut self) {
         if !self.preserve && self.verify_source().is_ok() {
-            let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
-            // SAFETY: this owned handle has DELETE access and still names only our
-            // verified temporary file. An uncertain publication is never removed.
-            unsafe {
-                SetFileInformationByHandle(
-                    self.file.as_raw_handle(),
-                    FileDispositionInfo,
-                    (&disposition as *const FILE_DISPOSITION_INFO).cast(),
-                    std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
-                );
-            }
+            let _cleanup = disposition(&self.file);
         }
     }
+}
+
+fn disposition(file: &File) -> Result<()> {
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+    // SAFETY: the handle remains open for the call, and the initialized input
+    // structure has the exact layout and size required by FileDispositionInfo.
+    let size = u32::try_from(std::mem::size_of::<FILE_DISPOSITION_INFO>())?;
+    if unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileDispositionInfo,
+            (&raw const disposition).cast(),
+            size,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error())
+            .context("the vault record could not be removed");
+    }
+    Ok(())
 }
 
 pub(super) fn rename_handle(

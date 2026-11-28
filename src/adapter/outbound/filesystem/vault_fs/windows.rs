@@ -53,6 +53,10 @@ pub(super) fn write_outcome_unknown(error: &anyhow::Error) -> bool {
     error.downcast_ref::<write::WriteOutcomeUnknown>().is_some()
 }
 
+pub(super) fn remove_observed_file(root: &Path, relative: &Path, observed: &str) -> Result<bool> {
+    write::remove_observed_file(root, super::record_name(relative)?, observed)
+}
+
 #[cfg(test)]
 pub(super) use test_hooks::{
     install_after_atomic_replace_error_hook, install_before_atomic_replace_hook,

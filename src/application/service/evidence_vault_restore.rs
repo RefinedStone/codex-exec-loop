@@ -476,6 +476,9 @@ impl EvidenceVaultRestoreService {
         let source_version = Self::bound_version(&snapshot)?;
         let spans = Self::bound_spans(binding.as_mut(), &source_version)?;
         self.key(grant)?;
+        binding
+            .retain_reconnect_source(&source_version)
+            .map_err(VaultRestoreHold::RecordUnavailable)?;
         let reviewed_hash = published.field_hash();
         let markers = spans
             .into_iter()
@@ -638,6 +641,9 @@ impl EvidenceVaultRestoreService {
         match &snapshot.state {
             VaultBindingState::Readable { version } => Ok(version.clone()),
             VaultBindingState::Missing => Err(VaultRestoreHold::NotBound),
+            VaultBindingState::Deleted => Err(VaultRestoreHold::RecordUnavailable(
+                VaultStoreError::IssueDeleted,
+            )),
             VaultBindingState::Unreadable { error } => {
                 Err(VaultRestoreHold::RecordUnavailable(error.clone()))
             }

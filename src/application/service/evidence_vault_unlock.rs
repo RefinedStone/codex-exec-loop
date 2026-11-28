@@ -195,7 +195,7 @@ impl EvidenceVaultUnlockService {
         }
     }
 
-    pub(super) fn existing_key(&self) -> Result<VaultRecordKey, VaultSharedCopyReason> {
+    pub(crate) fn existing_key(&self) -> Result<VaultRecordKey, VaultSharedCopyReason> {
         self.key_store
             .load_key()
             .map_err(shared_copy_reason)?
