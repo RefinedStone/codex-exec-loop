@@ -35,6 +35,7 @@ const automation = {
   revision: 7,
   binding_id: binding.id,
   binding_pause: { status: "ready", binding_id: binding.id, revision: 0, paused: false, pending: null },
+  account_quota: { start: { revision: 4, hold: "unknown" }, arbiter: null },
   binding,
   last_attempt_at_ms: LAST_SUCCESS,
   last_success_at_ms: LAST_SUCCESS,
@@ -273,6 +274,14 @@ const kernel = {
     }
     if (method === "akra/kernel/command" || method === "akra/kernel/command_confirmed") {
       const command = (method === "akra/kernel/command_confirmed" ? confirmedRequest(params) : params).command;
+      if (command?.type === "retry_issue_account_quota") {
+        const accepted = command.lane === "start" && command.expected_revision === automation.account_quota.start?.revision;
+        if (accepted) {
+          automation.account_quota.start = null;
+          automation.revision++;
+        }
+        return { result: { processed: true, result: { type: "issue_account_quota_retry_requested", accepted } }, events: [stateEvent()] };
+      }
       if (command?.type === "set_issue_automation_mode" && command.mode === "observe" && method !== "akra/kernel/command_confirmed") {
         return { error: { code: -32602, message: "상향에는 main 확인이 필요합니다." } };
       }
@@ -633,6 +642,14 @@ try {
   gateway.sendKernelEvent(stateEvent());
   check("resume completion leaves collection mode intact", await until(async () => await pauseToggle.isEnabled() && (await mode.inputValue()) === "observe"));
 
+  const quotaRetry = panel.getByRole("button", { name: "한도 다시 확인" });
+  await quotaRetry.click();
+  check("quota retry carries the visible revision and clears the resolved hold", await until(async () => {
+    const calls = kernelCommands("retry_issue_account_quota");
+    return calls.length === 1 && calls[0]?.params.command.lane === "start"
+      && calls[0]?.params.command.expected_revision === 4 && (await quotaRetry.count()) === 0;
+  }));
+
   console.log("--- issues panel text ---");
   console.log(await panel.innerText());
   console.log("-------------------------");
@@ -641,7 +658,7 @@ try {
   await panel.waitFor({ state: "detached", timeout: 10_000 });
   check("closing the issue panel retains the metadata-only decision subscription", countRequests("akra/kernel/detach") === detaches);
   check("the issues tab sends no planning commands or planning queries", requests.every((request) => {
-    if (request.method === "akra/kernel/command") return ["set_issue_automation_mode", "set_issue_binding_paused", "sync_issues"].includes(request.params.command?.type);
+    if (request.method === "akra/kernel/command") return ["set_issue_automation_mode", "set_issue_binding_paused", "sync_issues", "retry_issue_account_quota"].includes(request.params.command?.type);
     if (request.method === "akra/kernel/command_confirmed") return ["set_issue_automation_mode", "set_issue_binding_paused"].includes(request.params.request?.command?.type);
     if (request.method === "akra/kernel/query") return !["planning", "parallel"].includes(request.params.query?.type);
     return true;

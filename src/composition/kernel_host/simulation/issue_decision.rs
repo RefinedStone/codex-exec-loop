@@ -947,6 +947,7 @@ fn kernel_simulation_issue_decision_answers_after_planning_failure_without_refre
 mod agent_question;
 mod deadlines;
 mod human_confirmation;
+mod quota;
 
 #[test]
 fn kernel_simulation_propose_coordinator_survives_reconnect_without_live_turns() {

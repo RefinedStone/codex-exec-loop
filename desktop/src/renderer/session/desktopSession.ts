@@ -466,6 +466,10 @@ export class DesktopSession {
     return this.kernel.setIssueBindingPaused(paused);
   }
 
+  retryIssueAccountQuota(lane: import("../kernel/protocol").IssueQuotaLane, revision: number): Promise<void> {
+    return this.kernel.retryIssueAccountQuota(lane, revision);
+  }
+
   setIssueAutonomy(level: IssueAutonomyLevel): Promise<void> {
     return this.kernel.setIssueAutonomy(level);
   }

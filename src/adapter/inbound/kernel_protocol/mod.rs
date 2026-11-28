@@ -350,6 +350,7 @@ impl CommandRequest {
             | KernelCommand::SetIssueAutomationMode { .. }
             | KernelCommand::SetIssueAutonomy { .. }
             | KernelCommand::SetIssueBindingPaused { .. }
+            | KernelCommand::RetryIssueAccountQuota { .. }
             | KernelCommand::AnswerIssueDecision { .. }
             | KernelCommand::AskIssueDecision { .. }
             | KernelCommand::HoldIssue { .. }
@@ -577,6 +578,9 @@ pub enum CommandResult {
     IssueBindingPauseRequested {
         command: Box<IssueBindingPauseRequestedState>,
     },
+    IssueAccountQuotaRetryRequested {
+        accepted: bool,
+    },
     IssueAutomationModeChanged {
         previous: Option<IssueAutomationMode>,
         mode: IssueAutomationMode,
@@ -713,6 +717,9 @@ impl CommandResult {
                 changed,
                 autonomy: Box::new(IssueAutonomyState::from_domain(&autonomy)),
             },
+            StoredCommandResult::IssueAccountQuotaRetryRequested { accepted } => {
+                Self::IssueAccountQuotaRetryRequested { accepted }
+            }
             StoredCommandResult::IssueBindingPauseRequested { command } => {
                 Self::IssueBindingPauseRequested {
                     command: Box::new(command.as_ref().into()),
@@ -753,6 +760,9 @@ impl CommandResult {
             KernelCommandKind::SetIssueAutomationMode => Some("issue_automation_mode_changed"),
             KernelCommandKind::SetIssueAutonomy => Some("issue_autonomy_changed"),
             KernelCommandKind::SetIssueBindingPaused => Some("issue_binding_pause_requested"),
+            KernelCommandKind::RetryIssueAccountQuota => {
+                Some("issue_account_quota_retry_requested")
+            }
             KernelCommandKind::AnswerIssueDecision => Some("issue_decision_resolved"),
             KernelCommandKind::AskIssueDecision => Some("issue_decision_requested"),
             KernelCommandKind::HoldIssue
@@ -1107,6 +1117,10 @@ pub enum KernelCommand {
         paused: bool,
         expected_revision: u64,
     },
+    RetryIssueAccountQuota {
+        lane: crate::application::port::outbound::issue_account_quota_port::IssueQuotaLane,
+        expected_revision: u64,
+    },
     /// 현재 기준과 맞는 열린 결정에 에이전트 답 하나를 저장한다. 사람 확인 증명을 받지 않는다.
     AnswerIssueDecision {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1427,6 +1441,7 @@ impl KernelCommand {
             Self::SetIssueAutomationMode { .. } => KernelCommandKind::SetIssueAutomationMode,
             Self::SetIssueAutonomy { .. } => KernelCommandKind::SetIssueAutonomy,
             Self::SetIssueBindingPaused { .. } => KernelCommandKind::SetIssueBindingPaused,
+            Self::RetryIssueAccountQuota { .. } => KernelCommandKind::RetryIssueAccountQuota,
             Self::AnswerIssueDecision { .. } => KernelCommandKind::AnswerIssueDecision,
             Self::AskIssueDecision { .. } => KernelCommandKind::AskIssueDecision,
             Self::HoldIssue { .. } => KernelCommandKind::HoldIssue,
@@ -1469,6 +1484,7 @@ impl KernelCommand {
             | Self::SetIssueAutomationMode { .. }
             | Self::SetIssueAutonomy { .. }
             | Self::SetIssueBindingPaused { .. }
+            | Self::RetryIssueAccountQuota { .. }
             | Self::AnswerIssueDecision { .. }
             | Self::AskIssueDecision { .. }
             | Self::HoldIssue { .. }
@@ -1595,6 +1611,13 @@ impl KernelCommand {
             StoredCommand::SetIssueAutonomy { command_id, level } => {
                 Self::SetIssueAutonomy { command_id, level }
             }
+            StoredCommand::RetryIssueAccountQuota {
+                lane,
+                expected_revision,
+            } => Self::RetryIssueAccountQuota {
+                lane,
+                expected_revision,
+            },
             StoredCommand::SetIssueBindingPaused {
                 command_id,
                 binding_id,
@@ -1863,6 +1886,13 @@ impl KernelCommand {
                 issue_autonomy::validate_input(&command_id)?;
                 StoredCommand::SetIssueAutonomy { command_id, level }
             }
+            Self::RetryIssueAccountQuota {
+                lane,
+                expected_revision,
+            } => StoredCommand::RetryIssueAccountQuota {
+                lane,
+                expected_revision,
+            },
             Self::SetIssueBindingPaused {
                 command_id,
                 binding_id,
@@ -2030,6 +2060,7 @@ impl KernelCommand {
             | Self::SetIssueAutomationMode { .. }
             | Self::SetIssueAutonomy { .. }
             | Self::SetIssueBindingPaused { .. }
+            | Self::RetryIssueAccountQuota { .. }
             | Self::AnswerIssueDecision { .. }
             | Self::AskIssueDecision { .. }
             | Self::HoldIssue { .. }

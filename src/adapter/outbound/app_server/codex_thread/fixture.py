@@ -61,7 +61,18 @@ for line in sys.stdin:
         result = {"account": None if scenario == "auth_missing" else account}
     elif method == "account/rateLimits/read":
         assert params == {}
-        result = {"ordinaryUsageAllowed": True, "rateLimits": {"limitId": "codex", "primary": {"usedPercent": 10}}}
+        match scenario:
+            case "quota_reply_lost":
+                sys.exit(0)
+            case "quota_exhausted":
+                used_percent = 100
+            case _:
+                used_percent = 10
+        result = {
+            "ordinaryUsageAllowed": True,
+            "rateLimits": {"limitId": "other", "primary": {"usedPercent": 0}},
+            "rateLimitsByLimitId": {"codex": {"primary": {"usedPercent": used_percent}}},
+        }
     elif method == "config/read":
         assert params["cwd"] == str(cwd)
         store = "file" if scenario == "auth_file_store" else "keyring"

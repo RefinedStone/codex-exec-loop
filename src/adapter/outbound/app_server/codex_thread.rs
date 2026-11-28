@@ -18,10 +18,11 @@ use super::connection::{
 };
 use super::{AppServerEventSender, AppServerEventTrySendError, protected_thread_workspace};
 use crate::application::port::conversation_stream::ConversationStreamEvent;
+use crate::application::port::outbound::issue_account_quota_port::IssueAccountQuota;
 use crate::domain::delegation::{Delivery, EndReason};
 use crate::domain::turn_terminal::{ConversationTurnErrorInfo, ConversationTurnTerminalOutcome};
 
-mod account_limits;
+pub(super) mod account_limits;
 mod driver;
 pub(crate) use driver::CodexThreadDriver;
 
@@ -53,6 +54,15 @@ pub(crate) struct CodexThreadRequest<'a> {
 }
 
 impl CodexThreadBackend {
+    pub(crate) fn read_account_quota(&self) -> IssueAccountQuota {
+        let Ok(directory) = IsolatedDirectory::create() else {
+            return IssueAccountQuota::Unknown;
+        };
+        match self.connect_authenticated(&directory) {
+            Ok((mut connection, _)) => connection.read_account_quota(),
+            Err(_) => IssueAccountQuota::Unknown,
+        }
+    }
     #[cfg(test)]
     fn probe(&self) -> Result<()> {
         let directory = IsolatedDirectory::create()?;
@@ -186,11 +196,12 @@ impl CodexThreadBackend {
             // Only Issue Assessment supplies binding authorization; manual delegation stays independent.
             // Read before acquiring the binding guard so a slow quota read cannot hold a pause open.
             if authorization.is_some() {
-                let allowed = connection
-                    .isolated_request("account/rateLimits/read", json!({}))
-                    .map_err(|_| EndReason::Unavailable)
-                    .and_then(account_limits::admission);
-                if let Err(reason) = allowed {
+                let reason = match connection.read_account_quota() {
+                    IssueAccountQuota::Allowed => None,
+                    IssueAccountQuota::Exhausted => Some(EndReason::Quota),
+                    IssueAccountQuota::Unknown => Some(EndReason::Unavailable),
+                };
+                if let Some(reason) = reason {
                     return End {
                         reason,
                         delivery: NotSent,

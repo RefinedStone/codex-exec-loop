@@ -222,6 +222,16 @@ impl CodexIssueAssessmentModelAdapter {
 }
 
 impl IssueAssessmentModelPort for CodexIssueAssessmentModelAdapter {
+    fn read_account_quota(
+        &self,
+    ) -> crate::application::port::outbound::issue_account_quota_port::IssueAccountQuota {
+        use crate::application::port::outbound::issue_account_quota_port::IssueAccountQuota;
+        self.authorized_driver
+            .as_ref()
+            .map_or(IssueAccountQuota::Unknown, |driver| {
+                driver.read_account_quota()
+            })
+    }
     fn configuration(&self) -> Result<IssueAssessmentModelConfiguration> {
         let configuration = (self.configuration)()
             .map_err(|_| anyhow!("the issue assessment configuration is unavailable"))?;

@@ -152,6 +152,36 @@ pub struct IssueCollectionProjection {
     pub binding: Option<IssueAutomationBinding>,
     /// 목록·단건·이벤트가 공유하는 공개 판이다. state.revision은 수집 CAS에만 쓴다.
     pub catalog_revision: u64,
+    pub account_quota: IssueAccountQuotaState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueQuotaLane {
+    Start,
+    Arbiter,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueQuotaHold {
+    Exhausted,
+    Unknown,
+    RetryQueued,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IssueQuotaWait {
+    pub revision: u64,
+    pub hold: Option<IssueQuotaHold>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IssueAccountQuotaState {
+    pub start: Option<IssueQuotaWait>,
+    pub arbiter: Option<IssueQuotaWait>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -32,6 +32,10 @@ impl Drop for CodexThreadDriver {
 }
 
 impl CodexThreadDriver {
+    pub(crate) fn read_account_quota(&self) -> IssueAccountQuota {
+        self.backend.read_account_quota()
+    }
+
     #[cfg(all(test, unix))]
     pub(crate) fn fixture(command: PathBuf) -> Self {
         Self {

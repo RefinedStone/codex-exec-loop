@@ -63,7 +63,7 @@ pub(super) fn make_pre_auto_schema(connection: &Connection) {
 
 pub(super) fn make_pre_comment_command_schema(connection: &Connection) {
     connection
-        .execute_batch("DROP TABLE issue_comment_commands;")
+        .execute_batch("DROP TABLE issue_account_quota; DROP TABLE issue_comment_commands;")
         .unwrap();
 }
 
