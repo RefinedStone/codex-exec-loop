@@ -62,7 +62,9 @@ fn native_tui_opens_its_conversation_through_a_running_gateway() {
             .any(|window| window == b"Akra");
         let rendered = String::from_utf8_lossy(&output);
         if terminal_started && !opened_sessions && rendered.contains("READY") {
-            master.write_all(b"\x0f").expect("Ctrl+O opens session list");
+            master
+                .write_all(b"\x0f")
+                .expect("Ctrl+O opens session list");
             opened_sessions = true;
         }
         if opened_sessions && !opened_history && rendered.contains("Gateway PTY session") {
