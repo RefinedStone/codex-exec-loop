@@ -1111,11 +1111,16 @@ Akra Desktop (`desktop/`) runs from source as a development build; it has no pac
   If startup fails, the TUI reports the error instead of starting a local kernel or app-server.
   Only the Gateway kernel takes the repository writer lock.
 - The TUI reads the session list, thread activity, and auto-follow settings through `akra/kernel/*`.
-  It opens saved conversations through the Gateway's app-server relay. This client reads only:
-  screens whose queries or commands are not in the kernel protocol
+  It opens saved conversations through the Gateway's app-server relay. Screens whose queries or
+  commands are not in the kernel protocol
   (`:work`, `:parallel`, `:peek`, `:reviews`, `:queue`, `:directions`, `:doctor`, `:planning`, `:reset`)
-  are LOCKED with `not in the kernel protocol yet; use Akra Desktop or the admin web`, and prompts,
-  renaming a session, `:turns`, `:stop`, and `:new` show `read-only Gateway kernel client`.
+  are locked with `not in the kernel protocol yet; use Akra Desktop or the admin web`. The TUI sends
+  text prompts, steering, approval decisions, rename, stop, and auto-follow changes to the Gateway
+  kernel. `:new` creates an empty thread through the relay without starting a turn. A lost write
+  reply leaves the outcome unknown; reconnect does not repeat the request. If fresh thread creation
+  loses its reply, open Sessions (`Ctrl+O`) and explicitly select the intended thread from the
+  workspace-scoped list. The TUI does not guess which thread was created or send another creation
+  request while that selection is unresolved.
   On attach and an explicit catalog request, the client sends the existing read-only `load_sessions`
   command and queries the values; this is ensure-loaded, not a forced provider refresh of a ready catalog.
   Connection/handshake and initial/sync requests have bounded deadlines, unlike healthy idle listening.

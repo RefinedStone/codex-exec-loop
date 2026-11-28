@@ -51,7 +51,37 @@ impl NativeTuiApp {
             self.execute_inline_shell_command_input(command);
             return;
         }
-        if self.refuse_in_gateway_kernel_client() {
+        if self.runtime.client_runtime.is_gateway_kernel_client() {
+            let ConversationState::Ready(conversation) =
+                &self.conversation.lifecycle.conversation_state
+            else {
+                return;
+            };
+            let prompt = conversation.composer.input_buffer.trim();
+            if prompt.is_empty() {
+                return;
+            }
+            if conversation.thread_id.is_empty() || self.has_image_attachments() {
+                self.show_gateway_kernel_client_refusal(
+                    "Select a session and send text only".to_string(),
+                );
+                return;
+            }
+            if prompt.len() > MAX_PROMPT_INPUT_BYTES {
+                self.show_gateway_kernel_client_refusal(format!(
+                    "Prompt exceeds the {MAX_PROMPT_INPUT_BYTES}-byte limit"
+                ));
+                return;
+            }
+            let request = crate::core::app::ThreadPromptSubmission {
+                workspace_directory: conversation.cwd.clone(),
+                thread_id: conversation.thread_id.clone(),
+                prompt: prompt.to_string(),
+                op_id: None,
+            };
+            self.dispatch_client_event(CoreInput::Command(AppCommand::SubmitThreadPrompt(
+                Box::new(request),
+            )));
             return;
         }
         if self.conversation.pending_turn_steer.is_some() {

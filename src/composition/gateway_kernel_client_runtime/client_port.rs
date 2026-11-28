@@ -1,4 +1,6 @@
 use super::GatewayKernelClientRuntime;
+use super::commands::Mutation;
+use crate::adapter::inbound::kernel_protocol::{ApprovalDecision, KernelCommand};
 use crate::core::app::{
     AppCommand, AppEvent, AppSnapshot, ConversationSnapshot, CoreInput, ParallelModeProjection,
     PlanningParallelProjection, RevisionedPlanningParallelProjection, SessionCatalogSnapshot,
@@ -18,7 +20,20 @@ impl NativeClientPort for GatewayKernelClientRuntime {
                     workspace_directory,
                 }) => self.startup_requested(workspace_directory),
                 CoreInput::Command(AppCommand::LoadConversation { thread_id, .. }) => {
-                    self.load_conversation(thread_id)
+                    let needs_selection = self
+                        .commands
+                        .as_ref()
+                        .is_some_and(|commands| commands.needs_thread_selection());
+                    let scoped_selection = matches!(&self.snapshot.session_catalog,
+                        SessionCatalogSnapshot::Ready(ready) if ready.catalog.recent_sessions()
+                            .is_some_and(|sessions| sessions.items.iter().any(|item| item.id == thread_id)));
+                    if needs_selection && !(self.synchronized && scoped_selection) {
+                        vec![AppEvent::GatewayCommandStatus(
+                            "Open Sessions after Gateway reconnect and select a thread from the scoped list".to_string(),
+                        )]
+                    } else {
+                        self.load_conversation(thread_id)
+                    }
                 }
                 CoreInput::Command(AppCommand::InvalidateConversationLoad) => {
                     self.conversation.cancel();
@@ -30,6 +45,14 @@ impl NativeClientPort for GatewayKernelClientRuntime {
                     }]
                 }
                 CoreInput::Command(AppCommand::LoadSessionCatalog(intent)) => {
+                    if self
+                        .commands
+                        .as_ref()
+                        .is_some_and(|commands| commands.needs_thread_selection())
+                    {
+                        let events = self.recover_thread_catalog();
+                        return self.outcome(events);
+                    }
                     // Initial sync ensures a load; explicit refresh requests are coalesced.
                     if (intent.mode == crate::core::app::SessionCatalogLoadMode::Refresh
                         || matches!(self.snapshot.session_catalog, SessionCatalogSnapshot::Idle))
@@ -41,7 +64,52 @@ impl NativeClientPort for GatewayKernelClientRuntime {
                         self.snapshot.session_catalog.clone(),
                     )]
                 }
-                // The kernel owns every other decision; this read-only client does not send it yet.
+                CoreInput::Command(AppCommand::SetAutoFollowMaxTurns { value }) => {
+                    self.send_mutation(KernelCommand::SetAutoFollowMaxTurns { value })
+                }
+                CoreInput::Command(AppCommand::PausePostTurnContinuation) => {
+                    self.send_mutation(KernelCommand::PauseAutoFollow {})
+                }
+                CoreInput::Command(AppCommand::RequestStopAllSessions) => {
+                    self.send_mutation(KernelCommand::StopAll {})
+                }
+                CoreInput::Command(AppCommand::CreateGatewayConversation) => self
+                    .submit_gateway_write(Mutation::StartThread(self.workspace_directory.clone())),
+                CoreInput::Command(AppCommand::RenameSession(request)) => {
+                    self.send_mutation(KernelCommand::RenameSession {
+                        thread_id: request.thread_id,
+                        name: request.name,
+                    })
+                }
+                CoreInput::Command(AppCommand::SubmitThreadPrompt(request)) => {
+                    self.send_mutation(KernelCommand::SubmitPrompt {
+                        thread_id: request.thread_id,
+                        prompt: request.prompt,
+                    })
+                }
+                CoreInput::Command(AppCommand::SteerTurn(request)) => {
+                    self.send_mutation(KernelCommand::SteerTurn {
+                        thread_id: request.thread_id,
+                        expected_turn_id: request.expected_turn_id,
+                        prompt: request.prompt,
+                    })
+                }
+                CoreInput::Command(AppCommand::SubmitApprovalDecision {
+                    request_identity,
+                    decision,
+                }) => self.send_mutation(KernelCommand::DecideApproval {
+                    approval_id: request_identity.approval_id,
+                    server_request_id: request_identity.server_request_id,
+                    decision: match decision {
+                        crate::domain::conversation::ConversationApprovalDecision::Accept => {
+                            ApprovalDecision::Accept
+                        }
+                        crate::domain::conversation::ConversationApprovalDecision::Decline => {
+                            ApprovalDecision::Decline
+                        }
+                    },
+                }),
+                // No local effect executor for operations without a Gateway mapping.
                 _ => Vec::new(),
             },
             NativeClientEvent::ParallelCommand(_)
@@ -173,5 +241,28 @@ impl NativeClientPort for GatewayKernelClientRuntime {
         _timeout: Duration,
     ) -> crate::application::service::parallel_mode::control_plane::ParallelModeControlPlaneBackgroundEvent{
         unreachable!("the Gateway kernel client has no parallel control plane")
+    }
+}
+
+impl GatewayKernelClientRuntime {
+    fn recover_thread_catalog(&mut self) -> Vec<AppEvent> {
+        let mut events = self.submit_gateway_write(Mutation::ListRecoveryThreads(
+            self.workspace_directory.clone(),
+        ));
+        events.push(AppEvent::SessionCatalogChanged(
+            self.snapshot.session_catalog.clone(),
+        ));
+        events
+    }
+    fn send_mutation(&mut self, command: KernelCommand) -> Vec<AppEvent> {
+        self.submit_gateway_write(Mutation::Kernel(command))
+    }
+
+    fn submit_gateway_write(&mut self, command: Mutation) -> Vec<AppEvent> {
+        let status = match (self.synchronized, &mut self.commands) {
+            (true, Some(commands)) => commands.submit(command),
+            (true, None) | (false, _) => "Gateway not synchronized; nothing was sent",
+        };
+        vec![AppEvent::GatewayCommandStatus(status.to_string())]
     }
 }

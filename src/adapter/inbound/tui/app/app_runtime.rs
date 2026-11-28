@@ -2241,6 +2241,23 @@ impl NativeTuiApp {
             }
             AppEvent::ThreadActivityChanged(activity) => {
                 self.conversation.thread_activity = activity;
+                if self.runtime.client_runtime.is_gateway_kernel_client() {
+                    let snapshot = self.runtime.client_runtime.snapshot().conversation_runtime;
+                    self.project_gateway_conversation_activity(snapshot);
+                }
+            }
+            AppEvent::GatewayCommandStatus(message) => {
+                self.show_gateway_kernel_client_refusal(message);
+            }
+            AppEvent::GatewayPromptAccepted { thread_id, prompt } => {
+                if matches!(
+                    &self.conversation.lifecycle.conversation_state,
+                    ConversationState::Ready(conversation)
+                        if conversation.thread_id == thread_id
+                            && conversation.composer.input_buffer.trim() == prompt
+                ) {
+                    self.clear_input_buffer();
+                }
             }
             AppEvent::PostTurnEvaluationStarted(state) => {
                 self.planning
@@ -2403,6 +2420,10 @@ impl NativeTuiApp {
             return;
         }
         if loaded_successfully {
+            if self.runtime.client_runtime.is_gateway_kernel_client() {
+                let snapshot = self.runtime.client_runtime.snapshot().conversation_runtime;
+                self.project_gateway_conversation_activity(snapshot);
+            }
             let workspace_directory = self.planning_workspace_directory();
             let resume_status_context = match &self.conversation.lifecycle.conversation_state {
                 ConversationState::Ready(conversation) => Some((
@@ -2644,6 +2665,10 @@ impl NativeTuiApp {
         &mut self,
         snapshot: crate::core::app::ConversationRuntimeSnapshot,
     ) {
+        if self.runtime.client_runtime.is_gateway_kernel_client() {
+            self.project_gateway_conversation_activity(snapshot);
+            return;
+        }
         if let ConversationState::Ready(conversation) =
             &mut self.conversation.lifecycle.conversation_state
         {
@@ -2868,6 +2893,10 @@ impl NativeTuiApp {
                     return;
                 };
                 self.dispatch_client_event(CoreInput::Command(command));
+                if self.runtime.client_runtime.is_gateway_kernel_client() {
+                    self.dispatch_auto_follow_overlay_ui(AutoFollowOverlayUiEvent::EditFinished);
+                    return;
+                }
                 if let ConversationState::Ready(conversation) =
                     &mut self.conversation.lifecycle.conversation_state
                 {
@@ -2895,6 +2924,9 @@ impl NativeTuiApp {
             reduce_auto_follow_overlay_ui(state, event);
     }
 }
+
+#[path = "app_runtime/gateway_activity.rs"]
+mod gateway_activity;
 
 pub(super) struct AppliedNativeParallelDispatch {
     pub(super) presentation_changed: bool,

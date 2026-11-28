@@ -919,13 +919,10 @@ fn gateway_kernel_client_locks_harness_screens_with_the_kernel_protocol_reason()
     ] {
         assert_eq!(capabilities.availability(command), missing, "{command:?}");
     }
-    assert_eq!(
-        capabilities.availability(InlineShellCommand::Turns),
-        InlineShellCommandAvailability::Locked(
-            InlineShellCommandAvailabilityReason::KernelClientReadsOnly
-        )
-    );
     for command in [
+        InlineShellCommand::NewDraft,
+        InlineShellCommand::Turns,
+        InlineShellCommand::Stop,
         InlineShellCommand::Sessions,
         InlineShellCommand::Diagnostics,
         InlineShellCommand::Help,

@@ -1,8 +1,4 @@
-//! TUI 가 Gateway 의 커널에 붙는 클라이언트이다 (plan 18 K6-2 의 첫 조각, K6-2a).
-//!
-//! 다른 프로세스(Gateway)의 커널이 저장소를 쥐고 있으면 TUI 는 잠금을 잡지 않고 이 클라이언트로 연다. 커널의
-//! 값(세션 목록, 일이 남은 thread, 자동 후속 설정)을 `akra/kernel/*` 로 읽고 그 이벤트를 따라간다. 이 조각은 읽기만
-//! 한다. 저장된 대화는 Gateway의 app-server 중계로 읽는다. 프롬프트와 변경 명령은 아직 잠근다.
+//! TUI client for the Gateway-owned repository kernel (plan 18 K6-2).
 
 use crate::adapter::inbound::kernel_protocol::{AutoFollowSettings, SessionsState, ThreadActivity};
 use crate::adapter::outbound::gateway_kernel_client::KernelValueUpdate as KernelClientUpdate;
@@ -16,8 +12,10 @@ use serde_json::Value;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 mod client_port;
+mod commands;
 mod construction;
 mod conversation;
+mod mutation_projection;
 mod projection;
 use conversation::GatewayConversationClient;
 use projection::{session_catalog, thread_activity};
@@ -30,6 +28,10 @@ pub(crate) mod tests;
 
 pub(crate) enum ClientUpdate {
     Kernel(KernelClientUpdate),
+    MutationFinished {
+        outcome: commands::MutationOutcome,
+        accepted_prompt: Option<(String, String)>,
+    },
     ConversationLoaded {
         correlation: ConversationLoadCorrelation,
         result: Result<ConversationReadySnapshot, String>,
@@ -53,6 +55,7 @@ pub(crate) struct GatewayKernelClientRuntime {
     refresh: Option<tokio::sync::mpsc::Sender<()>>,
     updates: Receiver<ClientUpdate>,
     conversation: GatewayConversationClient,
+    commands: Option<commands::GatewayCommands>,
 }
 
 impl GatewayKernelClientRuntime {
@@ -67,6 +70,10 @@ impl GatewayKernelClientRuntime {
     fn apply(&mut self, update: ClientUpdate) -> Vec<AppEvent> {
         match update {
             ClientUpdate::Kernel(update) => self.apply_kernel(update),
+            ClientUpdate::MutationFinished {
+                outcome,
+                accepted_prompt,
+            } => self.apply_mutation(outcome, accepted_prompt),
             ClientUpdate::ConversationLoaded {
                 correlation,
                 result,
@@ -76,7 +83,12 @@ impl GatewayKernelClientRuntime {
                 }
                 self.snapshot.revision = self.snapshot.revision.saturating_add(1);
                 self.snapshot.conversation = match result {
-                    Ok(ready) => ConversationSnapshot::Ready(Box::new(ready)),
+                    Ok(ready) => {
+                        if let Some(commands) = &mut self.commands {
+                            commands.confirm_thread_selection();
+                        }
+                        ConversationSnapshot::Ready(Box::new(ready))
+                    }
                     Err(message) => ConversationSnapshot::Failed { message },
                 };
                 vec![AppEvent::ConversationChanged {
@@ -146,6 +158,14 @@ impl GatewayKernelClientRuntime {
 
     fn apply_value(&mut self, value: Value) -> Vec<AppEvent> {
         match value.get("type").and_then(Value::as_str) {
+            Some("sessions")
+                if self
+                    .commands
+                    .as_ref()
+                    .is_some_and(|commands| commands.needs_thread_selection()) =>
+            {
+                Vec::new()
+            }
             Some("sessions") => match serde_json::from_value::<SessionsState>(value) {
                 Ok(state) => {
                     self.snapshot.session_catalog = session_catalog(state);

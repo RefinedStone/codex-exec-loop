@@ -254,9 +254,7 @@ impl NativeTuiApp {
     }
 
     pub(super) fn start_session_rename_edit(&mut self) {
-        if self.shell.chrome.shell_overlay != ShellOverlay::Sessions
-            || self.refuse_in_gateway_kernel_client()
-        {
+        if self.shell.chrome.shell_overlay != ShellOverlay::Sessions {
             return;
         }
         let Some(session) = self.current_session() else {
@@ -340,6 +338,10 @@ impl NativeTuiApp {
             return;
         };
 
+        if self.runtime.client_runtime.is_gateway_kernel_client() {
+            self.dispatch_client_event(CoreInput::Command(AppCommand::RenameSession(request)));
+            return;
+        }
         let outcome = self.reduce_core_client_event(CoreInput::Command(AppCommand::RenameSession(
             request.clone(),
         )));

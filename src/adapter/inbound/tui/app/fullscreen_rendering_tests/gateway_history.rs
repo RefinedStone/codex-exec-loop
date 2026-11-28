@@ -98,7 +98,7 @@ fn gateway_kernel_client_draws_kernel_sessions_and_refuses_locked_screens_with_t
     let refused = render(&mut app, 100, 24);
     println!("--- prompt in the Gateway kernel client ---\n{refused}");
     assert!(
-        refused.contains("read-only Gateway kernel client"),
+        refused.contains("Select a session and send text only"),
         "{refused}"
     );
 
