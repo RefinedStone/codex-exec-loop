@@ -23,8 +23,11 @@ use crate::adapter::outbound::db::{
 };
 use crate::adapter::outbound::filesystem::{
     FilesystemParallelAgentProfileRepositoryAdapter, FilesystemPlanningWorkspaceAdapter,
-    FilesystemPrValidationRolloutEvidenceAdapter, RepositoryKernelLock,
-    RepositoryKernelLockAdapter, RepositoryKernelLockHeld,
+    FilesystemPrValidationRolloutEvidenceAdapter,
+};
+#[cfg(test)]
+use crate::adapter::outbound::filesystem::{
+    RepositoryKernelLock, RepositoryKernelLockAdapter, RepositoryKernelLockHeld,
 };
 use crate::adapter::outbound::git::history::GitHistoryAdapter;
 use crate::adapter::outbound::git::parallel_mode_runtime::GitParallelModeRuntimeAdapter;
@@ -827,6 +830,7 @@ pub(crate) fn delegation_store(
 /// `workspace_dir` 가 속한 저장소의 커널 잠금을 잡는다 (plan 18 K3-4). 결정 고리를 돌리는 프로세스는 런타임을
 /// 조립하기 전에 이것을 잡는다. 다른 프로세스가 쥐고 있으면 `RepositoryKernelLockHeld` 오류이다.
 /// 잠금 파일은 planning 기준 데이터와 같은 사용자 전용 runtime 디렉터리에 둔다.
+#[cfg(test)]
 pub(crate) fn acquire_repository_kernel_lock(workspace_dir: &str) -> Result<RepositoryKernelLock> {
     let location =
         SqlitePlanningAuthorityAdapter::prepare_private_runtime_directory(workspace_dir)?;
@@ -897,53 +901,13 @@ pub(crate) fn issue_automation_restart_target(
     }))
 }
 
-/// TUI 가 시작 폴더의 저장소 잠금을 잡는다 (plan 18 K3-4). 다른 프로세스가 그 저장소의 커널을 돌리면 오류를
-/// 돌려주고, TUI 는 화면을 열기 전에 그 이유를 보이고 끝난다.
-pub(crate) fn acquire_native_tui_kernel_lock() -> Result<Option<RepositoryKernelLock>> {
-    acquire_native_tui_kernel_lock_for_workspace(&native_tui_workspace_dir())
-}
-
-/// 잠금을 다른 프로세스가 쥐었을 때, 그 커널이 Gateway 의 것이면 TUI 는 그 커널에 붙는다 (plan 18 K6-2).
-/// 잠금을 잡지 않는다. 다른 TUI 가 쥐었거나 Gateway 가 이 저장소의 커널을 돌리지 않으면 `None` 이다.
-pub(crate) fn attach_native_tui_to_gateway_kernel(
-    lock_error: &anyhow::Error,
-) -> Option<Box<dyn crate::core::native_client_port::NativeClientPort>> {
-    use super::gateway_kernel_client_runtime::{
-        GatewayKernelClientRuntime, TUI_KERNEL_CLIENT_NAME,
-    };
-    use crate::adapter::outbound::filesystem::kernel_lock::{
-        RepositoryKernelLockHeld, RepositoryKernelOwner,
-    };
-    use crate::application::port::outbound::kernel_gateway_port::{
-        KernelGatewayPort, KernelGatewayReply,
-    };
-
-    let held = lock_error.downcast_ref::<RepositoryKernelLockHeld>()?;
-    if held.owner == Some(RepositoryKernelOwner::Tui) {
-        return None;
-    }
-    let workspace = native_tui_workspace_dir();
-    let probe = crate::adapter::outbound::gateway_kernel_client::GatewayKernelClientAdapter::new(
-        workspace.clone(),
-        TUI_KERNEL_CLIENT_NAME.to_string(),
-    )
-    .with_request_timeout(std::time::Duration::from_secs(10))
-    .request(
-        "akra/kernel/query",
-        serde_json::json!({"query": {"type": "sessions"}}),
-        false,
-    );
-    match probe {
-        Ok(KernelGatewayReply::Answer(_)) => {
-            Some(Box::new(GatewayKernelClientRuntime::attach(workspace)))
-        }
-        _ => None,
-    }
-}
+mod tui_kernel_client;
+pub(crate) use tui_kernel_client::build_tui_gateway_client;
 
 /// 잠금 파일 오류(경합이 아닌 오류)는 이전 개입의 planning fence를 복구한 경우에만 우회한다.
 /// 복구 실패는 runtime 시작을 막고, 복구 성공 시 경고를 남긴 뒤 잠금 없이 시작한다.
-pub(crate) fn acquire_native_tui_kernel_lock_for_workspace(
+#[cfg(test)]
+fn acquire_native_tui_kernel_lock_for_workspace(
     workspace_dir: &str,
 ) -> Result<Option<RepositoryKernelLock>> {
     match acquire_repository_kernel_lock(workspace_dir) {
@@ -1018,13 +982,15 @@ fn recover_issue_interventions_in_primary_checkout(workspace_dir: &str) -> Resul
     Ok(workspace)
 }
 
+#[cfg(test)]
 fn native_tui_workspace_dir() -> String {
     std::env::current_dir()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|_| ".".to_string())
 }
 
-pub(crate) fn build_native_tui_application(
+#[cfg(test)]
+fn build_native_tui_application(
     kernel_lock: Option<&RepositoryKernelLock>,
 ) -> NativeTuiApplicationComposition {
     let workspace = native_tui_workspace_dir();
@@ -1094,6 +1060,7 @@ pub(crate) fn build_native_tui_application(
 }
 
 /// Only the OS owner of this exact repository may restore an open admission graph.
+#[cfg(test)]
 pub(in crate::composition) fn restore_native_tui_issue_bindings(
     kernel_lock: Option<&RepositoryKernelLock>,
     target: &RepositoryKernelTarget,
@@ -2628,32 +2595,5 @@ mod tests {
 
         assert!(lock.is_none());
         let _ = std::fs::remove_dir(&lock_path);
-    }
-
-    /// plan 18 K6-2: TUI 는 Gateway 가 이 저장소의 커널을 돌릴 때만 그 커널에 붙는다. 나머지는 지금처럼 오류이다.
-    #[test]
-    fn the_tui_attaches_only_to_a_kernel_that_a_reachable_gateway_runs() {
-        use crate::adapter::outbound::filesystem::kernel_lock::{
-            RepositoryKernelLockHeld, RepositoryKernelOwner,
-        };
-        let held = |owner| {
-            anyhow::Error::new(RepositoryKernelLockHeld {
-                repository_root: "/repo".to_string(),
-                lock_path: std::path::PathBuf::from("/repo/kernel.lock"),
-                holder: None,
-                owner,
-            })
-        };
-        assert!(attach_native_tui_to_gateway_kernel(&anyhow::anyhow!("disk failed")).is_none());
-        // Another TUI owns the kernel: the TUI does not ask a Gateway.
-        assert!(
-            attach_native_tui_to_gateway_kernel(&held(Some(RepositoryKernelOwner::Tui))).is_none()
-        );
-        // The unit-test build has no Gateway, so a Gateway-owned lock keeps the error.
-        assert!(
-            attach_native_tui_to_gateway_kernel(&held(Some(RepositoryKernelOwner::Gateway)))
-                .is_none()
-        );
-        assert!(attach_native_tui_to_gateway_kernel(&held(None)).is_none());
     }
 }

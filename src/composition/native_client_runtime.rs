@@ -68,7 +68,6 @@ use crate::core::native_client_port::{
 #[cfg(test)]
 use crate::core::runtime::CoreInputSender;
 use crate::core::runtime::{CoreEffectExecutor, CoreInputWaker, CoreRuntime, core_input_channel};
-use crate::domain::conversation::ConversationRuntimeControlTruth;
 #[cfg(test)]
 use crate::domain::github_review::GithubPullRequestTarget;
 use crate::domain::issue_automation::collection::{
@@ -238,17 +237,12 @@ struct NativeTaskVerificationAttachment {
 pub(crate) struct NativeTuiApplicationComposition {
     core_runtime: NativeCoreRuntime,
     parallel_control_plane: ParallelModeControlPlaneComposition,
-    turn_control_truth: ConversationRuntimeControlTruth,
-    clipboard_image_probe_trigger: Arc<dyn ClipboardImageProbeTrigger>,
-    github_review_polling: Option<crate::core::app::GithubReviewPollingSettings>,
     binding_pause_attachment: Option<NativeBindingPauseAttachment>,
     task_verification_attachment: Option<NativeTaskVerificationAttachment>,
 }
 
 pub(crate) struct BoundNativeTuiApplication {
     client_runtime: NativeClientRuntime,
-    turn_control_truth: ConversationRuntimeControlTruth,
-    clipboard_image_probe_trigger: Arc<dyn ClipboardImageProbeTrigger>,
 }
 
 #[derive(Clone)]
@@ -535,9 +529,8 @@ impl NativeTuiApplicationComposition {
         conversation_service: ConversationService,
         parallel_control_plane: ParallelModeControlPlaneComposition,
         thread_turn_options_port: Arc<dyn ConversationThreadTurnOptionsPort>,
-        clipboard_image_probe_trigger: Arc<dyn ClipboardImageProbeTrigger>,
+        _clipboard_image_probe_trigger: Arc<dyn ClipboardImageProbeTrigger>,
     ) -> Self {
-        let turn_control_truth = conversation_service.runtime_control_truth();
         let planning_feature = parallel_control_plane.planning().clone();
         let parallel_mode_turn_service = parallel_control_plane.parallel_mode_turn_service();
         let core_runtime = NativeCoreRuntime::new(
@@ -551,24 +544,13 @@ impl NativeTuiApplicationComposition {
         Self {
             core_runtime,
             parallel_control_plane,
-            turn_control_truth,
-            clipboard_image_probe_trigger,
-            github_review_polling: None,
             binding_pause_attachment: None,
             task_verification_attachment: None,
         }
     }
 
-    /// 프로세스 설정에서 읽은 GitHub 리뷰 폴링 값을 호스트에 넘긴다 (plan 18 K2-6).
-    pub(crate) fn with_github_review_polling(
-        mut self,
-        settings: Option<crate::core::app::GithubReviewPollingSettings>,
-    ) -> Self {
-        self.github_review_polling = settings;
-        self
-    }
-
     /// TUI keeps its existing runtime and does not start a new issue observer.
+    #[cfg(test)]
     pub(in crate::composition) fn with_issue_binding_pause(
         mut self,
         service: Arc<crate::application::service::issue_binding_pause::IssueBindingPauseService>,
@@ -586,6 +568,7 @@ impl NativeTuiApplicationComposition {
     }
 
     /// 병렬 완료와 같은 handle 및 workspace의 증거 서비스를 받아 완료 outbox도 전달한다.
+    #[cfg(test)]
     pub(in crate::composition) fn with_task_verification(
         mut self,
         handle: TaskVerificationHandle,
@@ -603,7 +586,6 @@ impl NativeTuiApplicationComposition {
     pub(crate) fn bind_client_runtime(self) -> BoundNativeTuiApplication {
         let mut client_runtime =
             NativeClientRuntime::from_parts(self.core_runtime, self.parallel_control_plane);
-        client_runtime.github_review_polling = self.github_review_polling;
         if let Some(binding) = self.binding_pause_attachment {
             client_runtime.attach_kernel_event_log(binding.log, &binding.workspace);
             client_runtime
@@ -614,32 +596,12 @@ impl NativeTuiApplicationComposition {
             client_runtime.attach_owned_task_verification(&verification.handle, verification.build);
             client_runtime.attach_task_evidence(verification.evidence);
         }
-        BoundNativeTuiApplication {
-            client_runtime,
-            turn_control_truth: self.turn_control_truth,
-            clipboard_image_probe_trigger: self.clipboard_image_probe_trigger,
-        }
+        BoundNativeTuiApplication { client_runtime }
     }
 
     /// 화면 없는 커널이 쓰는 런타임이다 (plan 18 K3-4). 커널 호스트가 이것을 자기 스레드로 가져간다.
     pub(crate) fn into_headless_client_runtime(self) -> NativeClientRuntime {
         self.bind_client_runtime().client_runtime
-    }
-}
-
-impl BoundNativeTuiApplication {
-    pub(crate) fn into_parts(
-        self,
-    ) -> (
-        Box<dyn NativeClientPort>,
-        ConversationRuntimeControlTruth,
-        Arc<dyn ClipboardImageProbeTrigger>,
-    ) {
-        (
-            Box::new(self.client_runtime),
-            self.turn_control_truth,
-            self.clipboard_image_probe_trigger,
-        )
     }
 }
 

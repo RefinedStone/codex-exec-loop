@@ -13,25 +13,25 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[test]
-fn native_tui_and_app_server_exit_after_their_controlling_pty_disconnects() {
-    let fixture = IsolatedTuiFixture::new();
+fn native_tui_fails_closed_if_gateway_cannot_start() {
+    let fixture = IsolatedTuiFixture::new().with_short_akra_home();
     let (mut master, slave) = open_pty(100, 30).expect("PTY fixture should open");
     set_nonblocking(&master).expect("PTY master should become nonblocking");
 
-    let mut child = spawn_native_tui(&fixture, &slave);
+    let mut child = spawn_native_tui(&fixture, &slave, &fixture.root.join("missing-gateway"));
     drop(slave);
-
-    let app_server_pids = wait_for_terminal_startup(&fixture, &mut child, &mut master);
-    drop(master);
 
     let (status, stderr) = child
         .wait_for_exit(DISCONNECT_TIMEOUT)
-        .expect("native TUI should exit after its controlling PTY disconnects");
+        .expect("native TUI should fail before entering fullscreen");
     assert!(
-        status.success(),
-        "native TUI should shut down cleanly after PTY disconnect: {status}; stderr: {stderr}"
+        !status.success() && stderr.contains("start the Akra Gateway"),
+        "Gateway startup failure must not fall back to a local writer: {status}; stderr: {stderr}"
     );
-    fixture.wait_for_app_servers_to_exit(&app_server_pids, DISCONNECT_TIMEOUT);
+    let mut output = Vec::new();
+    read_terminal_output(&mut master, &mut output);
+    assert!(!output.windows(8).any(|bytes| bytes == b"\x1b[?1049h"));
+    assert!(fixture.app_server_pids().is_empty());
 }
 
 /// plan 18 K6-1: with a Gateway running, the TUI opens its conversation through the Gateway relay. It does
@@ -39,15 +39,17 @@ fn native_tui_and_app_server_exit_after_their_controlling_pty_disconnects() {
 #[test]
 fn native_tui_opens_its_conversation_through_a_running_gateway() {
     let fixture = IsolatedTuiFixture::new().with_short_akra_home();
-    let gateway = FakeGateway::start(&fixture.akra_home.join("run"));
+    let gateway = FakeGateway::start(&fixture.akra_home.join("run"), &fixture.workspace);
     let (mut master, slave) = open_pty(100, 30).expect("PTY fixture should open");
     set_nonblocking(&master).expect("PTY master should become nonblocking");
 
-    let mut child = spawn_native_tui(&fixture, &slave);
+    let mut child = spawn_native_tui(&fixture, &slave, &fixture.root.join("missing-gateway"));
     drop(slave);
 
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     let mut output = Vec::new();
+    let mut opened_sessions = false;
+    let mut opened_history = false;
     loop {
         read_terminal_output(&mut master, &mut output);
         assert!(
@@ -58,12 +60,16 @@ fn native_tui_opens_its_conversation_through_a_running_gateway() {
         let terminal_started = output
             .windows(b"Akra".len())
             .any(|window| window == b"Akra");
-        if terminal_started
-            && gateway
-                .methods()
-                .iter()
-                .any(|method| method == "account/read")
-        {
+        let rendered = String::from_utf8_lossy(&output);
+        if terminal_started && !opened_sessions && gateway.methods().len() >= 5 {
+            master.write_all(b":sessions\r").expect("open session list");
+            opened_sessions = true;
+        }
+        if opened_sessions && !opened_history && rendered.contains("Gateway PTY session") {
+            master.write_all(b"\r").expect("open the selected session");
+            opened_history = true;
+        }
+        if rendered.contains("gateway-pty-history") {
             break;
         }
         assert!(
@@ -79,9 +85,11 @@ fn native_tui_opens_its_conversation_through_a_running_gateway() {
         fixture.app_server_pids().is_empty(),
         "the TUI started its own app-server although the Gateway runs"
     );
-    assert_eq!(
-        gateway.methods().first().map(String::as_str),
-        Some("initialize")
+    assert!(
+        gateway
+            .methods()
+            .iter()
+            .any(|method| method == "thread/read")
     );
 
     drop(master);
@@ -114,7 +122,9 @@ fn read_terminal_output(master: &mut File, output: &mut Vec<u8>) {
                     .expect("PTY should accept a cursor-position response");
             }
         }
-        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+        Err(error)
+            if error.kind() == io::ErrorKind::WouldBlock
+                || error.raw_os_error() == Some(libc::EIO) => {}
         Err(error) => panic!("PTY startup output should remain readable: {error}"),
     }
 }
@@ -139,9 +149,10 @@ struct FakeGatewayState {
 }
 
 impl FakeGateway {
-    fn start(run_dir: &Path) -> Self {
+    fn start(run_dir: &Path, workspace: &Path) -> Self {
         create_private_directory(run_dir);
         let socket = run_dir.join("gateway.sock");
+        let workspace = workspace.to_string_lossy().into_owned();
         let state = std::sync::Arc::new(std::sync::Mutex::new(FakeGatewayState::default()));
         let served = state.clone();
         let (ready, bound) = std::sync::mpsc::channel();
@@ -158,7 +169,11 @@ impl FakeGateway {
                     let Ok((stream, _)) = listener.accept().await else {
                         return;
                     };
-                    tokio::spawn(serve_gateway_session(stream, served.clone()));
+                    tokio::spawn(serve_gateway_session(
+                        stream,
+                        served.clone(),
+                        workspace.clone(),
+                    ));
                 }
             });
         });
@@ -178,6 +193,7 @@ impl FakeGateway {
 async fn serve_gateway_session(
     stream: tokio::net::UnixStream,
     state: std::sync::Arc<std::sync::Mutex<FakeGatewayState>>,
+    workspace: String,
 ) {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
@@ -198,6 +214,30 @@ async fn serve_gateway_session(
             continue;
         }
         let reply = match method.as_str() {
+            "akra/kernel/attach" => {
+                serde_json::json!({"id":request["id"],"result":{"attached":true}})
+            }
+            "akra/kernel/command" => {
+                serde_json::json!({"id":request["id"],"result":{"processed":true}})
+            }
+            "akra/kernel/query" => {
+                let result = match request["params"]["query"]["type"].as_str() {
+                    Some("sessions") => {
+                        serde_json::json!({"type":"sessions","status":"ready","sessions":[
+                            {"thread_id":"gateway-pty","title":"Gateway PTY session","workspace":workspace,
+                             "updated_at_epoch":1700000000}
+                        ]})
+                    }
+                    Some("auto_follow") => {
+                        serde_json::json!({"type":"auto_follow","max_turns":5,"paused":false})
+                    }
+                    Some("thread_activity") => {
+                        serde_json::json!({"type":"thread_activity","threads":[]})
+                    }
+                    _ => panic!("unexpected PTY kernel query: {request}"),
+                };
+                serde_json::json!({"id":request["id"],"result":result})
+            }
             "initialize" => serde_json::json!({"id": request["id"], "result": {
                 "userAgent": "codex-app-server/gateway-relay-fixture",
                 "platformFamily": "unix",
@@ -210,6 +250,15 @@ async fn serve_gateway_session(
             "thread/list" => {
                 serde_json::json!({"id": request["id"], "result": {"data": [], "nextCursor": null}})
             }
+            "thread/read" => serde_json::json!({"id":request["id"],"result":{"thread":{
+                "id":"gateway-pty","name":"Gateway PTY session","cwd":workspace,
+                "preview":"","source":"cli","modelProvider":"openai","updatedAt":1700000000,
+                "path":null,"status":{"type":"idle"},"gitInfo":null,"turns":[{
+                    "id":"saved-turn","status":"completed","items":[
+                        {"type":"agentMessage","id":"saved-item","text":"gateway-pty-history"}
+                    ]
+                }]
+            }}}),
             other => serde_json::json!({"id": request["id"], "error": {
                 "message": format!("unexpected fixture method {other}"),
             }}),
@@ -283,7 +332,7 @@ fn set_nonblocking(file: &File) -> io::Result<()> {
     Ok(())
 }
 
-fn spawn_native_tui(fixture: &IsolatedTuiFixture, slave: &File) -> ChildGuard {
+fn spawn_native_tui(fixture: &IsolatedTuiFixture, slave: &File, gateway: &Path) -> ChildGuard {
     let stdin = slave.try_clone().expect("PTY stdin should clone");
     let stdout = slave.try_clone().expect("PTY stdout should clone");
     let mut command = Command::new(env!("CARGO_BIN_EXE_akra-ade"));
@@ -300,6 +349,7 @@ fn spawn_native_tui(fixture: &IsolatedTuiFixture, slave: &File) -> ChildGuard {
         .env("LC_ALL", "C.UTF-8")
         .env("TERM", "xterm-256color")
         .env("AKRA_HOME", &fixture.akra_home)
+        .env("AKRA_GATEWAY_BIN", gateway)
         .env("CODEX_HOME", &fixture.codex_home)
         .env("AKRA_APP_SERVER_PROMPT_LOG", "0")
         .env("AKRA_SHOW_STARTUP_VISUAL", "0")
@@ -322,71 +372,6 @@ fn spawn_native_tui(fixture: &IsolatedTuiFixture, slave: &File) -> ChildGuard {
     }
 
     ChildGuard::new(command.spawn().expect("native TUI fixture should spawn"))
-}
-
-fn wait_for_terminal_startup(
-    fixture: &IsolatedTuiFixture,
-    child: &mut ChildGuard,
-    master: &mut File,
-) -> Vec<libc::pid_t> {
-    let deadline = Instant::now() + STARTUP_TIMEOUT;
-    let mut output = Vec::new();
-    let mut cursor_queries_answered = 0;
-    let mut buffer = [0_u8; 4096];
-    loop {
-        match master.read(&mut buffer) {
-            Ok(0) => {}
-            Ok(read) => {
-                output.extend_from_slice(&buffer[..read]);
-                let cursor_queries_seen = output
-                    .windows(b"\x1b[6n".len())
-                    .filter(|window| *window == b"\x1b[6n")
-                    .count();
-                while cursor_queries_answered < cursor_queries_seen {
-                    master
-                        .write_all(b"\x1b[1;1R")
-                        .expect("PTY should accept a cursor-position response");
-                    cursor_queries_answered += 1;
-                }
-            }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-            Err(error) => panic!("PTY startup output should remain readable: {error}"),
-        }
-
-        assert!(
-            child.try_wait().is_none(),
-            "native TUI exited before terminal startup; output: {}",
-            String::from_utf8_lossy(&output)
-        );
-        let terminal_started = output
-            .windows(b"Akra".len())
-            .any(|window| window == b"Akra");
-        let app_server_pids = fixture.live_initialized_app_server_pids();
-        if terminal_started && !app_server_pids.is_empty() {
-            // Visible Akra copy proves that the first terminal transaction completed, while the
-            // live initialized child proves startup reached the production app-server boundary.
-            // Give the frontend enough time to enter its blocking event poll before disconnecting.
-            thread::sleep(Duration::from_millis(500));
-            assert!(
-                child.try_wait().is_none(),
-                "native TUI exited before PTY disconnect; output: {}",
-                String::from_utf8_lossy(&output)
-            );
-            let app_server_pids = fixture.live_initialized_app_server_pids();
-            assert!(
-                !app_server_pids.is_empty(),
-                "initialized app-server exited before PTY disconnect"
-            );
-            return app_server_pids;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "native TUI and app-server did not finish startup before timeout; methods: {:?}; output: {}",
-            fixture.logged_app_server_methods(),
-            String::from_utf8_lossy(&output)
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
 }
 
 struct ChildGuard {
@@ -544,44 +529,6 @@ impl IsolatedTuiFixture {
             .lines()
             .filter_map(|line| line.parse().ok())
             .collect()
-    }
-
-    fn live_initialized_app_server_pids(&self) -> Vec<libc::pid_t> {
-        if !self
-            .logged_app_server_methods()
-            .iter()
-            .any(|method| method == "account/read")
-        {
-            return Vec::new();
-        }
-        self.app_server_pids()
-            .into_iter()
-            .filter(|pid| process_is_alive(*pid))
-            .collect()
-    }
-
-    fn wait_for_app_servers_to_exit(&self, expected: &[libc::pid_t], timeout: Duration) {
-        let deadline = Instant::now() + timeout;
-        loop {
-            let observed = self.app_server_pids();
-            let live = observed
-                .iter()
-                .copied()
-                .filter(|pid| process_is_alive(*pid))
-                .collect::<Vec<_>>();
-            if live.is_empty() {
-                assert!(
-                    expected.iter().all(|pid| observed.contains(pid)),
-                    "app-server PID log lost a child observed before disconnect"
-                );
-                return;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "app-server children remained alive after native TUI exit: {live:?}"
-            );
-            thread::sleep(Duration::from_millis(10));
-        }
     }
 }
 

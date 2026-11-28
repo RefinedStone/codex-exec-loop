@@ -1105,19 +1105,17 @@ Akra Desktop (`desktop/`) runs from source as a development build; it has no pac
 - The kernel uses the Gateway upstream app-server through its own `codex app-server proxy`
   connection, so a client can `thread/resume` a thread that the kernel runs and receive its turn
   notifications live.
-- A TUI that starts while a Gateway runs opens its conversations through the Gateway relay instead of
-  its own app-server (plan 18 K6-1). The TUI still holds the repository kernel. The Gateway then sees the
-  TUI's turns like a Desktop client's. When the relay cannot open, the app-server call fails with
-  `the Akra Gateway relay did not open; start the Gateway (Akra Desktop or akra-gateway) and retry`;
-  the next call reconnects and shows `reconnected to the Akra Gateway after the previous relay closed`.
-  A TUI that starts without a Gateway runs its own app-server as before.
-- When the Gateway already runs the kernel of the repository, a TUI that starts there attaches to that
-  kernel instead of exiting (plan 18 K6-2a). It does not take the repository kernel lock. It reads the
-  session list, thread activity, and auto-follow settings through `akra/kernel/*` and follows their
-  events. This first slice reads only: screens whose queries or commands are not in the kernel protocol
+- The TUI attaches to the repository's kernel through the local Gateway (plan 18 K6-2). If the
+  endpoint is absent, the TUI starts the Gateway daemon (a bundled CLI can start it as a separate
+  process without a companion binary). The daemon stays running after the TUI exits.
+  If startup fails, the TUI reports the error instead of starting a local kernel or app-server.
+  Only the Gateway kernel takes the repository writer lock.
+- The TUI reads the session list, thread activity, and auto-follow settings through `akra/kernel/*`.
+  It opens saved conversations through the Gateway's app-server relay. This client reads only:
+  screens whose queries or commands are not in the kernel protocol
   (`:work`, `:parallel`, `:peek`, `:reviews`, `:queue`, `:directions`, `:doctor`, `:planning`, `:reset`)
   are LOCKED with `not in the kernel protocol yet; use Akra Desktop or the admin web`, and prompts,
-  opening or renaming a session, `:turns`, `:stop`, and `:new` show `read-only Gateway kernel client`.
+  renaming a session, `:turns`, `:stop`, and `:new` show `read-only Gateway kernel client`.
   On attach and an explicit catalog request, the client sends the existing read-only `load_sessions`
   command and queries the values; this is ensure-loaded, not a forced provider refresh of a ready catalog.
   Connection/handshake and initial/sync requests have bounded deadlines, unlike healthy idle listening.
@@ -1127,7 +1125,7 @@ Akra Desktop (`desktop/`) runs from source as a development build; it has no pac
   Child processes are contained (Windows job objects) and end with the Gateway.
 - `AKRA_GATEWAY_RECORD=1` records each session's text frames as JSONL under the user-private
   `$AKRA_HOME/recordings/`. Recordings contain real conversations and must not be committed.
-- The TUI, Admin, and Telegram paths keep their own stdio app-server (plan P-08).
+- Admin and Telegram keep their own stdio app-server (plan P-08).
 
 ## MCP Hub
 

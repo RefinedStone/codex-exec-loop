@@ -68,7 +68,20 @@ pub(crate) mod trusted_executable;
 pub fn run() -> anyhow::Result<i32> {
     // TUI 의 app-server 연결이 띄우는 relay 자식이다 (plan 18 K6-1). 설정을 읽지 않고 바이트만 나른다.
     let mut args = std::env::args_os().skip(1);
-    if args.next().as_deref()
+    let first = args.next();
+    if first.as_deref()
+        == Some(std::ffi::OsStr::new(
+            adapter::inbound::gateway::EMBEDDED_GATEWAY_COMMAND,
+        ))
+        && args.next().is_none()
+    {
+        configuration::reject_removed_environment_variables()?;
+        let _diagnostics_guards = diagnostics::init_from_env();
+        tokio::runtime::Runtime::new()?
+            .block_on(adapter::inbound::gateway::run_with_args(Vec::new()))?;
+        return Ok(0);
+    }
+    if first.as_deref()
         == Some(std::ffi::OsStr::new(
             adapter::outbound::app_server::gateway_relay::GATEWAY_RELAY_COMMAND,
         ))

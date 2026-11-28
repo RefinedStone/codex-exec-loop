@@ -501,64 +501,8 @@ fn outbound_adapters_implement_outbound_ports_without_service_dependencies() {
     });
 }
 
-#[test]
-fn vault_restore_contract_stays_out_of_general_kernel_and_gateway_surfaces() {
-    // 복원 평문과 키의 타입은 일반 Kernel 이벤트, 프로토콜, Gateway, Issue Core 일반 계약에 나올 수 없다 (#2415).
-    assert_no_forbidden_references_in_paths(
-        "general Kernel events, Gateway responses, and Issue Core contracts must not reach the Vault restore contract",
-        &[
-            "src/domain/kernel_event.rs",
-            "src/domain/kernel_spec.rs",
-            "crates/issue-core/src/issue_work.rs",
-            "src/application/port/outbound/issue_core_port.rs",
-            "src/application/port/outbound/kernel_event_log_port.rs",
-            "src/application/port/outbound/kernel_gateway_port.rs",
-            "src/application/port/inbound/kernel_command_port.rs",
-            "src/composition/kernel_event_recorder.rs",
-            "src/adapter/inbound/kernel_protocol",
-            "src/adapter/inbound/gateway",
-            "src/adapter/outbound/gateway_kernel_client.rs",
-        ],
-        &[
-            "crate::application::port::outbound::evidence_vault_port",
-            "evidence_vault_port",
-            "VaultPlaintext",
-            "VaultKey",
-            "VaultRestore",
-            "VaultUserConfirmation",
-            "evidence_vault_unlock",
-            "VaultUnlock",
-            "evidence_vault_restore",
-            "VaultReconnect",
-            "VaultRestorable",
-            "evidence_vault_backup",
-            "VaultBackup",
-            "VaultRecoveryKey",
-        ],
-    );
-}
-
-#[test]
-fn raw_issue_snapshot_stays_out_of_general_kernel_and_gateway_surfaces() {
-    // 원격 게시본의 원시 값은 신뢰된 처리 경로만 쓴다. 일반 표면은 공유본만 가진다 (#2420).
-    assert_no_forbidden_references_in_paths(
-        "general Kernel events, Gateway responses, and Issue Core contracts must not reach the raw issue snapshot contract",
-        &[
-            "src/domain/kernel_event.rs",
-            "src/domain/kernel_spec.rs",
-            "crates/issue-core/src/issue_work.rs",
-            "src/application/port/outbound/issue_core_port.rs",
-            "src/application/port/outbound/kernel_event_log_port.rs",
-            "src/application/port/outbound/kernel_gateway_port.rs",
-            "src/application/port/inbound/kernel_command_port.rs",
-            "src/composition/kernel_event_recorder.rs",
-            "src/adapter/inbound/kernel_protocol",
-            "src/adapter/inbound/gateway",
-            "src/adapter/outbound/gateway_kernel_client.rs",
-        ],
-        &["issue_snapshot_port", "IssueRawFields", "IssueSnapshot"],
-    );
-}
+#[path = "architecture_boundaries/gateway_surfaces.rs"]
+mod gateway_surfaces;
 
 #[test]
 fn issue_publish_goes_only_through_the_publish_intent_journal() {
@@ -11733,10 +11677,7 @@ fn repository_kernel_assembly_stays_free_of_transports() {
 }
 
 #[test]
-fn tui_startup_takes_the_repository_kernel_lock_before_it_builds_the_kernel() {
-    // plan 18 K3-4: the lock comes first. Building the kernel starts the PR validation scheduler,
-    // so a second TUI for the repository must stop before that. The exact owner also reaches
-    // issue admission; an unowned manual fallback cannot create an open issue automation graph.
+fn gateway_kernel_takes_the_repository_lock_and_recovers_before_building_the_runtime() {
     let compact_production_source = |source: &str| {
         production_lines(source)
             .into_iter()
@@ -11747,29 +11688,6 @@ fn tui_startup_takes_the_repository_kernel_lock_before_it_builds_the_kernel() {
             .collect::<String>()
             .replace(",)", ")")
     };
-    let shell_entrypoint = fs::read_to_string("src/adapter/inbound/tui/app/shell_entrypoint.rs")
-        .expect("native shell entrypoint should load");
-    let production_source =
-        compact_production_source(&top_level_function_source(&shell_entrypoint, "run"));
-    let lock = production_source
-        .find("letkernel_lock=matchproduction::acquire_native_tui_kernel_lock(){Ok(lock)=>lock,")
-        .expect("TUI startup must take the repository kernel lock first");
-    // plan 18 K6-2a: a held lock either attaches to the Gateway's kernel without building one, or
-    // stops with the lock error. No other branch reaches the kernel build.
-    assert!(
-        production_source.contains(
-            "Err(error)=>matchproduction::attach_native_tui_to_gateway_kernel(&error){Some(client)=>{"
-        ) && production_source.contains("None=>returnErr(error),"),
-        "a held lock must attach to the Gateway kernel or stop: {production_source}"
-    );
-    let build = production_source
-        .find("production::build_native_tui_application(kernel_lock.as_ref())")
-        .expect("TUI startup must pass its exact optional kernel owner to the native application");
-    assert!(
-        lock < build,
-        "TUI startup must take the kernel lock before it builds the kernel"
-    );
-
     let kernel = fs::read_to_string("src/composition/repository_kernel.rs")
         .expect("repository kernel source should load");
     let kernel = compact_production_source(&kernel);
@@ -12922,12 +12840,12 @@ fn production_tui_receives_only_opaque_runtime_capabilities() {
         shell_references
             .paths
             .iter()
-            .any(|path| path.ends_with("production::build_native_tui_application"))
+            .any(|path| path.ends_with("production::build_tui_gateway_client"))
             && shell_references
                 .paths
                 .iter()
-                .any(|path| path.ends_with("NativeTuiApp::new_with_github_review_polling")),
-        "production shell must receive one opaque native application composition"
+                .any(|path| path.ends_with("NativeTuiApp::new_gateway_kernel_client")),
+        "production shell must receive one opaque Gateway client"
     );
 
     let composition_source = fs::read_to_string("src/composition/native_client_runtime.rs")

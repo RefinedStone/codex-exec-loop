@@ -99,6 +99,7 @@ impl RepositoryKernelLockAdapter {
     /// `location` 저장소의 커널 잠금을 잡는다. `location.runtime_dir` 은 이미 준비된 사용자 전용 디렉터리여야
     /// 한다. composition 이 planning 기준 데이터의 위치로 준비해서 넘긴다. 다른 프로세스가 쥐고 있으면
     /// `RepositoryKernelLockHeld` 오류를 돌려준다.
+    #[cfg(test)]
     pub(crate) fn acquire(
         location: PlanningAuthorityLocation,
         workspace_dir: &str,
