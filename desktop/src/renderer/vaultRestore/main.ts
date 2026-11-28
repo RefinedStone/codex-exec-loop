@@ -94,7 +94,7 @@ function render(state: VaultRestoreViewState, viewGeneration = -1, backupAvailab
     nodes.push(until);
   }
   if (state.phase === "review") nodes.push(...reviewForm(state.review, viewGeneration));
-  if (state.phase === "locked" && backupAvailable) nodes.push(archivePreview(bridge, viewGeneration));
+  if ((state.phase === "locked" || state.phase === "held") && backupAvailable) nodes.push(archivePreview(bridge, viewGeneration));
   nodes.push(actions);
   root!.dataset.phase = state.phase;
   root!.replaceChildren(...nodes);

@@ -1,8 +1,14 @@
 # Evidence Vault Backup and Recovery Key
 
 This page describes the shipped backup of the Evidence Vault (#2432): the archive format, the
-user-held recovery key, the import rules, and the limits. Nothing wires the backup service to a
-client yet; there is no screen that shows the recovery key or selects an archive.
+user-held recovery key, the import rules, and the limits. In the protected Desktop Vault window,
+choose the current issue's v2 backup, pick a new file, and confirm the exact issue in the native
+dialog. The recovery key appears once after a successful save. Existing files are not overwritten.
+
+Desktop can authenticate v1 and v2 archives and list their source projects without accessing the
+destination Vault. A verified archive is **not** a verified current publication. Desktop does not
+install archives: existing native confirmation cannot authorize recovery of this exact archive
+into this exact destination. Viewing and reconnect confirmations do not grant that authority.
 
 Code: `EvidenceVaultBackupService` (`src/application/service/evidence_vault_backup.rs`),
 `EvidenceVaultBackupPort` (`src/application/port/outbound/evidence_vault_backup_port.rs`),

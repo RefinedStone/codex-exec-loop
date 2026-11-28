@@ -1,7 +1,7 @@
 // Explicit invocation with a built local helper; uses in-memory synthetic keys only.
 import assert from "node:assert/strict";
-import { createCipheriv, createHash, hkdfSync, randomBytes } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { createCipheriv, createHash, hkdfSync, randomBytes, randomUUID } from "node:crypto";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -32,6 +32,30 @@ function preview(key, archive) {
   const run=spawnSync(binary,["desktop-backup-preview"],{cwd:root,env:{...process.env,AKRA_HOME:join(root,"vault"),CODEX_HOME:join(root,"codex")},input:key+"\n"+JSON.stringify(archive),encoding:"utf8",timeout:15000});
   assert.equal(run.status,0); assert.equal(run.stderr,"");return JSON.parse(run.stdout);
 }
+async function rejectedExport() {
+  const out = [];
+  const child = spawn(binary, ["desktop-backup-export"], {
+    cwd: root, env: { ...process.env, AKRA_HOME: join(root, "vault"), CODEX_HOME: join(root, "codex") },
+    stdio: ["pipe", "pipe", "ignore"], timeout: 15_000,
+  });
+  const closed = new Promise((done, reject) => {
+    child.once("error", reject);
+    child.stdin.once("error", reject);
+    child.once("close", done);
+  });
+  child.stdout.on("data", (chunk) => {
+    out.push(chunk);
+    if (chunk.includes(10)) child.stdin.end();
+  });
+  child.stdin.write(JSON.stringify({
+    version: 2, id: randomUUID(), command: "prepare",
+    issue_url: "https://github.com/fixture/fixture/issues/1",
+    issue: { provider: "github", server_id: "github.com", repository_id: "R_fixture", issue_id: "I_fixture",
+      project_scope: { workspace_dir: join(root, "missing-workspace") } },
+  }) + "\n");
+  assert.equal(await closed, 0);
+  assert.deepEqual(JSON.parse(Buffer.concat(out).toString("utf8")), { status: "rejected" });
+}
 try {
   for (const version of [1,2]) {
     const {secret,archive}=synthetic(version);
@@ -39,5 +63,6 @@ try {
     assert.deepEqual(preview("00".repeat(32),archive),{status:"rejected"});
     assert.deepEqual(preview(secret,{...archive,keyId:"altered"}),{status:"rejected"});
   }
-  assert.deepEqual(readdirSync(root),[]);console.log("PASS actual preview helper: authenticated legacy and scoped projects, rejected wrong key/tamper, no storage");
+  await rejectedExport();
+  assert.deepEqual(readdirSync(root),[]);console.log("PASS actual backup helpers: authenticated v1/v2, rejected wrong key/tamper and invalid export workspace, no storage");
 } finally {rmSync(root,{recursive:true,force:true});}

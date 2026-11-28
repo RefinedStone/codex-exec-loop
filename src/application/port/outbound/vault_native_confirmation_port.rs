@@ -48,7 +48,7 @@ pub(crate) mod helper_protocol {
                 && self.id.len() == 32
                 && self.id.bytes().all(|byte| byte.is_ascii_hexdigit())
                 && (1..=MAX_LIFETIME_MILLIS).contains(&self.lifetime_millis)
-                && self.issue_url.starts_with("https://github.com/")
+                && self.purpose.accepts_subject(&self.issue_url)
                 && plain_text(&self.issue_url, 2048)
                 && plain_text(&self.workspace_dir, 4096))
             .then(|| VaultNativeConfirmationRequest {
@@ -148,9 +148,23 @@ pub(crate) mod helper_protocol {
         #[test]
         fn native_pipe_request_preserves_target_and_distinct_purpose() {
             assert_eq!(COMMAND, "vault-native-confirmation");
-            for purpose in [Purpose::ViewOriginal, Purpose::RewriteBinding] {
+            for (purpose, subject) in [
+                (
+                    Purpose::ViewOriginal,
+                    "https://github.com/acme/project/issues/1",
+                ),
+                (
+                    Purpose::RewriteBinding,
+                    "https://github.com/acme/project/issues/1",
+                ),
+                (
+                    Purpose::ExportSelection,
+                    "github.com / R_fixture / I_fixture",
+                ),
+            ] {
                 let mut input = request();
                 input.purpose = purpose;
+                input.issue_url = subject.into();
                 let bytes = encode(&input, MAX_REQUEST_BYTES).unwrap();
                 let decoded = decode_request(&bytes).unwrap();
                 assert_eq!(decoded.workspace_dir, input.workspace_dir);
@@ -215,6 +229,26 @@ pub(crate) mod helper_protocol {
 pub(crate) enum VaultNativeConfirmationPurpose {
     ViewOriginal,
     RewriteBinding,
+    ExportSelection,
+}
+
+impl VaultNativeConfirmationPurpose {
+    pub(crate) fn accepts_subject(self, subject: &str) -> bool {
+        match self {
+            Self::ViewOriginal | Self::RewriteBinding => subject.starts_with("https://github.com/"),
+            Self::ExportSelection => subject
+                .strip_prefix("github.com / ")
+                .and_then(|ids| ids.split_once(" / "))
+                .is_some_and(|(repository, issue)| {
+                    [repository, issue].into_iter().all(|id| {
+                        !id.is_empty()
+                            && id
+                                .bytes()
+                                .all(|b| b.is_ascii_alphanumeric() || b"_-=".contains(&b))
+                    })
+                }),
+        }
+    }
 }
 
 pub(crate) struct VaultNativeConfirmationRequest {

@@ -300,6 +300,13 @@ fn dialog_text(request: &VaultNativeConfirmationRequest) -> (&'static str, Strin
                 request.issue_url, request.workspace_dir,
             ),
         ),
+        Purpose::ExportSelection => (
+            "Akra Vault 백업",
+            format!(
+                "이 이슈의 현재 연결 레코드만 백업할까요? 복구 키는 한 번만 표시합니다.\n\n{}\n프로젝트: {}\n\n기본 선택은 취소입니다.",
+                request.issue_url, request.workspace_dir,
+            ),
+        ),
     }
 }
 
