@@ -163,7 +163,13 @@ try {
       await page.getByTestId("composer-send").click();
       await page.getByTestId("file-message-preview").waitFor({ state: "detached" });
       assert.equal(sent.length, 1);
-      assert.equal(sent[0].params.threadId, payload.target.threadId);
+      assert.equal(typeof sent[0].params.threadId, "string");
+      assert.equal(Object.hasOwn(payload, "target"), false);
+      for (const item of payload.quotedContext) {
+        for (const key of ["origin", "repositoryId", "worktreeId", "snapshotId", "headOid", "fingerprint", "staleReason"]) {
+          assert.equal(Object.hasOwn(item, key), false, key);
+        }
+      }
       assert.equal(sent[0].params.input[0].text, preview);
       assert.deepEqual(payload.quotedContext.map(item => item.manifestId), [sampleId, newId, oldId]);
       assert.equal(preview.includes("fixture#"), false);
