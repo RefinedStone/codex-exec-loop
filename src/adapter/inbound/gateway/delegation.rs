@@ -1039,6 +1039,9 @@ pub(super) fn response(text: &str) -> Option<(u64, Value)> {
 }
 
 pub(super) fn private_kernel_payload(method: &str, text: &str) -> bool {
+    if method == crate::adapter::inbound::kernel_protocol::METHOD_FLEET_ATTENTION {
+        return true;
+    }
     matches!(method, "akra/kernel/command" | "akra/kernel/query")
         && serde_json::from_str::<Value>(text).is_ok_and(|message| {
             let params = &message["params"];

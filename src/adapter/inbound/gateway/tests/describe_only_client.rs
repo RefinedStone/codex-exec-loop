@@ -41,6 +41,64 @@ async fn attach_transient(client: &mut WebSocketStream<DuplexStream>, workspace:
         .to_string()
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn fleet_attention_reads_only_running_kernels_without_switching_the_foreground_client() {
+    let a = KernelTestFolder::new("fleet-first");
+    let b = KernelTestFolder::new("fleet-second");
+    for repo in [&a, &b] {
+        assert!(
+            crate::test_utils::git_command()
+                .current_dir(&repo.path)
+                .args(["init", "-q"])
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let turns = Arc::new(Mutex::new(Vec::new()));
+    let kernels = kernels_with_fake_app_server(TurnGate::closed(), turns.clone());
+    let mut foreground = connect_kernel_client(kernels.clone()).await;
+    let method = "akra/kernel/fleet_attention";
+    let inactive = kernel_request(
+        &mut foreground,
+        "inactive",
+        method,
+        json!({"workspace":b.workspace()}),
+    )
+    .await;
+    assert!(inactive["error"].is_object(), "{inactive}");
+    assert!(
+        turns.lock().unwrap().is_empty(),
+        "passive read created a runtime"
+    );
+    let kernel_a = attach_transient(&mut foreground, &a.workspace()).await;
+    let mut other = connect_kernel_client(kernels.clone()).await;
+    let kernel_b = attach_transient(&mut other, &b.workspace()).await;
+    assert_ne!(kernel_a, kernel_b);
+    let background = kernel_request(
+        &mut foreground,
+        "background",
+        method,
+        json!({"workspace":b.workspace()}),
+    )
+    .await;
+    let from_b = kernel_request(
+        &mut other,
+        "original",
+        "akra/kernel/query",
+        json!({"query":{"type":"attention"}}),
+    )
+    .await;
+    assert_eq!(background["result"]["kernel"], kernel_b, "{background}");
+    assert!(background["result"]["items"].is_array());
+    assert_eq!(background["result"]["items"], from_b["result"]["items"]);
+    // Detaching the foreground client unloads A, not B. A passive read did not attach a new client.
+    kernel_request(&mut foreground, "detach", "akra/kernel/detach", json!({})).await;
+    wait_until(|| kernels.unload_idle_kernels(std::time::Instant::now()) == [kernel_a.clone()])
+        .await;
+    assert_eq!(turns.lock().unwrap().len(), 2);
+}
+
 async fn wait_until(condition: impl Fn() -> bool) {
     tokio::time::timeout(TEST_TIMEOUT, async {
         while !condition() {

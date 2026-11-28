@@ -913,7 +913,7 @@ export function App() {
             {/* 본문 보기만 확대한다. 터미널은 자기 배율을 글자 크기로 쓰므로 이 칸 밖에 둔다. */}
             <div className="main-view" style={zoomStyle(bodyZoom)} data-zoom-scope={view}>
             {view === "home" && <Home actions={composerActions} onChooseFolder={() => window.akra.chooseFolder()} onOpenThread={openThread} />}
-            {view === "fleet" && <Fleet onOpenThread={openThread} workspace={defaultWorkspace} onWorkspace={path => {
+            {view === "fleet" && <Fleet request={gatewayRequest} onOpenThread={openThread} workspace={defaultWorkspace} onWorkspace={path => {
               setIssueAttentionTarget(null);
               setAttentionPr(null);
               useUiStore.setState({ panel: null, panelMaximized: false, overlay: null });

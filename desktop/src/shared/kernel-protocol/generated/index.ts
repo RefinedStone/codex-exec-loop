@@ -10,6 +10,7 @@ export const KERNEL_METHOD = {
   "confirmation/prepare": "akra/kernel/confirmation/prepare",
   "command_confirmed": "akra/kernel/command_confirmed",
   "query": "akra/kernel/query",
+  "fleet_attention": "akra/kernel/fleet_attention",
   "event": "akra/kernel/event",
   "extensions/attach": "akra/kernel/extensions/attach",
   "extensions/detach": "akra/kernel/extensions/detach",
@@ -175,6 +176,10 @@ export type ExtensionScope2 = { readonly "kernel": string; };
 export type Fallback = { readonly "at": number; readonly "from": string; readonly "reason": EndReason; readonly "to": string; };
 
 export type Finding = { readonly "body": string; readonly "line": number; readonly "path": string; readonly "severity": Severity; };
+
+export type FleetAttention = { readonly "items": Array<AttentionItem>; readonly "kernel": string; };
+
+export type FleetAttentionRequest = { readonly "workspace": string; };
 
 export type HumanConfirmationSubmission = { readonly "intent": IssueConfirmationIntent; readonly "proof_id": string; readonly "registration_id": string; };
 

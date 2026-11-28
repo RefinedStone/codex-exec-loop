@@ -1376,8 +1376,12 @@ The Gateway records the external documents that a thread mentions, without a mod
   (`desktop/src/main/windowState.ts`, `desktop/src/main/contextMenuItems.ts`,
   `desktop/src/renderer/session/navHistory.ts`, `desktop/src/renderer/conversation/find.ts`,
   `desktop/src/renderer/session/attention.ts`).
-- Fleet shows the selected repository's kernel attention. Change the repository selector to see another
-  folder; Desktop does not attach to every folder or total their unknown counts. A detached kernel
+- Fleet shows the selected repository's kernel attention. **모든 저장소 확인** also reads the other
+  listed workspace folders through `akra/kernel/fleet_attention`. The Gateway reads only existing
+  kernels: it does not attach, create a repository identity or start a kernel. The total counts each
+  known kernel once and reports unconfirmed folders separately. Refresh other folders with
+  **다른 저장소 새로 읽기**. Opening an item selects that workspace and checks the kernel, item ID
+  and revision against the attached kernel before navigating. Preferences remain kernel-scoped. A detached kernel
   or failed read is not a zero count. The fleet keeps user-turn marks until kernel observation covers
   those turns. A task opens its exact ID; a decision opens its issue coordinate. The PR link shows
   the requested PR number and reports when the current validation record no longer matches it.

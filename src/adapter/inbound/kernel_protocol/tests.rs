@@ -843,6 +843,7 @@ fn events_and_description_have_stable_wire_shapes() {
             "akra/kernel/confirmation/prepare",
             "akra/kernel/command_confirmed",
             "akra/kernel/query",
+            "akra/kernel/fleet_attention",
             "akra/kernel/event",
             "akra/kernel/extensions/attach",
             "akra/kernel/extensions/detach",

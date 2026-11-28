@@ -12,6 +12,25 @@ pub(crate) struct LiveAttentionSources {
     pub recent_turns: Vec<RecordedKernelEvent>,
 }
 
+pub(crate) fn project(
+    workspace: &str,
+    view: &super::kernel_host::KernelHostView,
+    live: LiveAttentionSources,
+) -> Result<Vec<AttentionItem>> {
+    use crate::adapter::inbound::kernel_protocol::{issue_decision_attention, snapshot_attention};
+    let mut items = snapshot_attention(
+        &view.snapshot.planning_parallel.planning_runtime,
+        &view.thread_activity,
+        view.parallel
+            .supervisor
+            .as_ref()
+            .and_then(|s| s.pr_validation.as_ref()),
+    );
+    items.extend(live.decisions.iter().filter_map(issue_decision_attention));
+    items.extend(stored_items(workspace, live.recent_turns)?);
+    Ok(items)
+}
+
 pub(crate) fn stored_items(
     workspace: &str,
     recent_turns: Vec<RecordedKernelEvent>,

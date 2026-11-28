@@ -214,6 +214,10 @@ pub fn describe() -> KernelSpec {
                     Some(schemas.reference::<QueryRequest>()),
                     Some(schemas.reference::<KernelQueryAnswer>()),
                 ),
+                KernelMethodKind::FleetAttention => (
+                    Some(schemas.reference::<super::FleetAttentionRequest>()),
+                    Some(schemas.reference::<super::FleetAttention>()),
+                ),
                 KernelMethodKind::Event => (Some(schemas.reference::<EventNotification>()), None),
                 KernelMethodKind::Describe | KernelMethodKind::Detach => (None, None),
             };

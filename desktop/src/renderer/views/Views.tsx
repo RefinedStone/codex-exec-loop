@@ -1,4 +1,6 @@
 import { nextAttentionThread } from "../kernel/attentionNavigation";
+import { useFleetAttention } from "../kernel/useFleetAttention";
+import type { GatewayRequest } from "../work/notionHub";
 // 대화 밖의 화면이다 (R10): 새 스레드(홈), 현황판, 검색과 명령, 단축키 목록, 알림.
 import { useEffect, useMemo, useState } from "react";
 import { isAttentionPreferenceEvent, readAttentionPreference, writeAttentionPreference, type AttentionPreference, type AttentionPreferenceField } from "../kernel/attentionPreferences";
@@ -96,7 +98,7 @@ function FleetCard({ thread, mark, onOpenThread }: { thread: ListedThread; mark:
   );
 }
 
-function KernelAttentionList({ kernel, items, onOpenItem }: { kernel: string | null; items: readonly AttentionItem[] | null; onOpenItem(item: AttentionItem): void }) {
+function KernelAttentionList({ kernel, items, onOpenItem, workspace }: { kernel: string | null; items: readonly AttentionItem[] | null; onOpenItem(item: AttentionItem): void; workspace?: string }) {
   const [, update] = useState(0);
   const [hoverOrder, setHoverOrder] = useState<readonly string[] | null>(null);
   const phase = useDesktopStore((state) => state.kernel.phase);
@@ -118,12 +120,12 @@ function KernelAttentionList({ kernel, items, onOpenItem }: { kernel: string | n
     rows.sort((a, b) => (order.get(a.item.id) ?? Infinity) - (order.get(b.item.id) ?? Infinity));
   }
   const now = Date.now();
-  return <section className="fleet-column" data-testid="kernel-attention"
+  return <section className="fleet-column" data-testid={workspace ? "repository-attention" : "kernel-attention"} data-workspace={workspace}
     onMouseEnter={() => setHoverOrder(rows.map(row => row.item.id))} onMouseLeave={() => setHoverOrder(null)}>
-    <h3>현재 저장소 · 커널 확인 필요 <span className="muted">{items?.length ?? "—"}</span></h3>
+    <h3>{workspace ?? "현재 저장소"} · 커널 확인 필요 <span className="muted">{items?.length ?? "—"}</span></h3>
     <p className="muted">읽음·미루기·고정은 이 기기의 개인 표시 설정입니다. 응답을 대신하지 않습니다.</p>
     {notice && <p role="status">{notice}</p>}
-    {items === null && <p className="muted fleet-empty">{phase === "idle" ? "연결된 저장소 커널이 없습니다." : phase === "failed" ? "저장소 커널 연결이 끊겼습니다. 현재 항목은 알 수 없습니다." : "커널 확인 항목을 아직 읽지 못했습니다."}</p>}
+    {items === null && <p className="muted fleet-empty">{workspace ? "이 저장소의 응답 필요 항목은 확인되지 않았습니다." : phase === "idle" ? "연결된 저장소 커널이 없습니다." : phase === "failed" ? "저장소 커널 연결이 끊겼습니다. 현재 항목은 알 수 없습니다." : "커널 확인 항목을 아직 읽지 못했습니다."}</p>}
     {items?.length === 0 && <p className="muted fleet-empty">없음</p>}
     {rows.map(({ item, preference }) => {
       const snoozed = preference.snoozedUntil !== null && preference.snoozedUntil > now;
@@ -143,11 +145,34 @@ function KernelAttentionList({ kernel, items, onOpenItem }: { kernel: string | n
   </section>;
 }
 
-export function Fleet({ onOpenThread, onOpenItem, workspace, onWorkspace }: { onOpenThread(threadId: string): void; onOpenItem(item: AttentionItem): void; workspace: string | null; onWorkspace(path: string): void }) {
+export function Fleet({ onOpenThread, onOpenItem, workspace, onWorkspace, request }: { onOpenThread(threadId: string): void; onOpenItem(item: AttentionItem): void; workspace: string | null; onWorkspace(path: string): void; request: GatewayRequest }) {
   const folders = useDesktopStore((state) => state.folders);
   const marks = useThreadMarks();
   const kernel = useDesktopStore((state) => state.kernel);
   const items = kernel.phase === "attached" && kernel.workspace === workspace ? kernel.attentionItems : null;
+  const connected = useDesktopStore(state => state.connection?.phase === "connected");
+  const [all, setAll] = useState(false);
+  const [refresh, setRefresh] = useState(0);
+  const background = [...new Set(folders.map(folder => folder.cwd))].filter(path => path !== workspace);
+  const reads = useFleetAttention(all ? background : [], request, connected, refresh);
+  const known = new Map<string, number>();
+  if (items && kernel.kernel) known.set(kernel.kernel, items.length);
+  let unknown = workspace && items === null ? 1 : 0;
+  for (const path of background) {
+    const row = reads.get(path);
+    if (!row) unknown++;
+    else if (!known.has(row.kernel)) known.set(row.kernel, row.items.length);
+  }
+  const [target, setTarget] = useState<{workspace:string; kernel:string; item:AttentionItem} | null>(null);
+  useEffect(() => {
+    if (!target || workspace !== target.workspace || kernel.workspace !== workspace) return;
+    if (kernel.phase === "failed" || !connected) { setTarget(null); toast("대상 저장소에 연결하지 못했습니다."); return; }
+    if (kernel.phase !== "attached" || items === null) return;
+    setTarget(null);
+    const current = kernel.kernel === target.kernel && items.find(candidate => candidate.id === target.item.id && candidate.revision === target.item.revision);
+    if (current) onOpenItem(current);
+    else toast("해당 저장소의 응답 필요 항목이 변경되었습니다.");
+  }, [target, workspace, kernel, items, connected, onOpenItem]);
   const authoritative = useMemo(() => new Set((items ?? []).filter(item => item.subject.kind === "thread").map(item => item.subject.id)), [items]);
   const threads = useMemo(() => allThreads(folders).map((thread) => ({ thread, mark: threadMark(thread, marks) })), [folders, marks]);
   return (
@@ -156,14 +181,23 @@ export function Fleet({ onOpenThread, onOpenItem, workspace, onWorkspace }: { on
         <h1>현황판</h1>
         <span className="muted">모든 작업 폴더의 스레드를 상태별로 봅니다.</span>
         <label>확인할 저장소
-          <select value={workspace ?? ""} onChange={event => onWorkspace(event.currentTarget.value)} data-testid="attention-workspace">
+          <select value={workspace ?? ""} onChange={event => { setTarget(null); onWorkspace(event.currentTarget.value); }} data-testid="attention-workspace">
             {!workspace && <option value="" disabled>저장소를 선택하세요</option>}
             {[...new Set([...(workspace ? [workspace] : []), ...folders.map(folder => folder.cwd)])].map(path => <option key={path} value={path}>{path}</option>)}
           </select>
         </label>
-        <p className="muted">응답 필요 항목은 선택한 저장소에서만 읽습니다. 다른 저장소의 개수는 아직 확인하지 않았습니다.</p>
+        <button type="button" aria-pressed={all} onClick={() => setAll(!all)}>모든 저장소 확인</button>
+        {all && <>
+          <button type="button" onClick={() => setRefresh(n => n + 1)}>다른 저장소 새로 읽기</button>
+          <p data-testid="fleet-attention-total">확인된 응답 필요 {Array.from(known.values()).reduce((a,b) => a+b,0)}개 · 미확인 폴더 {unknown}개</p>
+        </>}
       </header>
       <KernelAttentionList key={kernel.kernel} kernel={kernel.kernel} items={items} onOpenItem={onOpenItem} />
+      {all && background.map(path => {
+        const row = reads.get(path);
+        return <KernelAttentionList key={JSON.stringify([path,row?.kernel])} workspace={path} kernel={row?.kernel ?? null} items={row?.items ?? null}
+          onOpenItem={item => { if (row) { setTarget({workspace:path,kernel:row.kernel,item}); onWorkspace(path); } }} />;
+      })}
       <div className="fleet-columns">
         {FLEET_COLUMNS.map((column) => {
           // A user turn can share its thread with an older kernel demand. Without the same

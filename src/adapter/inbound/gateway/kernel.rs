@@ -42,6 +42,7 @@ use crate::adapter::inbound::kernel_protocol::{
     ConfirmationRegisterResponse, ConfirmedCommandRequest, METHOD_COMMAND_CONFIRMED,
     METHOD_CONFIRMATION_PREPARE, METHOD_CONFIRMATION_REGISTER, is_confirmation_method,
 };
+use crate::adapter::inbound::kernel_protocol::{FleetAttentionRequest, METHOD_FLEET_ATTENTION};
 use crate::application::port::inbound::stored_command_port::StoredCommand;
 use crate::application::port::inbound::stored_command_port::issue_confirmation::{
     IssueConfirmationBinding, IssueConfirmationIntent, IssueConfirmationTarget,
@@ -262,6 +263,7 @@ impl KernelSession {
             METHOD_CONFIRMATION_PREPARE => self.prepare_confirmation(params).await,
             METHOD_COMMAND_CONFIRMED => self.command_confirmed(params).await,
             METHOD_QUERY => self.query(params).await,
+            METHOD_FLEET_ATTENTION => self.fleet_attention(params).await,
             METHOD_DETACH => {
                 self.detach().await;
                 Ok(json!({}))
@@ -273,6 +275,21 @@ impl KernelSession {
             }),
         };
         response_text(id, result)
+    }
+
+    async fn fleet_attention(&self, params: Value) -> Result<Value, KernelProtocolError> {
+        let request: FleetAttentionRequest = parse_params(params)?;
+        if !std::path::Path::new(&request.workspace).is_absolute() {
+            return Err(KernelProtocolError {
+                code: ERROR_INVALID_PARAMS,
+                message: "expected an absolute workspace".into(),
+            });
+        }
+        let kernels = self.kernels.clone();
+        let result = blocking(move || kernels.fleet_attention(&request.workspace))
+            .await?
+            .map_err(|_| unavailable("repository attention is unavailable".to_owned()))?;
+        to_result(result)
     }
 
     async fn attach(&mut self, params: Value) -> Result<Value, KernelProtocolError> {
@@ -772,6 +789,18 @@ impl KernelSession {
                 KernelCallError::Stopped => unavailable(error.to_string()),
                 KernelCallError::TimedOut => timed_out("query", KERNEL_CALL_TIMEOUT),
             })?;
+        if matches!(request.query, KernelQuery::Attention {}) {
+            let commands = attached.commands.clone();
+            let live =
+                read_kernel_log(move || commands.live_attention_sources(KERNEL_CALL_TIMEOUT))
+                    .await?;
+            let workspace = attached.issue_workspace.clone();
+            let items =
+                blocking(move || crate::composition::attention::project(&workspace, &view, live))
+                    .await?
+                    .map_err(|error| unavailable(error.to_string()))?;
+            return to_result(KernelQueryAnswer::Attention { items });
+        }
         let answer = request.query.answer(
             &view.snapshot,
             &view.thread_activity,
@@ -779,37 +808,17 @@ impl KernelSession {
             history,
             operation,
         );
-        let answer =
-            if let KernelQueryAnswer::Attention { mut items } = answer {
-                // One catalog transaction reads the stored decision authority without
-                // re-assessing the entire catalog for every pagination request.
-                let commands = attached.commands.clone();
-                let live =
-                    read_kernel_log(move || commands.live_attention_sources(KERNEL_CALL_TIMEOUT))
-                        .await?;
-                items.extend(live.decisions.iter().filter_map(
-                    crate::adapter::inbound::kernel_protocol::issue_decision_attention,
-                ));
-                let workspace = attached.issue_workspace.clone();
-                items.extend(
-                    blocking(move || {
-                        crate::composition::attention::stored_items(&workspace, live.recent_turns)
-                    })
-                    .await?
-                    .map_err(|error| unavailable(error.to_string()))?,
-                );
-                KernelQueryAnswer::Attention { items }
-            } else if let KernelQueryAnswer::Planning(planning) = answer {
-                let workspace = attached.issue_workspace.clone();
-                KernelQueryAnswer::Planning(
-                    blocking(move || {
-                        crate::composition::task_evidence::enrich_planning(&workspace, planning)
-                    })
-                    .await?,
-                )
-            } else {
-                answer
-            };
+        let answer = if let KernelQueryAnswer::Planning(planning) = answer {
+            let workspace = attached.issue_workspace.clone();
+            KernelQueryAnswer::Planning(
+                blocking(move || {
+                    crate::composition::task_evidence::enrich_planning(&workspace, planning)
+                })
+                .await?,
+            )
+        } else {
+            answer
+        };
         to_result(answer)
     }
 
