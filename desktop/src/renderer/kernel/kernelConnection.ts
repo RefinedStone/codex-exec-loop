@@ -7,6 +7,8 @@ import { waiverBlockReason, waiverReasonValid, type TaskCriterionWaiverRequestVi
 import type { IssueAutonomyLevel, IssueCommandOutcome, IssueConversationTarget, IssueInterventionName } from "./issueInteractions";
 import {
   type AttachResponse,
+  type AttentionItem,
+  type KernelQueryAnswer,
   type CommandResponse,
   type IssueDecisionFactRecord,
   type AutoFollowSettings,
@@ -123,6 +125,8 @@ export interface KernelView {
   issues: KernelIssuesView;
   /** 현재 저장소 스트림에서 받은 결정 좌표만 보관한다. 질문과 답변 본문은 없다. */
   issueAttention: IssueDecisionAttention[];
+  /** null means not yet read or unavailable; never pretend it is empty. */
+  attentionItems: readonly AttentionItem[] | null;
   /** 현재 조회로 검증한 중재 결과 알림이다. 열린 결정 목록과 별도로 보관한다. */
   issueArbiterNotices: IssueDecisionAttention[];
 }
@@ -142,6 +146,7 @@ export const EMPTY_KERNEL_VIEW: KernelView = {
   parallelControl: EMPTY_PARALLEL_CONTROL,
   issues: EMPTY_KERNEL_ISSUES,
   issueAttention: [],
+  attentionItems: null,
   issueArbiterNotices: [],
 };
 
@@ -297,6 +302,8 @@ export class KernelConnection {
   private interests = new Set<KernelInterest>();
   private connected = false;
   private generation = 0;
+  private attentionRequest = 0;
+  private attentionRead: { generation: number; dirty: boolean } | null = null;
   private overviewGeneration = 0;
   private overviewRequest = 0;
   private planningEvidenceRequest = 0;
@@ -357,6 +364,10 @@ export class KernelConnection {
     if (!sameWorkspace) { this.uncertainIssueOutcome = null; this.interruptTaskVerificationRequests(); }
     this.wanted = wanted;
     this.interests = next;
+    if (attentionChanged || !sameWorkspace) {
+      this.attentionRequest += 1;
+      this.store.setKernel({ ...this.store.getKernel(), attentionItems: null });
+    }
     if (overviewChanged || !sameWorkspace) {
       this.overviewGeneration += 1;
       this.overviewRequest += 1;
@@ -387,6 +398,7 @@ export class KernelConnection {
     }
     if (sameWorkspace && this.store.getKernel().phase === "attached") {
       this.restoreUncertainIssueOutcome();
+      if (attentionChanged && next.has("issue_attention")) this.scheduleAttentionRead();
       await Promise.all([
         overviewChanged && next.has("overview") ? this.readOverview(true) : Promise.resolve(),
         issuesChanged && next.has("issues") ? this.refreshIssues() : Promise.resolve(),
@@ -755,6 +767,10 @@ export class KernelConnection {
     const event = (params as { event?: KernelEvent } | undefined)?.event;
     if (!event || this.store.getKernel().phase !== "attached") return;
     this.eventCounts.set(event.type, (this.eventCounts.get(event.type) ?? 0) + 1);
+    if (["resync", "issue_decision", "issues", "planning", "parallel", "thread_activity", "auto_follow"].includes(event.type)
+      || (event.type === "recorded" && /^(issue_|criterion_|task_|planning_)/.test(event.event.kind))) {
+      this.scheduleAttentionRead();
+    }
     if (event.type === "resync") {
       if (this.interests.has("overview")) void this.readOverview(false);
       if (this.interests.has("issues")) void this.refreshIssues();
@@ -995,6 +1011,7 @@ export class KernelConnection {
     this.syncTaskVerificationRequests();
     this.syncTaskCriterionWaiverRequests();
     this.restoreUncertainIssueOutcome();
+    this.scheduleAttentionRead();
     await Promise.all([
       this.interests.has("overview") ? this.readOverview(true) : Promise.resolve(),
       this.interests.has("issues") ? this.refreshIssues() : Promise.resolve(),
@@ -1030,6 +1047,43 @@ export class KernelConnection {
 
   private overviewRefreshCurrent(generation: number, interest: number, refresh: number): boolean {
     return this.overviewScopeCurrent(generation, interest) && refresh === this.overviewRefreshRequest;
+  }
+
+  private scheduleAttentionRead(): void {
+    if (!this.canRead("issue_attention")) return;
+    ++this.attentionRequest;
+    if (this.attentionRead?.generation === this.generation) {
+      this.attentionRead.dirty = true;
+      return;
+    }
+    const pending = { generation: this.generation, dirty: false };
+    this.attentionRead = pending;
+    queueMicrotask(() => {
+      if (this.attentionRead !== pending || pending.generation !== this.generation) return;
+      // Events before dispatch are covered by this read; events while it is in
+      // flight invalidate its response and request exactly one successor read.
+      pending.dirty = false;
+      void this.readAttention().finally(() => {
+        if (this.attentionRead !== pending) return;
+        this.attentionRead = null;
+        if (pending.dirty) this.scheduleAttentionRead();
+      });
+    });
+  }
+
+  private async readAttention(): Promise<void> {
+    if (!this.canRead("issue_attention")) return;
+    const generation = this.generation;
+    const request = this.attentionRequest;
+    const current = () => this.canRead("issue_attention") && generation === this.generation && request === this.attentionRequest;
+    try {
+      const result = await this.client.request<Extract<KernelQueryAnswer, { type: "attention" }>>(KERNEL_METHOD.query, { query: { type: "attention" } });
+      if (!current()) return;
+      if (result.type !== "attention" || !Array.isArray(result.items)) throw new Error("invalid attention response");
+      this.store.setKernel({ ...this.store.getKernel(), attentionItems: result.items });
+    } catch {
+      if (current()) this.store.setKernel({ ...this.store.getKernel(), attentionItems: null });
+    }
   }
 
   private async readOverview(refreshPlanning: boolean): Promise<void> {
