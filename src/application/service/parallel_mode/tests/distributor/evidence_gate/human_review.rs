@@ -1,5 +1,5 @@
 use super::*;
-use crate::application::service::task_evidence::preview::{PreviewKind, PreviewTarget};
+use crate::application::port::inbound::task_evidence_query_port::{PreviewKind, PreviewTarget};
 use crate::domain::planning::evidence::{HumanEvidenceDecision, TaskCriterionEvidenceState};
 
 #[test]

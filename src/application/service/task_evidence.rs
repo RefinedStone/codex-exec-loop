@@ -28,7 +28,7 @@ use crate::domain::planning::evidence::{
 use super::parallel_mode::evidence::{snapshot_worker_tree, with_running_worker};
 
 mod human_review;
-pub(crate) mod preview;
+mod preview;
 mod query;
 #[cfg(test)]
 pub(crate) mod tests;
