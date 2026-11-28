@@ -45,6 +45,33 @@ cargo test --locked --all-features --lib --target x86_64-pc-windows-msvc storage
 
 Windows native gate의 기존 `gateway::tests::issue_shared_copy_flow::`와 `filesystem::evidence_vault_store::` inventory가 이 시험을 포함한다. 다른 OS에서는 Windows 공유 잠금 fixture가 컴파일되지 않는다. 실제 실행 결과는 PR에 기록한다. 이번 증거는 저장 open과 pointer rename의 공유 거절이며 ENOSPC, fsync/flush, payload commit 중단 또는 물리적 전원 차단의 증거가 아니다.
 
+### Windows 저장 실패 및 프로세스 중단 재검증 (#2705)
+
+2026-11-27 UTC, Windows x64 `10.0.26200.9974`, Rust `1.95.0`.
+검증 소스는 선행 #3023 head `6fbf1554a8d791b218b483730aa4f03835e72bf9`이며,
+이 변경은 검증 기록만 추가한다.
+
+```powershell
+# Set TEMP and TMP to the same new, empty disposable directory first.
+cargo test --locked --all-features --lib --target x86_64-pc-windows-msvc storage_failures:: -- --nocapture
+cargo test --locked --all-features --lib --target x86_64-pc-windows-msvc delayed_workers:: -- --nocapture
+# After both commands finish, Get-ChildItem -Force $env:TEMP must show no entries.
+```
+
+위 두 필터를 원래 빌드의 Windows lib test 실행 파일에 적용했다.
+저장 실패 3개와 worker 중단 1개가 통과했고 실패·제외는 없었다.
+
+| 실제 주입 지점 | 재조립 후 상태 및 정리 근거 |
+| --- | --- |
+| Sent 저장 open에서 Windows 공유 오류 32 | production SQLite에 Recorded가 남았다. 새 Gateway의 open/recheck는 쓰기를 보내지 않았고 합성 provider 쓰기는 총 0회였다. |
+| 합성 provider 적용 후 Confirmed 저장 open에서 오류 32 | SQLite에 Sent가 남았다. 새 Gateway는 같은 intent를 Confirmed로 재조정했고 이전 승인의 재요청은 conflict였다. 총 쓰기는 1회였다. |
+| Vault CurrentVersion 교체에서 오류 32 | 기존 pointer 및 ciphertext가 보존됐고 `.vault-` 임시 레코드가 남지 않았다. 새 store에서 동일 요청을 커밋한 뒤 재요청은 AlreadyCommitted였다. 이전 판도 읽을 수 있었다. |
+| 요청을 받은 뒤 합성 응답이 돌아오기 전 publisher worker 강제 종료 | 실제 자식의 종료를 기다렸다. 첫 대체 worker는 NeedsConfirmation, 합성 provider 적용 후 두 번째 대체 worker는 Confirmed를 관측했다. 총 쓰기는 1회였다. |
+
+실행 종료 후 전용 임시 디렉터리 안에 항목이 0개였다. 이 기록은 실제 Windows
+공유 거절과 disposable worker 재시작의 증거다. 물리적 전원 차단, ENOSPC,
+fsync 실패, 실제 사용자 데이터·승인·키 저장소와 OS 잠금/절전은 검증하지 않았다.
+
 ## OS 전원 이벤트와 복원 창의 재열람 경계 (#2705)
 
 화면 잠금 및 절전은 각각 독립적인 보류 상태로 기록한다. 이벤트 수신 시 모든 전용 창의 현재 열람 및 native channel을 폐기하고, 보류 상태가 유지되는 동안 뒤늦은 unlock IPC와 새 창의 ready도 helper를 시작하지 않는다. unlock-screen은 화면 잠금만, resume은 절전만 해제한다. 해제 자체는 열람을 시작하지 않는다. 일반적인 실행 프로필 검사 뒤 실제 OS idle state가 locked인지도 확인한다.
