@@ -38,6 +38,7 @@ use std::time::Instant;
 
 const TASK: &str = "task-1";
 mod human_review;
+mod integrated;
 
 struct GateCall {
     stage: TaskEvidenceDeliveryStage,
