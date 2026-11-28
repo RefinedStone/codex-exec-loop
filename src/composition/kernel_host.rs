@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use super::attention::LiveAttentionSources;
 use crate::application::port::inbound::issue_automation_policy_query_port::IssueAutomationPolicyInspection;
 use crate::application::port::inbound::stored_command_port::{
     StoredCommandOutcome, StoredCommandResult,
@@ -25,7 +26,6 @@ use crate::core::runtime::CoreInputWaker;
 use crate::domain::issue_automation::collection::{
     IssueCollectionDetail, IssueCollectionPage, IssueCollectionQuery,
 };
-use crate::domain::issue_automation::decision::StoredIssueDecision;
 use crate::domain::issue_work::IssueReference;
 use crate::domain::kernel_event::{
     KernelCommandDescriptor, KernelEventPage, OperationReceipt, OperationStatus, ReasonCode,
@@ -226,8 +226,8 @@ enum KernelHostInput {
     IssueAutomationPolicy {
         reply: Sender<Option<IssueAutomationPolicyInspection>>,
     },
-    OpenIssueDecisions {
-        reply: Sender<Result<Vec<StoredIssueDecision>, String>>,
+    LiveAttention {
+        reply: Sender<Result<LiveAttentionSources, String>>,
     },
     Issues {
         query: IssueCollectionQuery,
@@ -495,13 +495,12 @@ impl KernelCommandSender {
         wait_reply(&answer, timeout)
     }
 
-    pub(crate) fn open_issue_decisions(
+    pub(crate) fn live_attention_sources(
         &self,
         timeout: Duration,
-    ) -> Result<Result<Vec<StoredIssueDecision>, String>, KernelCallError> {
+    ) -> Result<Result<LiveAttentionSources, String>, KernelCallError> {
         let (reply, answer) = mpsc::channel();
-        self.inbox
-            .send(KernelHostInput::OpenIssueDecisions { reply })?;
+        self.inbox.send(KernelHostInput::LiveAttention { reply })?;
         wait_reply(&answer, timeout)
     }
 
@@ -892,12 +891,12 @@ impl KernelHostLoop {
             KernelHostInput::IssueAutomationPolicy { reply } => {
                 let _ = reply.send(self.runtime.issue_automation_policy());
             }
-            KernelHostInput::OpenIssueDecisions { reply } => {
-                let decisions = self
+            KernelHostInput::LiveAttention { reply } => {
+                let sources = self
                     .runtime
-                    .open_issue_decisions()
+                    .live_attention_sources()
                     .map_err(|_| "issue decision local state could not be read".to_string());
-                let _ = reply.send(decisions);
+                let _ = reply.send(sources);
             }
             KernelHostInput::Issues { query, reply } => {
                 let page = self
