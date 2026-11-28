@@ -113,6 +113,7 @@ use crate::composition::native_client_runtime::{
 use crate::domain::github_review::GithubPullRequestTarget;
 
 mod delivery_evidence;
+pub(crate) use crate::adapter::outbound::db::sqlite_planning_authority_adapter::legacy_diagnosis;
 pub(crate) use delivery_evidence::task_delivery_evidence_for_workspace;
 
 const APP_SERVER_CLIENT_NAME: &str = "akra-native";

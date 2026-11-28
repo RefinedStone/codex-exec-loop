@@ -88,6 +88,7 @@ mod telegram_issue_notifications;
 mod telegram_global_runner_lease;
 // workspace path를 canonical repo root와 authority DB 위치로 해석하는 모듈이다.
 mod workspace_paths;
+pub(crate) use workspace_paths::legacy_diagnosis;
 
 use self::active_documents::{
     apply_active_workspace_record, remove_active_documents, set_active_document,
