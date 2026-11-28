@@ -138,7 +138,11 @@ try {
       await page.getByTestId("composer-send").click();
       await page.getByTestId("file-message-preview").waitFor({ state: "detached" });
       assert.equal(sent.length, 1);
-      assert.equal(sent[0].threadId, payload.target.threadId);
+      assert.equal(typeof sent[0].threadId, "string");
+      assert.equal(Object.hasOwn(payload, "target"), false);
+      for (const key of ["origin", "repositoryId", "worktreeId", "snapshotId", "manifestId", "headOid", "fingerprint"]) {
+        assert.equal(Object.hasOwn(payload.quotedContext[0], key), false, key);
+      }
       assert.equal(sent[0].input[0].text, preview);
       assert.equal(await cards.count(), 1);
       assert.equal(await cards.filter({ hasText: "sample.txt:1–1" }).getByLabel("포함").isChecked(), false);
