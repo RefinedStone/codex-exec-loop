@@ -59,7 +59,7 @@ export function FileAttachments({ target, turnId, request, disabled }: {
       <button type="button" disabled={disabled} onClick={() => change(files.filter(a => a !== item))}>첨부 삭제</button>
     </div>)}
     {files.some(item => item.included) && <details><summary>보낼 정확한 내용 미리보기</summary>
-      <pre data-testid="file-message-preview">{fileMessage(draft, files, target)}</pre></details>}
+      <pre data-testid="file-message-preview">{fileMessage(draft, files)}</pre></details>}
     {error && <p role="alert">{error}</p>}
   </section>;
 }
