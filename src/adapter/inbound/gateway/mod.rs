@@ -13,6 +13,7 @@ pub(crate) use delegation::Delegations;
 pub(crate) use delegation::{advance_pr_review, expire_pr_reviews};
 mod conversation_workspace;
 mod dots;
+mod evidence_preview;
 mod git;
 mod hosts;
 mod issue;
@@ -73,6 +74,7 @@ enum GatewayCommand {
     DesktopBrowserBridge,
     DesktopConfirmationBridge,
     DesktopRestoreBridge,
+    DesktopEvidencePreview,
     ProviderCredentialPrompt,
     ProviderCredentialMigration,
 }
@@ -95,6 +97,9 @@ pub async fn run_with_args(args: Vec<String>) -> Result<()> {
         }
         GatewayCommand::DesktopRestoreBridge => {
             return super::desktop_restore_bridge::run().await;
+        }
+        GatewayCommand::DesktopEvidencePreview => {
+            return super::gateway::evidence_preview::show();
         }
         GatewayCommand::ProviderCredentialPrompt => {
             return tokio::task::spawn_blocking(|| {
@@ -226,6 +231,9 @@ fn parse_args(args: &[String]) -> Result<GatewayCommand> {
         }
         [command] if command == "desktop-restore-bridge" => {
             Ok(GatewayCommand::DesktopRestoreBridge)
+        }
+        [command] if command == "desktop-evidence-preview" => {
+            Ok(GatewayCommand::DesktopEvidencePreview)
         }
         [command] if command == "provider-credential-prompt" => {
             Ok(GatewayCommand::ProviderCredentialPrompt)

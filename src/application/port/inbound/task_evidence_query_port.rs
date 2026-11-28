@@ -1,5 +1,6 @@
-//! Read projections contain host metadata, never writable paths or artifact/note contents.
+//! Planning projections expose metadata only. Artifact previews are a separate on-demand read.
 use anyhow::Result;
+use serde::Deserialize;
 
 use crate::domain::planning::TaskAcceptanceCriterion;
 use crate::domain::planning::evidence::{
@@ -149,9 +150,33 @@ pub struct TaskCriterionWaiverProjection {
     pub recorded_at: String,
 }
 
+/// Selects the sealed worker report or host verification capture.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewKind {
+    Worker,
+    Host,
+}
+
+/// Identifies sealed evidence without accepting paths, content, or byte limits.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreviewTarget {
+    pub task_id: String,
+    pub criterion_id: String,
+    pub scope_id: String,
+    pub revision: u64,
+    pub event_id: String,
+    pub sha256: String,
+    pub kind: PreviewKind,
+}
+
 pub trait TaskEvidenceQueryPort: Send + Sync {
     fn planning_snapshot(
         &self,
         query: &TaskEvidenceSnapshotQuery,
     ) -> Result<TaskEvidencePlanningSnapshot>;
+
+    /// Returns sanitized text only for the matching current sealed evidence.
+    fn sanitized_preview(&self, target: &PreviewTarget) -> Result<String>;
 }

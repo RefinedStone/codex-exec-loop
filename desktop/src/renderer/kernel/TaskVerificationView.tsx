@@ -1,4 +1,5 @@
 import type { PlanningEvidenceFreshness } from "./kernelConnection";
+import { EvidencePreviewButton } from "./EvidencePreviewButton";
 import type { PlanningCriterionEvidenceState, PlanningState, TaskEvidenceTaskState, TaskVerificationCurrentState, TaskVerificationExecutionOutcome, TaskVerificationNotRunReason } from "./protocol";
 import { verificationBlockReason, verificationTarget, verificationTargetKey, type TaskVerificationRequests, type TaskVerificationTarget } from "./taskVerificationActions";
 
@@ -98,6 +99,11 @@ export function TaskVerificationView({ entry, task, snapshot, freshness, verific
               <dt>증거 크기</dt><dd>{fact.artifact.size_bytes} 바이트</dd>
             </>}
           </dl>
+          {current && fact?.artifact && host.receipt && <EvidencePreviewButton key={host.receipt.event_id} target={{
+            kind: "host", task_id: task.scope.task_id, criterion_id: entry.criterion.id,
+            scope_id: task.scope.scope_id, revision: task.scope.acceptance_revision,
+            event_id: host.receipt.event_id, sha256: fact.artifact.sha256,
+          }} />}
         </details>
       )}
     </section>

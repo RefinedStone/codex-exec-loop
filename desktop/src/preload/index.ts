@@ -243,6 +243,7 @@ const bridge: AkraBridge = {
     onOpen: (listener) => listen(IPC_CHANNELS.settingsOpen, listener),
     reportWorking: (working) => ipcRenderer.send(IPC_CHANNELS.reportWorking, working),
   },
+  openEvidencePreview: (target) => ipcRenderer.invoke(IPC_CHANNELS.evidencePreview, target),
   vaultRestore: {
     open: (target) => ipcRenderer.invoke(IPC_CHANNELS.vaultRestoreOpen, target),
     projectChanged: () => ipcRenderer.send(IPC_CHANNELS.vaultRestoreProjectChanged),

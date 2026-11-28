@@ -7,6 +7,10 @@ use crate::evidence::{TaskEvidenceArtifact, TaskEvidenceAttempt, TaskEvidenceTre
 /// Host-owned paths and byte capture. Callers independently guard the current lease
 /// and compare worktree snapshots before and after this bounded filesystem operation.
 pub trait TaskEvidenceArtifactPort: Send + Sync {
+    /// Read only the bounded sealed artifact named by a host receipt, never an incoming path.
+    fn preview_bytes(&self, _workspace: &str, _receipt: SealedEvidence<'_>) -> Result<Vec<u8>> {
+        anyhow::bail!("sealed evidence preview is unavailable")
+    }
     /// The only extra writable root exposed to this generation's worker sandbox.
     fn prepare_lease_incoming_root(
         &self,
@@ -54,3 +58,10 @@ pub trait TaskEvidenceArtifactPort: Send + Sync {
         anyhow::bail!("host verification artifact verification is unavailable")
     }
 }
+
+pub enum SealedEvidence<'a> {
+    Worker(&'a TaskEvidenceAttempt, &'a TaskEvidenceArtifact),
+    Host(&'a str, &'a TaskEvidenceArtifact),
+}
+
+pub const MAX_PREVIEW_BYTES: u64 = 16 * 1024;
