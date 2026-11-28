@@ -53,11 +53,27 @@ try {
     recordings.push(recording);
   }
   const sent = [];
-  const gateway = await startFakeGateway(endpoint, recordings, { appServer(method, params) {
-    if (method === "akra/context/manifest") return { result: { manifest: { id: "fixture-manifest" }, changed: false } };
+  const requestIds = [];
+  const sampleId = "a".repeat(64), oldId = "b".repeat(64), newId = "c".repeat(64), changedId = "d".repeat(64);
+  let changedLedger = false, dropAcknowledgment = false;
+  const gateway = await startFakeGateway(endpoint, recordings, { appServer(method, params, requestId) {
+    if (method === "akra/context/manifest") {
+      const path = params.paths[0];
+      const changed = changedLedger && path === "sample.txt";
+      const id = path === oldPath ? oldId : path === newPath ? newId : changed ? changedId : sampleId;
+      return { result: { manifest: { id, entries: [
+        { kind: "github", key: "fixture#1", selected: true, reason: "path", observedVersion: changed ? "v2" : null },
+        { kind: "github", key: "fixture#2", selected: false, reason: "explicit_exclude", observedVersion: "v1" },
+      ] }, changed: params.previousId !== undefined && params.previousId !== id, unverifiedCount: changed ? 0 : 1 } };
+    }
     if (method === "turn/start" || method === "turn/steer") {
       sent.push(params);
-      return { result: { turn: { id: "received-turn" }, turnId: "received-turn" } };
+      requestIds.push(requestId);
+      if (dropAcknowledgment) {
+        gateway.disconnectClients();
+        return null;
+      }
+      return { result: { turn: { id: "received-turn" }, turnId: params.expectedTurnId } };
     }
   } });
   try {
@@ -117,14 +133,24 @@ try {
     } finally { await other.close(); }
     await writeFile(file, "before\r\nchanged\r\nafter\r\n");
     await writeFile(join(root, oldPath), "later\n");
+    changedLedger = true;
     await windowScenario(async page => {
       const cards = page.getByTestId("file-attachment-card");
-      assert.equal(await cards.filter({ hasText: oldPath }).getByLabel("포함").isChecked(), false);
+      const oldCard = cards.filter({ hasText: oldPath });
+      assert.equal(await oldCard.getByLabel("포함").isChecked(), false);
+      await oldCard.getByText("요청에서 제외").waitFor();
       assert.equal(await page.getByTestId("composer-input").inputValue(), "review this");
-      await cards.filter({ hasText: oldPath }).getByLabel("포함").check();
+      await oldCard.getByLabel("포함").check();
       await page.getByTestId("composer-send").click();
-      const consent = cards.filter({ hasText: "sample.txt:2–2" }).getByLabel("이전 판 기준으로 보내기");
+      const sampleCard = cards.filter({ hasText: "sample.txt:2–2" });
+      const consent = sampleCard.getByLabel("이전 판 기준으로 보내기");
       await consent.waitFor();
+      const originalLedger = sampleCard.getByTestId("attachment-ledger").filter({ hasText: "버전 미확인 1" });
+      await originalLedger.locator("summary").click();
+      await originalLedger.getByText("fixture#2 · 제외 (explicit_exclude) · v1", { exact: false }).waitFor();
+      const currentLedger = sampleCard.getByTestId("attachment-ledger").filter({ hasText: "버전 미확인 0" });
+      await currentLedger.locator("summary").click();
+      await currentLedger.getByText("fixture#1 · 선택 (path) · v2", { exact: false }).waitFor();
       assert.equal(sent.length, 0);
       await consent.check();
       await cards.filter({ hasText: oldPath }).getByLabel("이전 판 기준으로 보내기").check();
@@ -138,6 +164,8 @@ try {
         [oldPath, "index_worktree", "old", 2, 3, "INDEX_ONLY\r\nold tail\r\n", "review old", true],
       ]);
       assert.deepEqual(payload.quotedContext.slice(1).map(i => i.diffExcerpt), ["+WORKTREE_ONLY\n+new tail", "-INDEX_ONLY\n-old tail"]);
+      assert.deepEqual(payload.quotedContext.map(item => item.manifestId), [sampleId, newId, oldId]);
+      assert.equal(preview.includes("fixture#"), false);
       if (process.env.AKRA_QA_SCREENSHOT) await page.screenshot({ path: process.env.AKRA_QA_SCREENSHOT });
       await page.getByTestId("composer-send").click();
       await page.getByTestId("file-message-preview").waitFor({ state: "detached" });
@@ -147,6 +175,38 @@ try {
       assert.equal(await cards.filter({ hasText: "sample.txt:1–1" }).getByLabel("포함").isChecked(), false);
       assert.equal((await git(["diff", "--cached"])).stdout, staged);
     });
-    console.log("PASS Electron scoped restart, explicit exclusion, stale consent, INDEX_ONLY/WORKTREE_ONLY ranges and byte-identical Gateway delivery");
+    await windowScenario(async page => {
+      const acknowledgment = page.getByTestId("attachment-receipt").and(page.locator('[data-status="acknowledged"]'));
+      await acknowledgment.locator("summary").click();
+      assert.deepEqual(await acknowledgment.locator("code").allTextContents(),
+        [String(requestIds[0]), sent[0].expectedTurnId ?? "received-turn", sampleId, newId, oldId]);
+      assert.equal(sent.length, 1);
+
+      const excluded = page.getByTestId("file-attachment-card").filter({ hasText: "sample.txt:1–1" });
+      await excluded.getByLabel("포함").check();
+      await page.getByTestId("composer-input").fill("do not replay this");
+      await page.getByTestId("composer-send").click();
+      await excluded.getByLabel("이전 판 기준으로 보내기").check();
+      dropAcknowledgment = true;
+      await page.getByTestId("composer-send").click();
+      await page.locator(".composer-area .error").filter({ hasText: /turn\/(start|steer): / }).waitFor();
+      await page.getByTestId("attachment-receipt").and(page.locator('[data-status="unknown"]')).waitFor();
+      assert.equal(sent.length, 2);
+      assert.deepEqual(JSON.parse(sent[1].input[0].text).quotedContext.map(item => item.manifestId), [sampleId]);
+    });
+    await windowScenario(async page => {
+      const receipts = page.getByTestId("attachment-receipt");
+      const unknown = receipts.and(page.locator('[data-status="unknown"]'));
+      await unknown.locator("summary").click();
+      assert.deepEqual(await unknown.locator("code").allTextContents(), [String(requestIds[1]), sampleId]);
+      assert.equal(await receipts.count(), 2);
+      assert.equal(await page.getByTestId("composer-input").inputValue(), "do not replay this");
+      const stored = await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith("akra.attachment-receipt.v1:"))
+        .map(key => JSON.parse(localStorage.getItem(key))));
+      assert.equal(stored.length, 2);
+      for (const receipt of stored) assert.deepEqual(Object.keys(receipt).sort(), ["manifestIds", "requestId", "scope", "turnId"]);
+      assert.equal(sent.length, 2);
+    });
+    console.log("PASS Electron scoped restart, stale/excluded/unverified ledger, byte-identical payload, ack and unknown receipts, no replay");
   } finally { await gateway.close(); }
 } finally { await rm(root, { recursive: true, force: true, maxRetries: 5 }); }

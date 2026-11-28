@@ -50,9 +50,10 @@ export class JsonRpcClient {
 
   constructor(private readonly sendText: (text: string) => void) {}
 
-  request<T>(method: string, params?: unknown): Promise<T> {
+  request<T>(method: string, params?: unknown, beforeSend?: (id: number) => void): Promise<T> {
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
+      beforeSend?.(id);
       this.pending.set(id, { method, resolve: resolve as (value: unknown) => void, reject });
       this.sendText(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
     });

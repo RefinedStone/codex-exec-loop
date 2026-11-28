@@ -11,6 +11,8 @@ import { HOME_DRAFT, setDraft as setDraftFor, setFileList, useUiStore } from "..
 import { currentFileTarget, reviewFiles, type ManifestRequest } from "./attachmentSource";
 import { AttachmentError, fileMessage, targetKey } from "./fileAttachment";
 import { FileAttachments } from "./FileAttachments";
+import { AttachmentReceipts } from "./AttachmentReceipts";
+import { recordAttachmentRequest } from "./attachmentReceipt";
 import { isSendKey, recallCursor } from "./composerKeys";
 import { slashCommandQuery, matchingSlashCommands } from "./slashCommands";
 import { type ActiveMention, activeMention, applyMention, sameMention } from "./fileMention";
@@ -35,7 +37,7 @@ export interface ComposerActions {
   queueMessage?(text: string): void;
   resumeQueuedMessages?(): void;
   /** `images` 는 첨부한 이미지의 data URL 이다 (#2838). */
-  sendMessage(text: string, images?: readonly string[]): Promise<string | void>;
+  sendMessage(text: string, images?: readonly string[], beforeSend?: (id: number) => void): Promise<string | void>;
   interrupt(): Promise<void>;
   /** 새 스레드를 만들고 첫 메시지를 보낸다. 사용자가 폴더 고르기를 취소하면 false 이다. */
   startThread(text: string): Promise<boolean>;
@@ -83,7 +85,6 @@ function ContextRing({ percent }: { percent: number }) {
 
 export function Composer({ actions, home = false, above }: { actions: ComposerActions; home?: boolean; above?: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
-  const [receipt, setReceipt] = useState<{ key: string; turn: string; ids: string[] } | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const connected = useDesktopStore((state) => state.connection?.phase === "connected");
   const transcript = useDesktopStore((state) => (home ? null : state.transcript));
@@ -93,7 +94,7 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
   const livePlan = inProgress ? (transcript?.turns.at(-1)?.plan ?? null) : null;
   const percent = contextPercent(transcript);
   // 초안은 화면 저장소에 둔다. 보기를 바꾸거나 업무 패널이 글을 넘겨도 같은 값을 본다.
-  const target = !home && actions.manifestRequest ? currentFileTarget() : null;
+  const target = !home && actions.manifestRequest ? currentFileTarget(false) : null;
   const legacyKey = home ? HOME_DRAFT : (transcript?.threadId ?? "");
   const draftKey = target ? targetKey(target) : legacyKey;
   const draft = useUiStore((state) => state.drafts[draftKey] ?? "");
@@ -220,10 +221,16 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
           }
           wire = fileMessage(text, reviewed);
         }
-        const turn = await actions.sendMessage(wire, images);
+        const attempt: { acknowledge?: (turnId: string) => void } = {};
+        const manifestIds = files?.filter(file => file.included).map(file => file.manifestId) ?? [];
+        const turn = await actions.sendMessage(wire, images, included ? requestId => {
+          attempt.acknowledge = recordAttachmentRequest(draftKey, manifestIds, requestId);
+        } : undefined);
         if (included && files) {
-          if (!turn) throw new AttachmentError("접수한 턴을 확인하지 못했습니다. 초안을 보존했습니다. 대화 기록을 확인하세요.");
-          setReceipt({ key: draftKey, turn, ids: files.filter(f => f.included).map(f => f.attachmentId) });
+          if (typeof turn !== "string" || !turn.trim() || !attempt.acknowledge) {
+            throw new AttachmentError("접수한 턴을 확인하지 못했습니다. 초안을 보존했습니다. 대화 기록을 확인하세요.");
+          }
+          attempt.acknowledge(turn);
         }
         if (included && files && files === useUiStore.getState().fileLists[draftKey]) setFileList(draftKey, files.filter(item => !item.included));
         setAttachments((current) => withoutSent(current, sent));
@@ -399,8 +406,7 @@ export function Composer({ actions, home = false, above }: { actions: ComposerAc
         {livePlan && livePlan.length > 0 && <PlanStrip steps={livePlan} />}
         {!connected && <p className="muted">연결이 끊겨 입력할 수 없습니다.</p>}
         {error && <p className="error">{error}</p>}
-        {receipt?.key === draftKey && <details><summary>첨부 {receipt.ids.length}개 전송 접수 (읽음 확인 아님)</summary>
-          <code>{target?.threadId} · {receipt.turn} · {receipt.ids.join(", ")}</code></details>}
+        {target && <AttachmentReceipts scope={draftKey} />}
         {memoryOnly && <p role="alert">이 창에만 보관됨: 저장 공간 또는 본문 한도(20,000자)를 확인하세요.</p>}
         {target && actions.manifestRequest && <FileAttachments key={draftKey} target={target} request={actions.manifestRequest}
           turnId={transcript?.turns.at(-1)?.id ?? null} disabled={disabled} />}

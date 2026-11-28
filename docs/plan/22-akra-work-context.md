@@ -181,4 +181,10 @@ recognize(주소의 호스트와 경로) -> 문서(kind, key, url, title_hint) �
 - `akra/context/setPreference {cwd, url, preference}`는 저장소 전체에 적용하는 explicit pin/exclude/automatic을 SQLite에서 원자적으로 교체한다. 고정은 최우선 선택, 제외는 자동 선택보다 우선, automatic은 override를 없앤다. 처음 고정한 문서는 명시적으로 저장소에도 연결하여 버전을 확인할 수 있고, 고정 해제는 발견 이력을 삭제하지 않는다. 로컬 운영자 요청이며 검증된 사람 승인이나 실행 권한을 새로 부여하지 않는다. 원격 호스트에는 로컬 장부를 공개하지 않는다.
 - 경로 32개/조상 256개 상한을 둔다. task/path 선택과 선호도 조회는 장부의 마지막 확인 버전을 읽으며 외부 서비스를 호출하지 않는다. 실제 갱신은 정확한 범위의 refreshScope에 맡긴다.
 - `akra context list --task-id T-1 --path src/a.rs --json`, `akra context show --kind github --key 'a/b#2' --task-id T-1 --json`, `akra context changes --task-id T-1 --json`: 같은 선택 계약을 사용한다. show는 하나의 메타데이터/원본 URI를 반환하고 본문은 기존 허용된 provider read로 선택해서 읽는다. changes는 선택된 후보 중 장부에서 확인한 버전 차이만 표시한다. `refresh`는 한 정확한 범위를 갱신하며 `preference pin|exclude|automatic --url ... --confirm true --json`은 명시적 선택 변경이다. --workspace로 다른 checkout을 지정할 수 있다. Gateway가 없으면 JSON 오류/exit 1이며 직접 장부를 열지 않는다. 기존 생성 skill에 읽기 명령 안내 한 줄만 추가한다.
-- #2825의 불변 handoff manifest, 실제 전달 기록, 발견/읽음 구분 강화는 여전히 별도다. 버전 확인을 문서 본문 읽기나 모델 전달의 증거로 보지 않는다.
+
+### Desktop 첨부 인계 접수 (#2825)
+
+- 파일/행 및 diff 피드백 첨부의 원래 manifest ID를 실제 `turn/start` 또는 `turn/steer` 입력에 보낸다. 장부의 문서 식별자·버전·선정 이유와 제외한 첨부는 요청에 넣지 않는다. 승인된 Vault 공유본의 별도 인계 정책은 건드리지 않는다.
+- 초안 카드는 원래 장부와 달라진 장부를 구별한다. 선택, 제외 이유, 관측 버전, 미확인 건수를 보여 준다. 동일 장부는 외부 최신성이나 읽음을 보증하지 않는다. 비교 실패 시 초안을 보존하고 보내지 않는다.
+- Desktop 프로필은 Gateway 주소·worktree·스레드 범위에 요청 ID, 실제 보낸 manifest ID, 접수된 턴 ID만 기록한다. 응답 전에는 턴 ID를 기록하지 않는다. 이 상태로 연결이 끊기거나 앱을 다시 시작하면 결과 불명으로 남고, 대화 이력이나 알림으로 성공을 추정하거나 자동으로 재전송하지 않는다.
+- 접수는 해당 RPC의 응답 확인일 뿐 모델의 읽음이 아니다. 새 manifest와 후속 전송으로 앞선 접수 기록을 바꾸지 않는다. 이 기록은 다른 클라이언트와 공유하지 않으며, 커널 인계 장부는 이 범위가 아니다.
