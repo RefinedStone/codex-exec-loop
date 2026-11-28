@@ -508,7 +508,7 @@ export class DesktopSession {
     if (this.readOnly && (method.startsWith("akra/providerCredentials/") || method.startsWith("akra/providers/"))) {
       return Promise.reject(new Error("원격 호스트에서는 로컬 업무 계정에 접근할 수 없습니다."));
     }
-    if (!["akra/kernel/extensions/list", "akra/kernel/extensions/call", "akra/kernel/extensions/attach", "akra/kernel/extensions/detach"].includes(method) && !GATEWAY_SERVICE_PREFIXES.some((prefix) => method.startsWith(prefix))) {
+    if (!["akra/kernel/extensions/list", "akra/kernel/extensions/call", "akra/kernel/extensions/attach", "akra/kernel/extensions/detach", "akra/conversationWorkspace/inventory"].includes(method) && !GATEWAY_SERVICE_PREFIXES.some((prefix) => method.startsWith(prefix))) {
       return Promise.reject(new Error(`${method} 는 패널이 쓸 수 있는 Gateway 요청이 아닙니다.`));
     }
     if (!this.connected) {
