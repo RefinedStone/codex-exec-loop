@@ -195,6 +195,36 @@ fn is_permanently_invalid_restart_candidate(error: &anyhow::Error) -> bool {
     missing_workspace || replaced_repository
 }
 impl RepositoryKernelRegistry {
+    /// Resolve existing authority only. A fleet read must never create an entry or retain a client.
+    pub(crate) fn fleet_attention(
+        &self,
+        workspace: &str,
+    ) -> Result<crate::adapter::inbound::kernel_protocol::FleetAttention> {
+        self.ensure_running()?;
+        let target = production::issue_automation_restart_target(workspace)?
+            .context("repository kernel identity unavailable")?;
+        let entry = self
+            .repositories
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&target.repository_key)
+            .cloned()
+            .context("repository kernel is not running")?;
+        let reader = entry
+            .kernel
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("repository kernel is transitioning"))?
+            .as_ref()
+            .context("repository kernel is not running")?
+            .host
+            .reader();
+        let (view, live) = reader.attention_view(Duration::from_secs(2))?;
+        let items = crate::composition::attention::project(&target.workspace_root, &view, live)?;
+        Ok(crate::adapter::inbound::kernel_protocol::FleetAttention {
+            kernel: target.repository_key,
+            items,
+        })
+    }
     /// Restore one discovered repository without creating a client. The registry is only a locator.
     pub(crate) fn restore_registered(
         &self,

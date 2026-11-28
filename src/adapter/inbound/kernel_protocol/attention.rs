@@ -17,6 +17,18 @@ use crate::domain::planning::{PriorityQueueTask, RuntimeProjection, TaskStatus};
 mod stored;
 pub(crate) use stored::{delivery_wait_items, terminal_turn_item};
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FleetAttentionRequest {
+    pub workspace: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct FleetAttention {
+    pub kernel: String,
+    pub items: Vec<AttentionItem>,
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -118,7 +130,23 @@ pub fn attention_items(
 
 /// These projections already belong to the planning authority. Do not infer
 /// awaiting-user from free-form skip text or mark ordinary idle work as attention.
-pub(super) fn planning_attention(projection: &RuntimeProjection) -> Vec<AttentionItem> {
+pub(crate) fn snapshot_attention(
+    planning: &RuntimeProjection,
+    threads: &[ThreadActivitySummary],
+    pr: Option<&PrValidationOperatorSummary>,
+) -> Vec<AttentionItem> {
+    let mut items = attention_items(
+        threads,
+        pr,
+        planning
+            .queue_projection()
+            .map_or(&[], |q| q.proposed_tasks.as_slice()),
+    );
+    items.extend(planning_attention(planning));
+    items
+}
+
+fn planning_attention(projection: &RuntimeProjection) -> Vec<AttentionItem> {
     let mut items = Vec::new();
     if let Some(reason) = projection.failure_reason() {
         items.push(planning_reason_item(

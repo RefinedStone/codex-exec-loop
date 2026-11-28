@@ -182,12 +182,24 @@ impl ParallelHostView {
 
 /// 클라이언트 입력함이다. 넣으면 커널 스레드를 깨운다 (plan 19 Q2-4). 커널 스레드는 core 입력함에서 기다린다.
 #[derive(Clone)]
-struct KernelInbox {
+pub(super) struct KernelInbox {
     inputs: Sender<KernelHostInput>,
     waker: CoreInputWaker,
 }
 
 impl KernelInbox {
+    pub(super) fn attention_view(
+        &self,
+        timeout: Duration,
+    ) -> anyhow::Result<(KernelHostView, LiveAttentionSources)> {
+        let (reply, answer) = mpsc::channel();
+        self.send(KernelHostInput::Query { reply })?;
+        let view = wait_reply(&answer, timeout)?;
+        let (reply, answer) = mpsc::channel();
+        self.send(KernelHostInput::LiveAttention { reply })?;
+        let live = wait_reply(&answer, timeout)?.map_err(anyhow::Error::msg)?;
+        Ok((view, live))
+    }
     fn send(&self, input: KernelHostInput) -> Result<(), KernelCallError> {
         self.inputs
             .send(input)
@@ -297,6 +309,9 @@ pub(crate) struct KernelHost {
 }
 
 impl KernelHost {
+    pub(super) fn reader(&self) -> KernelInbox {
+        self.inbox.clone()
+    }
     /// Observe an existing host without attaching a client or starting a repository.
     pub(crate) fn observe(&self, timeout: Duration) -> Result<KernelHostView, KernelCallError> {
         let (reply, answer) = mpsc::channel();

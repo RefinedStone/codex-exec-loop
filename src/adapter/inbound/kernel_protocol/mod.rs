@@ -58,7 +58,9 @@ pub use spec::{KernelSpec, describe};
 
 mod attention;
 pub use attention::{AttentionCause, AttentionItem, AttentionSubject, AttentionSubjectKind};
-pub(crate) use attention::{delivery_wait_items, issue_decision_attention, terminal_turn_item};
+pub(crate) use attention::{
+    delivery_wait_items, issue_decision_attention, snapshot_attention, terminal_turn_item,
+};
 
 mod task_acceptance;
 pub use task_acceptance::{TaskAcceptanceChannel, TaskAcceptanceCriterion};
@@ -109,6 +111,8 @@ pub const METHOD_CONFIRMATION_REGISTER: &str = KernelMethodKind::ConfirmationReg
 pub const METHOD_CONFIRMATION_PREPARE: &str = KernelMethodKind::ConfirmationPrepare.name();
 pub const METHOD_COMMAND_CONFIRMED: &str = KernelMethodKind::CommandConfirmed.name();
 pub const METHOD_QUERY: &str = KernelMethodKind::Query.name();
+pub(crate) const METHOD_FLEET_ATTENTION: &str = KernelMethodKind::FleetAttention.name();
+pub(crate) use attention::{FleetAttention, FleetAttentionRequest};
 pub(crate) const METHOD_EXTENSION_ATTACH: &str = KernelMethodKind::ExtensionAttach.name();
 pub(crate) const METHOD_EXTENSION_DETACH: &str = KernelMethodKind::ExtensionDetach.name();
 pub(crate) const METHOD_EXTENSION_LIST: &str = KernelMethodKind::ExtensionList.name();
@@ -143,6 +147,8 @@ spec_names! {
             "Verify the exact main-approved action before sending the unchanged logical command. A normal command with the same key can recover a lost receipt without proof.";
         Query => "akra/kernel/query",
             "Read one current value or a page of the decision log.";
+        FleetAttention => "akra/kernel/fleet_attention",
+            "Read one existing repository kernel's attention without attaching or starting it. An unavailable repository is an error, not an empty list.";
         Event => "akra/kernel/event",
             "Notification from the kernel to an attached client.";
         ExtensionAttach => "akra/kernel/extensions/attach",
@@ -2250,20 +2256,13 @@ impl KernelQuery {
             }
             Self::Parallel {} => KernelQueryAnswer::Parallel(ParallelState::from_core(parallel)),
             Self::Attention {} => KernelQueryAnswer::Attention {
-                items: {
-                    let planning = &snapshot.planning_parallel.planning_runtime;
-                    let mut items = attention::attention_items(
-                        threads,
-                        parallel
-                            .supervisor
-                            .and_then(|supervisor| supervisor.pr_validation.as_ref()),
-                        planning
-                            .queue_projection()
-                            .map_or(&[], |queue| queue.proposed_tasks.as_slice()),
-                    );
-                    items.extend(attention::planning_attention(planning));
-                    items
-                },
+                items: snapshot_attention(
+                    &snapshot.planning_parallel.planning_runtime,
+                    threads,
+                    parallel
+                        .supervisor
+                        .and_then(|supervisor| supervisor.pr_validation.as_ref()),
+                ),
             },
             Self::History { after, .. } => {
                 KernelQueryAnswer::History(history.unwrap_or_else(|| KernelEventPage {

@@ -242,6 +242,17 @@
       }
     },
     {
+      "name": "akra/kernel/fleet_attention",
+      "kind": "request",
+      "summary": "Read one existing repository kernel's attention without attaching or starting it. An unavailable repository is an error, not an empty list.",
+      "params": {
+        "$ref": "#/$defs/FleetAttentionRequest"
+      },
+      "result": {
+        "$ref": "#/$defs/FleetAttention"
+      }
+    },
+    {
       "name": "akra/kernel/event",
       "kind": "notification",
       "summary": "Notification from the kernel to an attached client.",
@@ -8195,6 +8206,36 @@
         "line",
         "severity",
         "body"
+      ],
+      "type": "object"
+    },
+    "FleetAttention": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/AttentionItem"
+          },
+          "type": "array"
+        },
+        "kernel": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kernel",
+        "items"
+      ],
+      "type": "object"
+    },
+    "FleetAttentionRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "workspace": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace"
       ],
       "type": "object"
     },
