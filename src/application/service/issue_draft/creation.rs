@@ -29,7 +29,10 @@ pub(super) fn preview(
     } else {
         readiness::inspect(
             service.automation_policy.as_deref(),
-            &record.repository.project_scope.workspace_dir,
+            (
+                &record.repository.project_scope.workspace_dir,
+                record.repository.provider,
+            ),
             &conventions,
             &request.text,
             &request.expected_labels,

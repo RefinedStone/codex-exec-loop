@@ -13,7 +13,7 @@ use crate::domain::issue_automation::triage::{
 
 pub(super) fn inspect(
     policy_service: Option<&IssueAutomationPolicyService>,
-    workspace: &str,
+    (workspace, provider): (&str, crate::domain::issue_work::IssueProvider),
     conventions: &Conventions,
     text: &IssueDraftText,
     expected_labels: &[String],
@@ -58,7 +58,7 @@ pub(super) fn inspect(
         Err(reason) => return blocked(reason),
     };
     let result = match inspect_issue_readiness(IssueReadinessInput {
-        provider: crate::domain::issue_work::IssueProvider::GitHub,
+        provider,
         shared_copy: &shared_copy,
         requirements: &requirements,
         policy: &resolved.policy,

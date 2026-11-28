@@ -9,13 +9,7 @@ export const ISSUE_METHOD = {
   abandon: "akra/issue/abandon",
 } as const;
 
-export interface IssueDraftTarget {
-  /** 프로젝트의 작업 폴더이다. 이슈 정책과 템플릿을 여기서 읽는다. */
-  cwd: string;
-  owner: string;
-  repository: string;
-  number: number;
-}
+export type IssueDraftTarget = { readonly cwd:string; readonly owner:string; readonly repository:string; readonly number:number } | { readonly cwd:string; readonly jira:import("../../shared/bridge").JiraDraftCoordinate; readonly displayKey:string };
 
 export type IssueDraftField = "title" | "body";
 export type IssueSpanClass = "secret" | "name" | "path" | "log";

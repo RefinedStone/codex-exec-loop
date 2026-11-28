@@ -40,7 +40,7 @@ function ConnectForm({ initial, busy, supported, connect }: {
   );
 }
 
-function IssueRow({ issue, jira, onHandOff }: { issue: JiraIssue; jira: JiraBridge; onHandOff(issue: JiraIssue): Promise<void> }) {
+function IssueRow({ issue, jira, onEdit, onHandOff }: { issue: JiraIssue; jira: JiraBridge; onEdit?: (issue:JiraIssue) => Promise<void>; onHandOff(issue: JiraIssue): Promise<void> }) {
   const { busy, error, run } = useAction();
   return (
     <li className="work-item" data-testid="jira-issue">
@@ -50,13 +50,14 @@ function IssueRow({ issue, jira, onHandOff }: { issue: JiraIssue; jira: JiraBrid
         {issue.issueType && <span className="muted">{issue.issueType}</span>}
         {issue.priority && <span className="muted">· {issue.priority}</span>}
         <button type="button" onClick={() => void run(() => onHandOff(issue))} disabled={busy} data-testid="jira-hand-off">{busy ? "읽는 중…" : "스레드로 넘기기"}</button>
+        {onEdit && <button type="button" disabled={busy} onClick={() => void run(() => onEdit(issue))}>마스킹 초안 열기</button>}
       </div>
       {error && <div className="error">{error}</div>}
     </li>
   );
 }
 
-export function JiraPanel({ jira, onHandOff }: { jira: JiraBridge; onHandOff(issue: JiraIssue): Promise<void> }) {
+export function JiraPanel({ jira, onEdit, onHandOff }: { jira: JiraBridge; onEdit?: (issue:JiraIssue) => Promise<void>; onHandOff(issue: JiraIssue): Promise<void> }) {
   const connection = useProviderConnection(jira);
   const { state, busy, error, run } = connection;
   const active = state?.activeConnection;
@@ -118,7 +119,7 @@ export function JiraPanel({ jira, onHandOff }: { jira: JiraBridge; onHandOff(iss
       {active && list.phase === "loaded" && <div className="work-scroll"><section className="work-section">
         <h3>나에게 배정된 티켓 ({list.summary.issues.length})</h3>
         {list.summary.issues.length === 0 && <p className="muted">끝나지 않은 티켓이 없습니다.</p>}
-        <ul>{list.summary.issues.map(issue => <IssueRow key={issue.key} issue={issue} jira={jira} onHandOff={onHandOff} />)}</ul>
+        <ul>{list.summary.issues.map(issue => <IssueRow key={issue.key} issue={issue} jira={jira} onEdit={onEdit} onHandOff={onHandOff} />)}</ul>
       </section></div>}
     </aside>
   );

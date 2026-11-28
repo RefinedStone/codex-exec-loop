@@ -16,6 +16,7 @@ pub(crate) mod issue_collection;
 pub(crate) mod issue_confirmation;
 pub(crate) mod issue_observer;
 pub(crate) mod issue_work_execution;
+mod jira_draft;
 pub(crate) mod kernel_command_execution;
 pub(crate) mod kernel_event_recorder;
 pub(crate) mod kernel_extensions;

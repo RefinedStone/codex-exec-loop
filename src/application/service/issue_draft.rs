@@ -1,5 +1,6 @@
 mod ai_copy;
 mod creation;
+pub mod jira;
 mod readiness;
 
 use crate::application::port::inbound::issue_draft_port::*;
@@ -74,6 +75,7 @@ pub struct IssueDraftService {
     snapshot: Arc<dyn IssueSnapshotPort>,
     publisher: Arc<IssueJournaledPublishService>,
     creator: Option<Arc<IssueCreationService>>,
+    jira: Option<jira::JiraDraftRouter>,
     automation_policy: Option<Arc<IssueAutomationPolicyService>>,
     code_validators: Arc<dyn IssueCodeValidatorRunnerPort>,
     validations: IssueCodeValidationRegistry,
@@ -82,6 +84,7 @@ pub struct IssueDraftService {
 
 /// 프로젝트의 지금 규약이다.
 struct Conventions {
+    jira_fields: Option<crate::application::port::outbound::issue_field_requirement_port::IssueFieldRequirementResponse>,
     policy: IssuePolicy,
     policy_version: String,
     template: IssueTemplateResolution,
@@ -102,11 +105,17 @@ impl IssueDraftService {
             snapshot,
             publisher: publisher.into(),
             creator: None,
+            jira: None,
             automation_policy: None,
             code_validators,
             validations: IssueCodeValidationRegistry::default(),
             vault_unlock,
         }
+    }
+
+    pub fn with_jira(mut self, router: jira::JiraDraftRouter) -> Self {
+        self.jira = Some(router);
+        self
     }
 
     pub fn with_creation(mut self, creator: Arc<IssueCreationService>) -> Self {
@@ -131,6 +140,7 @@ impl IssueDraftService {
             .template
             .resolve(cwd, policy.convention.template.as_deref());
         Ok(Conventions {
+            jira_fields: None,
             policy_version: policy_version(&policy),
             policy,
             template,
@@ -149,24 +159,54 @@ impl IssueDraftService {
         Ok(target)
     }
 
+    fn jira_endpoints(&self, target: &JiraDraftCoordinate) -> Result<jira::JiraDraftEndpoints> {
+        self.jira
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Jira drafts are unavailable"))?(target)
+    }
+
     fn resolve(&self, target: &IssueDraftTarget) -> Result<IssueSnapshotResponse> {
-        self.snapshot.resolve(IssueSnapshotResolveRequest {
-            locator: IssueLocator {
-                owner: target.owner.clone(),
-                repository: target.repository.clone(),
-                number: target.number,
-            },
-            project_scope: IssueProjectScope {
-                workspace_dir: target.cwd.clone(),
-            },
-        })
+        match &target.location {
+            IssueDraftLocation::GitHub {
+                owner,
+                repository,
+                number,
+            } => self.snapshot.resolve(IssueSnapshotResolveRequest {
+                locator: IssueLocator {
+                    owner: owner.clone(),
+                    repository: repository.clone(),
+                    number: *number,
+                },
+                project_scope: IssueProjectScope {
+                    workspace_dir: target.cwd.clone(),
+                },
+            }),
+            IssueDraftLocation::Jira { jira } => self.jira_endpoints(jira)?.snapshot.read(
+                crate::application::port::outbound::issue_snapshot_port::IssueSnapshotReadRequest {
+                    issue: jira.reference(&target.cwd),
+                },
+            ),
+        }
+    }
+    fn publisher_for(
+        &self,
+        target: &IssueDraftTarget,
+    ) -> Result<Arc<IssueJournaledPublishService>> {
+        match &target.location {
+            IssueDraftLocation::GitHub { .. } => Ok(self.publisher.clone()),
+            IssueDraftLocation::Jira { jira } => Ok(self.jira_endpoints(jira)?.publisher),
+        }
     }
 
     /// 이 이슈의 가장 최근 의도이다. 결과를 모르는 의도는 먼저 원격과 맞춘다.
-    fn latest_intent(&self, cwd: &str, issue: &IssueReference) -> Result<Option<IssueDraftIntent>> {
+    fn latest_intent(
+        &self,
+        target: &IssueDraftTarget,
+        issue: &IssueReference,
+    ) -> Result<Option<IssueDraftIntent>> {
         Ok(self
-            .publisher
-            .reconcile(cwd)?
+            .publisher_for(target)?
+            .reconcile_issue(&target.cwd, issue)?
             .into_iter()
             .rfind(|record| record.issue.same_remote_issue(issue))
             .map(|record| intent(&self.with_restore_link(record))))
@@ -201,7 +241,7 @@ impl IssueDraftPort for IssueDraftService {
         approval: IssueDraftApproval,
     ) -> Result<PreparedIssueDraftReview> {
         let target = self.scoped_target(request.target)?;
-        let conventions = self.conventions(&target.cwd)?;
+        let conventions = self.target_conventions(&target)?;
         let (preview, passed) = evaluate(&conventions, &request.text, None);
         let (
             IssueDraftPreview::Ready {
@@ -271,7 +311,7 @@ impl IssueDraftPort for IssueDraftService {
 
     fn open(&self, target: IssueDraftTarget) -> Result<IssueDraftOpened> {
         let target = self.scoped_target(target)?;
-        let conventions = self.conventions(&target.cwd)?;
+        let conventions = self.target_conventions(&target)?;
         let remote = self.resolve(&target)?;
         let publish = conventions
             .policy
@@ -280,7 +320,7 @@ impl IssueDraftPort for IssueDraftService {
             title: remote.raw_fields.expose_title().to_string(),
             body: remote.raw_fields.expose_body().to_string(),
             edit_basis: remote.comparison_basis.field_hash,
-            template: template_view(&conventions.template),
+            template: jira::template(&conventions),
             required_sections: conventions.policy.convention.required_sections.clone(),
             span_actions: IssueDraftSpanActions {
                 secret: publish.secret,
@@ -288,19 +328,29 @@ impl IssueDraftPort for IssueDraftService {
                 path: publish.path,
                 log: publish.log,
             },
-            intent: self.latest_intent(&target.cwd, &remote.issue)?,
+            intent: self.latest_intent(&target, &remote.issue)?,
         })
     }
 
     fn preview(&self, request: IssueDraftPreviewRequest) -> Result<IssueDraftPreview> {
         let target = self.scoped_target(request.target)?;
-        let conventions = self.conventions(&target.cwd)?;
+        let conventions = self.target_conventions(&target)?;
         let mut preview = evaluate(&conventions, &request.text, None).0;
         readiness::attach(
             &mut preview,
             readiness::inspect(
                 self.automation_policy.as_deref(),
-                &target.cwd,
+                (
+                    &target.cwd,
+                    match &target.location {
+                        IssueDraftLocation::GitHub { .. } => {
+                            crate::domain::issue_work::IssueProvider::GitHub
+                        }
+                        IssueDraftLocation::Jira { .. } => {
+                            crate::domain::issue_work::IssueProvider::Jira
+                        }
+                    },
+                ),
                 &conventions,
                 &request.text,
                 &request.expected_labels,
@@ -312,7 +362,7 @@ impl IssueDraftPort for IssueDraftService {
     fn publish(&self, request: IssueDraftPublishRequest) -> Result<IssueDraftPublished> {
         let validation = self.validations.start(request.validation_id.as_deref())?;
         let target = self.scoped_target(request.target)?;
-        let conventions = self.conventions(&target.cwd)?;
+        let conventions = self.target_conventions(&target)?;
         let (preview, passed) = evaluate(
             &conventions,
             &request.text,
@@ -327,27 +377,29 @@ impl IssueDraftPort for IssueDraftService {
         let vault_key = (!restorable.is_empty() && !request.shared_copy_only)
             .then(|| self.vault_unlock.sealing_key().ok())
             .flatten();
-        let outcome = self.publisher.publish(IssueJournaledPublishRequest {
-            publish: IssueApprovedPublishRequest {
-                issue: issue.clone(),
-                validated,
-                approval: IssuePublishApproval {
-                    write: IssueWriteApproval {
-                        issue,
-                        operation: IssueWriteOperation::Body,
+        let outcome = self
+            .publisher_for(&target)?
+            .publish(IssueJournaledPublishRequest {
+                publish: IssueApprovedPublishRequest {
+                    issue: issue.clone(),
+                    validated,
+                    approval: IssuePublishApproval {
+                        write: IssueWriteApproval {
+                            issue,
+                            operation: IssueWriteOperation::Body,
+                        },
+                        shared_copy_hash: request.approval.shared_copy_hash,
+                        policy_version: request.approval.policy_version,
+                        template_version: request.approval.template_version,
                     },
-                    shared_copy_hash: request.approval.shared_copy_hash,
-                    policy_version: request.approval.policy_version,
-                    template_version: request.approval.template_version,
+                    edit_basis: request.edit_basis,
+                    policy_version: conventions.policy_version,
+                    template_version: conventions.template.version().map(str::to_string),
                 },
-                edit_basis: request.edit_basis,
-                policy_version: conventions.policy_version,
-                template_version: conventions.template.version().map(str::to_string),
-            },
-            restorable,
-            vault_key,
-            shared_copy_only: request.shared_copy_only,
-        })?;
+                restorable,
+                vault_key,
+                shared_copy_only: request.shared_copy_only,
+            })?;
         Ok(match outcome {
             IssueJournaledPublishOutcome::Confirmed(record) => IssueDraftPublished::Confirmed {
                 intent: intent(&self.with_restore_link(record)),
@@ -376,7 +428,7 @@ impl IssueDraftPort for IssueDraftService {
     fn recheck(&self, target: IssueDraftTarget) -> Result<Option<IssueDraftIntent>> {
         let target = self.scoped_target(target)?;
         let issue = self.resolve(&target)?.issue;
-        self.latest_intent(&target.cwd, &issue)
+        self.latest_intent(&target, &issue)
     }
 
     fn abandon(&self, cwd: &str, intent_id: &str) -> Result<IssueDraftIntent> {
@@ -554,7 +606,7 @@ fn byte_offset(text: &str, utf16_offset: usize) -> Option<usize> {
 
 /// 검증기의 입력이다. 템플릿을 읽지 못했으면 `None` 이다: 검증기가 없고 게시를 막는다.
 fn requirements(conventions: &Conventions) -> Option<IssueRequirements> {
-    let template_fields = match &conventions.template {
+    let mut template_fields = match &conventions.template {
         IssueTemplateResolution::NotConfigured => Vec::new(),
         IssueTemplateResolution::Resolved(convention)
             if !convention.unsupported_required_inputs.is_empty() =>
@@ -583,6 +635,12 @@ fn requirements(conventions: &Conventions) -> Option<IssueRequirements> {
         | IssueTemplateResolution::Unreadable { .. }
         | IssueTemplateResolution::Invalid { .. } => return None,
     };
+    if let Some(fields) = &conventions.jira_fields {
+        if !fields.unsupported_required_fields.is_empty() {
+            return None;
+        }
+        template_fields.extend(fields.required_fields.iter().cloned());
+    }
     Some(IssueRequirements {
         template_fields,
         required_sections: conventions.policy.convention.required_sections.clone(),
@@ -916,9 +974,11 @@ mod tests {
     fn target() -> IssueDraftTarget {
         IssueDraftTarget {
             cwd: CWD.to_string(),
-            owner: "sample".to_string(),
-            repository: "widgets".to_string(),
-            number: 7,
+            location: IssueDraftLocation::GitHub {
+                owner: "sample".to_string(),
+                repository: "widgets".to_string(),
+                number: 7,
+            },
         }
     }
 
