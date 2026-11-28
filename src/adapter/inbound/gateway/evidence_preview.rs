@@ -1,4 +1,6 @@
-use crate::application::service::task_evidence::preview::PreviewTarget;
+use crate::application::port::inbound::task_evidence_query_port::{
+    PreviewTarget, TaskEvidenceQueryPort,
+};
 use crate::domain::planning::evidence::TaskEvidenceError;
 use std::io::{Read, Write};
 

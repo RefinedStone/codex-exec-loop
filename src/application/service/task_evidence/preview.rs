@@ -1,4 +1,5 @@
 use super::*;
+use crate::application::port::inbound::task_evidence_query_port::{PreviewKind, PreviewTarget};
 use crate::domain::issue_masking::{IssueTextField, plan_issue_masking};
 use crate::domain::issue_policy::{IssueDisclosureTarget, IssuePolicy};
 use crate::domain::issue_secret_spans::secret_spans;
@@ -6,28 +7,8 @@ use akra_verification::ports::task_evidence_artifact_port::SealedEvidence;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum PreviewKind {
-    Worker,
-    Host,
-}
-
-/// A private helper request. No pathname, byte limit, content or actor can be supplied.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PreviewTarget {
-    pub task_id: String,
-    pub criterion_id: String,
-    pub scope_id: String,
-    pub revision: u64,
-    pub event_id: String,
-    pub sha256: String,
-    pub kind: PreviewKind,
-}
-
 impl TaskEvidenceService {
-    pub(crate) fn sanitized_preview(&self, target: &PreviewTarget) -> Result<String> {
+    pub(super) fn preview_text(&self, target: &PreviewTarget) -> Result<String> {
         let task = self.current_criterion(
             &target.task_id,
             &target.criterion_id,

@@ -1,7 +1,7 @@
 use crate::application::port::inbound::task_evidence_query_port::{
-    TaskCriterionEvidenceProjection, TaskCriterionWaiverProjection, TaskEvidencePlanningSnapshot,
-    TaskEvidenceQueryPort, TaskEvidenceRecordProjection, TaskEvidenceSourceKind,
-    TaskEvidenceSourceProjection, TaskEvidenceTaskProjection,
+    PreviewTarget, TaskCriterionEvidenceProjection, TaskCriterionWaiverProjection,
+    TaskEvidencePlanningSnapshot, TaskEvidenceQueryPort, TaskEvidenceRecordProjection,
+    TaskEvidenceSourceKind, TaskEvidenceSourceProjection, TaskEvidenceTaskProjection,
 };
 use crate::application::port::outbound::task_evidence_repository_port::TaskEvidenceStoredSnapshot;
 use crate::domain::planning::evidence::{
@@ -12,6 +12,10 @@ use super::verification::VerificationEnvironment;
 use super::*;
 
 impl TaskEvidenceQueryPort for TaskEvidenceService {
+    fn sanitized_preview(&self, target: &PreviewTarget) -> Result<String> {
+        self.preview_text(target)
+    }
+
     fn planning_snapshot(
         &self,
         query: &TaskEvidenceSnapshotQuery,
