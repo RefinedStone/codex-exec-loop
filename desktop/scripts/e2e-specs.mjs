@@ -4,6 +4,7 @@ export const MANUAL_E2E_SPECS = new Map([
   ["browserBridge.mjs", "needs AKRA_GATEWAY_BIN to point to a built native gateway"],
   ["storage-service-roundtrip.mjs", "needs AKRA_STORAGE_FIXTURE_BIN to point to a compiled Rust library test executable"],
   ["thread-fork-native.mjs", "needs AKRA_CODEX_ENTRY; uses two real app-servers and a disposable synthetic CODEX_HOME"],
+  ["thread-fork-gateway.mjs", "needs Windows Electron, WSL, and a built Linux production Gateway"],
   ["workspace-native.mjs", "runs with Bun; needs AKRA_CODEX_ENTRY and AKRA_WORKSPACE_FIXTURE_BIN"],
 ]);
 
