@@ -340,7 +340,17 @@ impl IssueDraftPort for IssueDraftService {
             &mut preview,
             readiness::inspect(
                 self.automation_policy.as_deref(),
-                &target.cwd,
+                (
+                    &target.cwd,
+                    match &target.location {
+                        IssueDraftLocation::GitHub { .. } => {
+                            crate::domain::issue_work::IssueProvider::GitHub
+                        }
+                        IssueDraftLocation::Jira { .. } => {
+                            crate::domain::issue_work::IssueProvider::Jira
+                        }
+                    },
+                ),
                 &conventions,
                 &request.text,
                 &request.expected_labels,

@@ -17,6 +17,7 @@ use crate::domain::issue_secret_spans::secret_spans;
 pub(super) struct AutomationFiles {
     pub(super) policy: Mutex<String>,
     pub(super) workspaces: Mutex<Vec<String>>,
+    project_policy: Mutex<Option<String>>,
 }
 
 impl IssueAutomationPolicySourcePort for AutomationFiles {
@@ -26,7 +27,7 @@ impl IssueAutomationPolicySourcePort for AutomationFiles {
 
     fn load_project_policy_toml(&self, workspace: &str) -> Result<Option<String>> {
         self.workspaces.lock().unwrap().push(workspace.to_owned());
-        Ok(None)
+        Ok(self.project_policy.lock().unwrap().clone())
     }
 }
 
@@ -37,6 +38,7 @@ pub(super) fn wire(
     let source = Arc::new(AutomationFiles {
         policy: Mutex::new(policy.to_owned()),
         workspaces: Mutex::new(Vec::new()),
+        project_policy: Mutex::new(None),
     });
     (
         service.with_automation_policy(Arc::new(IssueAutomationPolicyService::new(source.clone()))),
@@ -150,6 +152,70 @@ labels_any = ["docs"]
     ] {
         assert!(!json.contains(&format!("\"{forbidden}\"")));
     }
+}
+
+#[test]
+fn jira_edit_preview_uses_its_provider_for_automation_readiness() {
+    use crate::application::port::outbound::issue_field_requirement_port::{
+        IssueFieldRequirementPort, IssueFieldRequirementRequest, IssueFieldRequirementResponse,
+    };
+    use crate::domain::provider_credentials::{ConnectionRef, Provider};
+    struct NoRequiredFields;
+    impl IssueFieldRequirementPort for NoRequiredFields {
+        fn read_requirements(
+            &self,
+            _: IssueFieldRequirementRequest,
+        ) -> Result<IssueFieldRequirementResponse> {
+            Ok(IssueFieldRequirementResponse::default())
+        }
+    }
+    let fixture = fixture(false);
+    *fixture.files.policy.lock().unwrap() = String::new();
+    let reader = fixture.service.snapshot.clone();
+    let publisher = fixture.service.publisher.clone();
+    let (service, policy) = wire(
+        fixture.service.with_jira(Arc::new(move |_| {
+            Ok(jira::JiraDraftEndpoints {
+                snapshot: reader.clone(),
+                publisher: publisher.clone(),
+                requirements: Arc::new(NoRequiredFields),
+            })
+        })),
+        "[binding.github]\nmode='observe'\n",
+    );
+    let mut selected = target();
+    selected.location = IssueDraftLocation::Jira {
+        jira: JiraDraftCoordinate {
+            connection: ConnectionRef {
+                profile_id: "a".repeat(64),
+                provider: Provider::Jira,
+                connection_id: "c".repeat(32),
+                revision: 1,
+            },
+            cloud_id: "cloud-one".into(),
+            project_id: "10000".into(),
+            issue_id: "10001".into(),
+        },
+    };
+    let preview = || {
+        service
+            .preview(IssueDraftPreviewRequest {
+                target: selected.clone(),
+                text: current_text("## 완료 기준\n- Jira 상태 확인"),
+                expected_labels: vec![],
+            })
+            .unwrap()
+    };
+    assert_eq!(
+        assessed(&preview()).effective_mode,
+        IssueAutomationAutonomy::Off
+    );
+    // A user policy grants authority; only the workspace can select its Jira binding.
+    *policy.project_policy.lock().unwrap() = Some("[binding.jira]\nsite_url='https://fixture.atlassian.net'\ncloud_id='cloud-one'\nproject_id='10000'\nexpected_account_id='account-one'\njql='statusCategory != Done'\nmode='observe'\n".into());
+    assert_eq!(
+        assessed(&preview()).effective_mode,
+        IssueAutomationAutonomy::Observe
+    );
 }
 
 #[test]
