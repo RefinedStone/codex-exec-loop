@@ -1,6 +1,7 @@
 import "./storage.css";
 import { useEffect, useRef, useState } from "react";
 import type { RegisteredPanelProps } from "../extensions/registry";
+import { threadDraftKey } from "../conversation/attachmentSource";
 import { setDraft, toast, useUiStore } from "../session/uiStore";
 import { clearStorageEvidence, useStorageEvidence } from "./storageEvidence";
 import { formatBytes, formatRatio } from "./storageNumbers";
@@ -134,15 +135,16 @@ export default function StoragePanel({ call, epoch, scopeKey, threadId, enabled 
   const createShare = async () => {
     const life = shareLifetime.current;
     if (!preview || !threadId || preview.thread_id !== threadId) return;
+    const draftKey = threadDraftKey(threadId);
     setSharing(true);
     try {
       const value = await call<StorageGrant>("share_create", { preview_id: preview.id, thread_id: threadId });
-      if (shareLifetime.current !== life || value.thread_id !== threadId) {
+      if (shareLifetime.current !== life || value.thread_id !== threadId || threadDraftKey(threadId) !== draftKey) {
         void call("share_revoke", { grant_id: value.id }).catch(() => undefined);
         return;
       }
-      const existing = useUiStore.getState().drafts[threadId] ?? "";
-      setDraft(threadId, `${existing}${existing ? "\n\n" : ""}${value.prompt}`);
+      const existing = useUiStore.getState().drafts[draftKey] ?? "";
+      setDraft(draftKey, `${existing}${existing ? "\n\n" : ""}${value.prompt}`);
       setGrant(value); setPreview(null);
       toast("선택한 대화의 입력창에 공유 참조를 넣었습니다. 내용을 확인하고 보내세요.");
     } catch (error) { if (shareLifetime.current === life) model.setError(String(error)); }
