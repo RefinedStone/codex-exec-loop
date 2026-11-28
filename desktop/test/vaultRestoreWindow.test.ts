@@ -1,5 +1,8 @@
 // Electron 수명 이벤트만 합성한다. native 승인·키 저장소·모델은 실행하지 않는다.
 import { EventEmitter } from "node:events";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { BrowserWindow } from "electron";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VAULT_RESTORE_CHANNELS, type VaultRestoreTarget, type VaultRestoreHold } from "../src/shared/vaultRestore";
@@ -37,8 +40,10 @@ class FakeWindow extends EventEmitter {
 const allWindows: FakeWindow[] = [];
 const listeners = new Map<string, (event: unknown, ...args: unknown[]) => void>();
 const invocations = new Map<string, (event: unknown, ...args: unknown[]) => Promise<unknown>>();
+const saveDialog = vi.fn<(window: unknown, options: unknown) => Promise<{ canceled: boolean; filePath?: string }>>();
 vi.doMock("electron", () => ({
   BrowserWindow: FakeWindow,
+  dialog: { showSaveDialog: saveDialog },
   ipcMain: {
     on: (channel: string, listener: (event: unknown, ...args: unknown[]) => void) => listeners.set(channel, listener),
     handle: (channel: string, handler: (event: unknown, ...args: unknown[]) => Promise<unknown>) => invocations.set(channel, handler),
@@ -92,8 +97,46 @@ function send(window: FakeWindow, channel: string, ...args: unknown[]) {
 }
 async function microtasks(): Promise<void> { await Promise.resolve(); await Promise.resolve(); }
 
-beforeEach(() => { allWindows.length = 0; listeners.clear(); });
+beforeEach(() => { allWindows.length = 0; listeners.clear(); saveDialog.mockReset(); });
 afterEach(() => { for (const window of allWindows) window.close(); });
+
+it("does not produce an archive on dialog cancellation and never overwrites a file", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "vault-export-fixture-"));
+  try {
+    const targetPath = join(directory, "existing.json");
+    const newPath = join(directory, "new.json");
+    await writeFile(targetPath, "existing");
+    const archive = JSON.stringify({ formatVersion: 2, issue: TARGET.issue.issue_id });
+    const windows = new VaultRestoreWindows({
+      source: () => null, profileHold: () => null, preloadPath: "fixture", hidden: true, loadPage: vi.fn(),
+      inspectBackup: async () => ({ status: "rejected" }),
+      exportBackup: async (target) => target.issue.issue_id === TARGET.issue.issue_id
+        ? { archive, recoveryKey: "fixture-key" } : null,
+    });
+    const opener = new FakeWindow();
+    windows.open(opener as unknown as BrowserWindow, TARGET);
+    const window = allWindows.at(-1);
+    if (!window) throw new Error("Missing protected fixture window");
+    send(window, VAULT_RESTORE_CHANNELS.ready);
+    const handler = invocations.get(VAULT_RESTORE_CHANNELS.backupExport);
+    if (!handler) throw new Error("Missing export IPC");
+    const sender = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
+
+    saveDialog.mockResolvedValueOnce({ canceled: true, filePath: newPath });
+    expect(await handler(sender, latestGeneration(window))).toEqual({ status: "cancelled" });
+    expect(await readdir(directory)).toEqual(["existing.json"]);
+
+    saveDialog.mockResolvedValueOnce({ canceled: false, filePath: targetPath });
+    expect(await handler(sender, latestGeneration(window))).toEqual({ status: "save_failed" });
+    expect(await readFile(targetPath, "utf8")).toBe("existing");
+
+    saveDialog.mockResolvedValueOnce({ canceled: false, filePath: newPath });
+    expect(await handler(sender, latestGeneration(window))).toEqual({ status: "saved", recoveryKey: "fixture-key" });
+    expect(await readFile(newPath, "utf8")).toBe(archive);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 describe("dedicated Vault window lifetime", () => {
   it("does not prepare when the initial OS state is unknown, and does not auto-open when it becomes known", async () => {

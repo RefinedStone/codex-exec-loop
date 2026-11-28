@@ -7,10 +7,11 @@
 // - 복원본 채널의 요청은 보낸 webContents 가 이 창의 main frame 일 때만 받는다.
 // 화면 캡처 제외(`setContentProtection`)는 OS 가 지원할 때만 동작한다. 캡처를 막는다고 보장하지 않는다.
 import { BrowserWindow, ipcMain, type IpcMainEvent, type WebContents } from "electron";
+import { saveVaultBackup, type BackupExportSource } from "./vaultBackupExport";
 
 import { copyVaultRestoreTarget, type VaultRestoreTarget, type VaultRelockCause, type VaultRestoreHold, VAULT_RESTORE_CHANNELS } from "../shared/vaultRestore";
 import { VaultRestoreSession, type VaultRestoreSource } from "./vaultRestoreSession";
-import type { VaultBackupPreview } from "../shared/vaultRestore";
+import type { VaultBackupExport, VaultBackupPreview } from "../shared/vaultRestore";
 
 /** 복원본을 연 뒤 다시 잠글 때까지의 시간이다. */
 const VIEWING_SESSION_MS = 5 * 60_000;
@@ -22,6 +23,7 @@ interface Entry {
   session: VaultRestoreSession;
   openerId: number;
   targetKey: string;
+  target: VaultRestoreTarget;
   targetActive: boolean;
   /** 재로드·crash 뒤에는 일반 창의 새 open 요청으로 창을 다시 만든다. */
   rendererAvailable: boolean;
@@ -37,6 +39,7 @@ interface Entry {
 export interface VaultRestoreWindowsDeps {
   source: VaultRestoreSource;
   inspectBackup?(archive: Uint8Array, key: string, signal: AbortSignal): Promise<VaultBackupPreview>;
+  exportBackup?: BackupExportSource;
   profileHold(): VaultRestoreHold | null;
   preloadPath: string;
   /** 창에 복원본 화면(`vault-restore.html`)을 읽힌다. */
@@ -51,6 +54,20 @@ export class VaultRestoreWindows {
   private readonly powerHolds = new Set<PowerHold>();
 
   constructor(private readonly deps: VaultRestoreWindowsDeps) {
+    ipcMain.handle(VAULT_RESTORE_CHANNELS.backupExport, async (event, generation: unknown): Promise<VaultBackupExport> => {
+      const entry = event.senderFrame === event.sender.mainFrame ? this.entries.get(event.sender.id) : undefined;
+      if (!entry || generation !== entry.viewGeneration || !this.backupAvailable(entry) || entry.backup || !deps.exportBackup) {
+        return { status: "rejected" };
+      }
+      const operation = new AbortController();
+      entry.backup = operation;
+      const active = () => !operation.signal.aborted && generation === entry.viewGeneration && this.backupAvailable(entry);
+      try {
+        return await saveVaultBackup({ owner: entry.window, target: entry.target, signal: operation.signal }, deps.exportBackup, active);
+      } finally {
+        if (entry.backup === operation) entry.backup = undefined;
+      }
+    });
     ipcMain.handle(VAULT_RESTORE_CHANNELS.backupPreview, async (event, generation: unknown, archive: unknown, key: unknown): Promise<VaultBackupPreview> => {
       const entry = event.senderFrame === event.sender.mainFrame ? this.entries.get(event.sender.id) : undefined;
       const allowed = () => entry && this.backupAvailable(entry) && generation === entry.viewGeneration;
@@ -148,7 +165,7 @@ export class VaultRestoreWindows {
       },
       sessionMs: VIEWING_SESSION_MS,
     });
-    entry = { window, session, openerId, targetKey, targetActive: true, rendererAvailable: true, started: false, minimized: false, hidden: false, viewGeneration: 0, unlockOffered: false };
+    entry = { window, session, openerId, targetKey, target, targetActive: true, rendererAvailable: true, started: false, minimized: false, hidden: false, viewGeneration: 0, unlockOffered: false };
     this.entries.set(contentsId, entry);
     lockDownNavigation(contents);
     const invalidateRenderer = () => {
@@ -217,7 +234,7 @@ export class VaultRestoreWindows {
   }
 
   private backupAvailable(entry: Entry): boolean {
-    return Boolean(this.deps.inspectBackup && entry.rendererAvailable && entry.targetActive && !entry.minimized && !entry.hidden && !entry.window.isDestroyed() && !this.powerHold() && !this.deps.profileHold());
+    return Boolean(this.deps.inspectBackup && entry.unlockOffered && entry.rendererAvailable && entry.targetActive && !entry.minimized && !entry.hidden && !entry.window.isDestroyed() && !this.powerHold() && !this.deps.profileHold());
   }
 
   private powerHold(): VaultRestoreHold | null {

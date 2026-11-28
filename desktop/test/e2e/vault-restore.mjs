@@ -106,6 +106,27 @@ try {
   await restore.getByRole("button", {name:"검사 취소"}).click();
   await restore.getByLabel("백업 복구 키").waitFor({state:"detached"});
   check("cancelling clears the private form without submitting an import", true);
+  // Disposable replies verify renderer behavior only. The separately executed
+  // Rust helper fixture authenticates actual synthetic v1/v2 archive bytes.
+  await app.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler("akra-vault-restore:backup-preview");
+    ipcMain.handle("akra-vault-restore:backup-preview", () => ({
+      status: "verified", version: 1, projects: ["fixture-a", "fixture-b"],
+    }));
+  });
+  await showSynthetic({ phase: "held", reason: "not_bound" }, true);
+  const projects = restore.getByLabel("백업 원본 프로젝트");
+  await inspectFile.setInputFiles({ name: "fixture-v1.json", mimeType: "application/json", buffer: Buffer.from("{}") });
+  await restore.getByLabel("백업 복구 키").fill("11".repeat(32));
+  await restore.getByRole("button", { name: "백업 파일 검사 (읽기 전용)" }).click();
+  await projects.waitFor();
+  check("legacy preview warns about the device key and marks freshness as unverified",
+    await restore.getByText(/v1: 원래 장치 키를 포함.*현재 게시본과 일치하는지 확인하지 않았습니다/s).count() === 1);
+  check("verified projects do not preselect or grant an import",
+    await projects.inputValue() === "" && await restore.getByRole("button", { name: /가져오기/ }).count() === 0);
+  await projects.selectOption("fixture-b");
+  check("the user can explicitly select an authenticated source without enabling a write",
+    await projects.inputValue() === "fixture-b" && await restore.getByRole("button", { name: /가져오기/ }).count() === 0);
   await showSynthetic({ phase: "restored", ...synthetic, expiresAt: Date.now() + 60_000 });
   await restore.getByTestId("vault-restored-body").waitFor();
   check("synthetic restored state appears only as literal text", await restore.getByTestId("vault-restored-title").textContent() === synthetic.title

@@ -5,6 +5,7 @@ import type { AkraVaultRestoreBridge, VaultRestoreBridge } from "../shared/bridg
 import { type VaultRestoreViewState, VAULT_RESTORE_CHANNELS } from "../shared/vaultRestore";
 
 const bridge: VaultRestoreBridge = {
+  exportBackup: (generation) => ipcRenderer.invoke(VAULT_RESTORE_CHANNELS.backupExport, generation),
   previewBackup: (generation, archive, recoveryKey) => ipcRenderer.invoke(VAULT_RESTORE_CHANNELS.backupPreview, generation, archive, recoveryKey),
   ready: () => ipcRenderer.send(VAULT_RESTORE_CHANNELS.ready),
   onState(listener) {

@@ -1,4 +1,5 @@
 //! 일반 Gateway와 분리된 로컬 열람·표식 재연결을 조립한다. 키나 디렉터리를 만들지 않는다.
+use crate::adapter::outbound::filesystem::evidence_vault_backup::FilesystemEvidenceVaultBackupAdapter;
 pub(crate) use crate::adapter::outbound::filesystem::evidence_vault_backup::inspect_archive;
 use crate::adapter::outbound::filesystem::evidence_vault_store::FilesystemEvidenceVaultStoreAdapter;
 use crate::adapter::outbound::filesystem::vault_restore_workspace::VaultRestoreWorkspaceAdapter;
@@ -16,6 +17,58 @@ use crate::application::service::evidence_vault_restore::EvidenceVaultRestoreSer
 use crate::application::service::evidence_vault_unlock::EvidenceVaultUnlockService;
 use anyhow::Result;
 use std::sync::Arc;
+
+pub(crate) fn export_backup(
+    issue: &crate::domain::issue_work::IssueReference,
+    cancelled: &std::sync::atomic::AtomicBool,
+    deadline: std::time::Instant,
+) -> Option<crate::application::service::evidence_vault_backup::VaultBackupExport> {
+    use crate::application::port::outbound::vault_native_confirmation_port::{
+        VaultNativeConfirmationOutcome, VaultNativeConfirmationPort,
+        VaultNativeConfirmationPurpose, VaultNativeConfirmationRequest,
+    };
+    use crate::application::port::outbound::vault_restore_workspace_port::VaultRestoreWorkspacePort;
+    use crate::application::service::evidence_vault_backup::EvidenceVaultBackupService;
+    use std::sync::atomic::Ordering;
+
+    let workspace = &issue.project_scope.workspace_dir;
+    if VaultRestoreWorkspaceAdapter
+        .canonical_workspace(workspace)
+        .ok()?
+        .ne(workspace)
+    {
+        return None;
+    }
+    let outcome = NativeVaultConfirmationAdapter.confirm(
+        &VaultNativeConfirmationRequest {
+            issue_url: format!("github.com / {} / {}", issue.repository_id, issue.issue_id),
+            workspace_dir: workspace.clone(),
+            purpose: VaultNativeConfirmationPurpose::ExportSelection,
+        },
+        cancelled,
+        deadline,
+    );
+    match outcome {
+        #[cfg(any(target_os = "linux", target_os = "macos", windows, test))]
+        VaultNativeConfirmationOutcome::Confirmed
+            if !cancelled.load(Ordering::SeqCst) && std::time::Instant::now() < deadline =>
+        {
+            let root = crate::configuration::akra_home_dir()
+                .ok()?
+                .join("evidence-vault");
+            EvidenceVaultBackupService::new(
+                Arc::new(FilesystemEvidenceVaultStoreAdapter::new(root.clone())),
+                Arc::new(FilesystemEvidenceVaultBackupAdapter::new(root)),
+                Arc::new(EvidenceVaultUnlockService::new(Arc::new(
+                    OsVaultKeyStoreAdapter::new(),
+                ))),
+            )
+            .export(std::slice::from_ref(issue))
+            .ok()
+        }
+        _ => None,
+    }
+}
 
 pub(crate) fn local_maintenance(
     workspace: &str,

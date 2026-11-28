@@ -19,7 +19,7 @@ impl VaultNativeConfirmationPort for NativeVaultConfirmationAdapter {
         if cancelled.load(Ordering::SeqCst) || Instant::now() >= deadline {
             return Outcome::Cancelled;
         }
-        if !request.issue_url.starts_with("https://github.com/")
+        if !request.purpose.accepts_subject(&request.issue_url)
             || request.issue_url.len() > 2048
             || request.workspace_dir.is_empty()
             || request.workspace_dir.len() > 4096
@@ -75,6 +75,7 @@ end run
         match purpose {
             Purpose::ViewOriginal => ("Akra 원문 열람", "원문 열람"),
             Purpose::RewriteBinding => ("Akra 복원 연결 저장", "연결 저장"),
+            Purpose::ExportSelection => ("Akra Vault 백업", "선택한 이슈 백업"),
         }
     }
 
@@ -86,6 +87,10 @@ end run
             ),
             Purpose::RewriteBinding => format!(
                 "선택한 표식을 이 이슈의 현재 게시본에 다시 연결할까요?\n\n{}\n프로젝트: {}\n\n이 장치의 복원 연결을 저장합니다. 원격 이슈의 제목과 본문은 바꾸지 않습니다. 저장이 시작된 뒤 창을 닫으면 저장은 완료됐을 수 있습니다.",
+                request.issue_url, request.workspace_dir
+            ),
+            Purpose::ExportSelection => format!(
+                "이 이슈의 현재 연결 레코드만 백업할까요? 복구 키는 한 번만 표시합니다.\n\n{}\n프로젝트: {}",
                 request.issue_url, request.workspace_dir
             ),
         }

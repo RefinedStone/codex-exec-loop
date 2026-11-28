@@ -7,12 +7,17 @@ import type { IssueEventReference } from "./kernel-protocol/generated";
 export const VAULT_RESTORE_CHANNELS = {
   ready: "akra-vault-restore:ready",
   backupPreview: "akra-vault-restore:backup-preview",
+  backupExport: "akra-vault-restore:backup-export",
   state: "akra-vault-restore:state",
   unlock: "akra-vault-restore:unlock",
   lock: "akra-vault-restore:lock",
   review: "akra-vault-restore:review",
   reconnect: "akra-vault-restore:reconnect",
 } as const;
+
+export type VaultBackupExport =
+  | { readonly status: "saved"; readonly recoveryKey: string }
+  | { readonly status: "cancelled" | "rejected" | "save_failed" };
 
 /** 열람을 보류한 이유이다. 값에 평문이나 게시본의 글은 없다. */
 export type VaultRestoreHold =

@@ -1,4 +1,5 @@
 //! 원문 열람·재연결 전용 inherited-pipe 입구다. 공개 요청은 OS 확인 결과를 지정할 수 없다.
+pub(super) mod backup_export;
 mod protocol;
 #[cfg(test)]
 mod tests;
