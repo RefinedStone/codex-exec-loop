@@ -72,7 +72,9 @@ mod runtime_projection;
 // Validated rollout evidence uses a separate lease and bounded history from the PR scheduler.
 mod pr_validation_rollout_evidence_store;
 // schema, metadata, authority document load/store의 공통 저장소 모듈이다.
+mod schema_admission;
 mod store;
+use self::schema_admission::validate_authority_store_schema;
 // task authority 문서와 queue projection을 정규화된 task table로 펼치는 모듈이다.
 mod task_authority_rows;
 mod task_evidence;
@@ -101,7 +103,6 @@ use crate::domain::planning::{
 
 // authority DB schema가 바뀔 때 올리는 adapter 내부 schema marker이다.
 const AUTHORITY_STORE_SCHEMA_VERSION: i64 = 21;
-const MINIMUM_MIGRATABLE_AUTHORITY_STORE_SCHEMA_VERSION: i64 = 7;
 // metadata에 저장되는 store mode 값으로, 다른 DB 파일과 planning authority store를 구분한다.
 const AUTHORITY_STORE_MODE: &str = "authority-store";
 // official refresh claim은 repo 전체에 하나만 있어야 하므로 고정 scope key를 사용한다.
@@ -3516,84 +3517,6 @@ fn validate_authority_store_path_identity(path: &Path, store: &File) -> Result<(
             "secure authority-store identity validation is unsupported on this platform"
         ));
     }
-    Ok(())
-}
-
-/*
-기존 authority DB가 현재 binary가 지원하는 schema인지 검사한다.
-
-metadata table이 없고 다른 user object도 없는 빈 DB만 새 store로 본다. metadata가 있으면
-`schema_version`, store mode, canonical repository binding을 읽고 additive migration이 지원되는
-v7부터 현재 버전까지만 통과시킨다.
-
-이 guard가 없으면 미래 버전의 DB를 구버전 binary가 열어 schema를 덮거나 잘못 해석할 수 있다.
-*/
-fn validate_authority_store_schema(
-    connection: &Connection,
-    location: &PlanningAuthorityLocation,
-) -> Result<()> {
-    let metadata_exists = table_exists(connection, "authority_metadata")?;
-    if !metadata_exists {
-        let foreign_object_count = connection
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .context("failed to inspect unmarked authority-store objects")?;
-        if foreign_object_count != 0 {
-            return Err(anyhow!(
-                "unmarked non-empty SQLite database cannot be adopted as an authority-store"
-            ));
-        }
-        return Ok(());
-    }
-
-    let schema_version = connection
-        .query_row(
-            "SELECT value FROM authority_metadata WHERE key = 'schema_version'",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .context("failed to read authority-store schema version")?
-        .ok_or_else(|| anyhow!("authority-store schema version is missing"))?;
-    let parsed_schema_version = schema_version
-        .parse::<i64>()
-        .map_err(|_| anyhow!("unsupported authority-store schema version: {schema_version}"))?;
-    if !(MINIMUM_MIGRATABLE_AUTHORITY_STORE_SCHEMA_VERSION..=AUTHORITY_STORE_SCHEMA_VERSION)
-        .contains(&parsed_schema_version)
-    {
-        return Err(anyhow!(
-            "unsupported authority-store schema version: {schema_version}"
-        ));
-    }
-
-    let mode = read_metadata_string_connection(connection, "mode")?
-        .ok_or_else(|| anyhow!("authority-store mode marker is missing"))?;
-    if mode != AUTHORITY_STORE_MODE {
-        return Err(anyhow!("unsupported authority-store mode: {mode}"));
-    }
-    if let Some(repository_identity) =
-        read_metadata_string_connection(connection, "repository_identity")?
-    {
-        if repository_identity != location.repository_identity {
-            return Err(anyhow!(
-                "authority-store is bound to a different repository identity"
-            ));
-        }
-    } else {
-        let canonical_repo_root =
-            read_metadata_string_connection(connection, "canonical_repo_root")?.ok_or_else(
-                || anyhow!("authority-store canonical repository binding is missing"),
-            )?;
-        if canonical_repo_root != location.canonical_repo_root {
-            return Err(anyhow!(
-                "legacy authority-store is bound to a different canonical repository"
-            ));
-        }
-    }
-
     Ok(())
 }
 
