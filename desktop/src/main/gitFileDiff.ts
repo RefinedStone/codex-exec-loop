@@ -50,7 +50,10 @@ async function readSourceDiff(file: RepositoryFile, sourceInput: unknown): Promi
   const capture = async () => {
     const old = source === "untracked" || source === "worktree_file" ? capturedText("")
       : await captureBlob(comparisonOriginal ?? file, source === "index_worktree" ? "index" : before.headOid);
-    const next = source === "head_index" ? await captureBlob(file, "index") : await captureWorkingFile(file);
+    const stagedDeletion = change?.status[0] === "D" && !before.indexEntries;
+    const next = source === "head_index" ? await captureBlob(file, "index")
+      : stagedDeletion && (source === "head_worktree" || source === "index_worktree") ? capturedText("")
+      : await captureWorkingFile(file);
     return { old, new: next };
   };
   const contents = await capture();

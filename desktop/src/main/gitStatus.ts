@@ -358,7 +358,7 @@ export const CHANGED_SINCE_CONFIRMATION = "파일 상태가 확인 중 변경되
 async function pathFingerprint(path: string): Promise<string | null> {
   // lstat detects a symlink placed at a missing old name without following it.
   const info = await lstat(path).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return null;
+    if (error.code === "ENOENT" || error.code === "ENOTDIR") return null;
     throw error;
   });
   if (!info) return null;
