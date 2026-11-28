@@ -1,15 +1,6 @@
-/*
- * Evidence Vault 백업 계약의 로컬 파일 구현이다 (#2432). 보관 파일은 JSON 한 개이다.
- *
- * 보관 파일에는 레코드 파일의 내용(암호문)과 범위, 복구 키로 감싼 장치 키가 있다. 복구 키와 평문은 없다.
- * 감싸는 키는 `ring` 의 HKDF-SHA256 으로 복구 키에서 만든다 (salt 는 보관 파일의 식별자). 장치 키는 `ring` 의
- * ChaCha20-Poly1305 로 감싼다. 머리말과 레코드 목록의 SHA-256 은 연관 데이터이다. 그래서 복구 키가 다르거나
- * 머리말이나 레코드 목록이 바뀌면 장치 키가 풀리지 않는다.
- *
- * 가져오기는 먼저 모든 레코드를 원본 키와 원본 범위로 검증하고, 승인한 프로젝트의 레코드를 로컬 장치 키와 로컬
- * 범위로 다시 암호화한다. 읽을 수 있는 기존 연결은 보존하고, 읽지 못하는 연결은 명시적 승인으로만 복구한다. 이슈의 `CurrentVersion`
- * 레코드는 이슈별 잠금 안에서 불변 필드 세트를 저장한 뒤 한 번 교체한다. 중간 실패 뒤 재시도는 읽을 수 있는 로컬 연결을 보존한다.
- */
+//! Evidence Vault archive import and export. V2 reseals each selected record under an independent
+//! archive key. V1 is read-only compatibility for archives wrapping a device key.
+mod export;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -39,7 +30,7 @@ use crate::application::port::outbound::evidence_vault_port::{
 use crate::domain::issue_work::{IssueProjectScope, IssueReference};
 
 /// 보관 파일의 형식의 판이다. 필드, 알고리즘, KDF, 연관 데이터의 구성이 바뀌면 올린다.
-const ARCHIVE_FORMAT_VERSION: u32 = 1;
+const ARCHIVE_FORMAT_VERSION: u32 = 2;
 const ARCHIVE_ALGORITHM: &str = "chacha20-poly1305";
 const ARCHIVE_KDF: &str = "hkdf-sha256";
 const WRAP_ASSOCIATED_DATA_DOMAIN: &str = "akra-evidence-vault-backup";
@@ -167,116 +158,7 @@ impl FilesystemEvidenceVaultBackupAdapter {
 
 impl EvidenceVaultBackupPort for FilesystemEvidenceVaultBackupAdapter {
     fn export(&self, request: VaultBackupExportRequest) -> Result<String, VaultBackupError> {
-        let mut records = Vec::new();
-        let mut exported_scopes = HashSet::new();
-        let store = FilesystemEvidenceVaultStoreAdapter::new(self.vault_root.clone());
-        let mut issues = Vec::new();
-        for scope in &request.scopes {
-            if !issues.contains(&scope.issue) {
-                issues.push(scope.issue.clone());
-            }
-        }
-        // Keep one issue's binding lease through every ciphertext read. Other
-        // issues are independent and never require nested binding leases.
-        for issue in issues {
-            let mut transaction = store
-                .begin_binding(VaultRecordLoadRequest {
-                    scope: VaultRecordScope::current_version(issue.clone()),
-                    key: request.key.clone(),
-                })
-                .map_err(VaultBackupError::Record)?;
-            let snapshot = transaction.snapshot().clone();
-            for scope in request.scopes.iter().filter(|scope| scope.issue == issue) {
-                if !exported_scopes.insert(scope.clone()) {
-                    continue;
-                }
-                let scope_bytes = scope_bytes(scope);
-                let Some(record) = vault_fs::read_optional_file(
-                    &self.vault_root,
-                    &record_relative_path(&scope_bytes),
-                )
-                .map_err(storage_error)?
-                else {
-                    if scope.binding == VaultRecordBinding::CurrentVersion {
-                        return Err(VaultBackupError::BindingChanged);
-                    }
-                    continue;
-                };
-                let plaintext = open_record(&record, &request.key, &scope_bytes)
-                    .map_err(VaultBackupError::Record)?;
-                if scope.binding == VaultRecordBinding::CurrentVersion {
-                    let digest: [u8; 32] = Sha256::digest(record.as_bytes()).into();
-                    if scope.field != VaultRecordField::Body
-                        || snapshot.token.ciphertext_sha256() != Some(digest)
-                        || [VaultRecordField::Title, VaultRecordField::Body]
-                            .iter()
-                            .any(|field| {
-                                !request.scopes.contains(&VaultRecordScope {
-                                    issue: scope.issue.clone(),
-                                    field: *field,
-                                    binding: VaultRecordBinding::ConfirmedVersion(
-                                        plaintext.expose().to_string(),
-                                    ),
-                                })
-                            })
-                    {
-                        return Err(VaultBackupError::BindingChanged);
-                    }
-                }
-                records.push(StoredBackupRecord::new(scope, record));
-            }
-            if let VaultBindingState::Readable { version } = &snapshot.state {
-                // Revalidate lease identity and all version records before releasing
-                // the guard. The archive still contains the original ciphertext.
-                transaction
-                    .load_version_fields(version)
-                    .map_err(VaultBackupError::Record)?;
-            }
-        }
-        if records.is_empty() {
-            return Err(VaultBackupError::NothingToExport);
-        }
-        if records.len() > MAX_ARCHIVE_RECORDS {
-            return Err(VaultBackupError::ArchiveTooLarge);
-        }
-
-        let random = SystemRandom::new();
-        let mut backup_id = [0u8; BACKUP_ID_LEN];
-        let mut nonce = [0u8; NONCE_LEN];
-        random
-            .fill(&mut backup_id)
-            .and_then(|()| random.fill(&mut nonce))
-            .map_err(|_| VaultBackupError::Storage("the OS random source failed".to_string()))?;
-        let mut archive = StoredVaultBackup {
-            format_version: ARCHIVE_FORMAT_VERSION,
-            algorithm: ARCHIVE_ALGORITHM.to_string(),
-            kdf: ARCHIVE_KDF.to_string(),
-            backup_id: backup_id.iter().map(|byte| format!("{byte:02x}")).collect(),
-            key_id: request.key.key_id.clone(),
-            wrap_nonce: BASE64.encode(nonce),
-            wrapped_key: String::new(),
-            records,
-        };
-
-        let mut wrapped = request.key.key.expose().to_vec();
-        let sealed = wrap_key(&request.recovery_key, &backup_id)?.seal_in_place_append_tag(
-            Nonce::assume_unique_for_key(nonce),
-            Aad::from(wrap_associated_data(&archive)),
-            &mut wrapped,
-        );
-        if sealed.is_err() {
-            wrapped.zeroize();
-            return Err(VaultBackupError::Storage(
-                "the device key cannot be wrapped".to_string(),
-            ));
-        }
-        archive.wrapped_key = BASE64.encode(&wrapped);
-
-        let body = serde_json::to_string(&archive).map_err(storage_error)?;
-        if body.len() > MAX_ARCHIVE_BYTES {
-            return Err(VaultBackupError::ArchiveTooLarge);
-        }
-        Ok(body)
+        export::selected(&self.vault_root, request)
     }
 
     fn prepare_import(
@@ -290,6 +172,7 @@ impl EvidenceVaultBackupPort for FilesystemEvidenceVaultBackupAdapter {
         let source_key = unwrap_source_key(&archive, request.recovery_key)?;
         let (staged, unapproved_projects) = stage_import(&archive, &source_key, request.projects)?;
         let mut report = VaultBackupImportReport {
+            format_version: archive.format_version,
             backup_id: archive.backup_id.clone(),
             imported: Vec::new(),
             kept_local: Vec::new(),
@@ -470,7 +353,7 @@ fn parse_archive(body: &str) -> Result<StoredVaultBackup, VaultBackupError> {
         .get("formatVersion")
         .and_then(serde_json::Value::as_u64)
         .ok_or(VaultBackupError::CorruptArchive)?;
-    if format_version != u64::from(ARCHIVE_FORMAT_VERSION) {
+    if format_version != 1 && format_version != u64::from(ARCHIVE_FORMAT_VERSION) {
         return Err(VaultBackupError::UnsupportedFormat);
     }
     let archive: StoredVaultBackup =

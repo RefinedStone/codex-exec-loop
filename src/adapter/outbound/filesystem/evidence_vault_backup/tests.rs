@@ -1,5 +1,5 @@
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use super::*;
 use crate::adapter::outbound::filesystem::evidence_vault_store::seal_record;
@@ -259,7 +259,8 @@ fn encrypted(scope: VaultRecordScope, plaintext: &str) -> StoredBackupRecord {
 
 fn archive(records: Vec<StoredBackupRecord>) -> StoredVaultBackup {
     StoredVaultBackup {
-        format_version: ARCHIVE_FORMAT_VERSION,
+        // Legacy import fixture: new production exports may not use this key or version.
+        format_version: 1,
         algorithm: ARCHIVE_ALGORITHM.to_string(),
         kdf: ARCHIVE_KDF.to_string(),
         backup_id: "0123456789abcdef0123456789abcdef".to_string(),
@@ -454,6 +455,36 @@ fn repeated_scope_selection_exports_one_record_per_scope_and_imports_successfull
             binding: VaultRecordBinding::ConfirmedVersion(receipt.version.clone()),
         });
     }
+    let excluded_scope = VaultRecordScope::current_version(issue("I_other"));
+    let other_binding = source_store
+        .begin_binding(VaultRecordLoadRequest {
+            scope: excluded_scope.clone(),
+            key: key(1),
+        })
+        .unwrap();
+    let expected = other_binding.snapshot().token.clone();
+    assert!(matches!(
+        other_binding
+            .commit(VaultBindingCommitRequest {
+                expected,
+                operation_id: "unselected-synthetic".into(),
+                base_version: version(),
+                approval_digest: [9; 32],
+                fields: VaultBindingFields {
+                    title: None,
+                    body: Some(VaultPlaintext::new("not selected".into()))
+                },
+                policy: VaultBindingCommitPolicy::InstallIfMissing
+            })
+            .unwrap(),
+        VaultBindingCommitResult::Committed(_)
+    ));
+    let excluded_record = vault_fs::read_optional_file(
+        &source_root,
+        &record_relative_path(&scope_bytes(&excluded_scope)),
+    )
+    .unwrap()
+    .unwrap();
     scopes.extend(scopes.clone());
     let recovery_key = VaultRecoveryKey::new(vec![8; 32]);
     let archive = FilesystemEvidenceVaultBackupAdapter::new(source_root)
@@ -463,7 +494,65 @@ fn repeated_scope_selection_exports_one_record_per_scope_and_imports_successfull
             recovery_key: recovery_key.clone(),
         })
         .unwrap();
-    assert_eq!(parse_archive(&archive).unwrap().records.len(), 2);
+    let parsed = parse_archive(&archive).unwrap();
+    assert_eq!(parsed.format_version, 2);
+    assert_eq!(parsed.records.len(), 2);
+    assert!(parsed.records.iter().all(|record| record.issue == source));
+    let recovered = unwrap_source_key(&parsed, &recovery_key).unwrap();
+    let original_key = key(1);
+    assert!(
+        open_record(
+            &excluded_record,
+            &original_key,
+            &scope_bytes(&excluded_scope)
+        )
+        .is_ok()
+    );
+    // Even with the original public key ID, the recovered archive key cannot authenticate
+    // non-selected ciphertext. A mere key-ID mismatch is not the confidentiality proof.
+    let matched_id = VaultRecordKey {
+        key_id: original_key.key_id,
+        key: recovered.key,
+    };
+    assert!(matches!(
+        open_record(&excluded_record, &matched_id, &scope_bytes(&excluded_scope)),
+        Err(VaultStoreError::IntegrityFailure)
+    ));
+    let mut damaged = serde_json::to_value(&parsed).unwrap();
+    damaged["records"][0]["record"] = serde_json::json!("altered fixture");
+    let fresh =
+        Arc::new(crate::adapter::outbound::vault_key_store::FakeVaultKeyStoreAdapter::new());
+    let service =
+        crate::application::service::evidence_vault_backup::EvidenceVaultBackupService::new(
+            Arc::new(FilesystemEvidenceVaultStoreAdapter::new(local_root.clone())),
+            Arc::new(FilesystemEvidenceVaultBackupAdapter::new(
+                local_root.clone(),
+            )),
+            Arc::new(
+                crate::application::service::evidence_vault_unlock::EvidenceVaultUnlockService::new(
+                    fresh.clone(),
+                ),
+            ),
+        );
+    let malformed = service.import(
+        crate::application::service::evidence_vault_backup::VaultBackupApprovedImport {
+            archive: damaged.to_string(),
+            recovery_key: recovery_key.clone(),
+            decision:
+                crate::application::service::evidence_vault_unlock::VaultUserDecision::Confirmed,
+            recovery_mode: VaultBackupRecoveryMode::PreserveLocal,
+            projects: vec![approval(&source)],
+        },
+    );
+    assert!(matches!(
+        malformed,
+        Err(
+            crate::application::service::evidence_vault_backup::VaultBackupFailure::Backup(
+                VaultBackupError::RecoveryKeyRejected
+            )
+        )
+    ));
+    assert_eq!(fresh.initialization_count(), 0);
     let project = approval(&source);
     let report = FilesystemEvidenceVaultBackupAdapter::new(local_root.clone())
         .import(VaultBackupImportRequest {
@@ -476,6 +565,7 @@ fn repeated_scope_selection_exports_one_record_per_scope_and_imports_successfull
         .unwrap();
     let mut local_issue = source;
     local_issue.project_scope = project.local;
+    assert_eq!(report.format_version, 2);
     assert_eq!(report.imported, [local_issue.clone()]);
     let local_store = FilesystemEvidenceVaultStoreAdapter::new(local_root);
     let mut transaction = local_store
@@ -519,6 +609,7 @@ fn an_archive_without_approved_projects_does_not_initialize_a_vault() {
     let VaultBackupImportPlan::ReadOnly(report) = plan else {
         panic!("project preview must not ask for a destination key")
     };
+    assert_eq!(report.format_version, 1);
     assert_eq!(report.unapproved_projects, [source.project_scope]);
     assert!(report.imported.is_empty());
     assert!(report.kept_local.is_empty());
